@@ -14,10 +14,6 @@ xSTOPFILE=$xHOME"stopvpn.sh"
 rm -rf $xLOGFILE
 exec &> $xLOGFILE
 
-echo $xHOME
-echo $xPyFILE 
-echo $xLOGFILE
-
 active="secure"
 firstrun="y"
 

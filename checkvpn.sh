@@ -4,6 +4,8 @@ xHOME="/home/pi/MyPiFiles/vpn/"
 xCHECKFILE=$xHOME"checkip.sh"
 xLOGFILE=$xHOME"checkvpn.log"
 
+rm -rf $xLOGFILE
+
 clear
 echo ""
 echo ""

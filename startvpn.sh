@@ -7,10 +7,12 @@ echo ""
 sleep 2
 
 xHOME="/home/pi/MyPiFiles/vpn/"
+xSTOPFILE=$xHOME"stopvpn.sh"
 xTEMPHOME=$xHOME"temp/"
 xLOGFILE=$xTEMPHOME"openvpn.log"
 xVPNHOME="/etc/openvpn/client/"
 xUSERPASS=$xTEMPHOME"openvpncode.txt"
+xPyFILE=$xHOME"vpn_active.py"
 xSUCCESS="FALSE"
 
 read -p "Which VPN Service (1 = NL, 2 = CA, 3 = DE, q = quit): " VPNSERVICE
@@ -19,7 +21,7 @@ while [ $VPNSERVICE != "q" ]
 do 
   echo ""
   echo "Stopping Deluge and VPN..."
-  {$XHOME}stopvpn.sh
+  $xSTOPFILE
   rm -rf $xLOGFILE
   if [ $VPNSERVICE == "1" ];
      then 
@@ -27,17 +29,17 @@ do
           echo "VPN NL Service"
           echo ""
           echo "Downloading OVPN files..."
-          rm -rf ${xHOME}*.zip
+          rm -rf ${xTEMPHOME}*.zip
           iDATE1=$(date +"%B-%Y")
           iDATE2=$(date '+%B-%Y' --date '1 month ago')
           xURL1="https://freevpnme.b-cdn.net/FreeVPN.me-OpenVPN-Bundle-$iDATE1.zip"
           xURL2="https://freevpnme.b-cdn.net/FreeVPN.me-OpenVPN-Bundle-$iDATE2.zip"
-          wget -q $xURL1 -P $xHOME
+          wget -q $xURL1 -P $xTEMPHOME
           RC1="$?"
           if [ "$RC1" -ne 0 ];
             then echo "... WGET failed to download. Trying for old ZIP file..."
                  sleep 2
-                 wget -q $xURL2 -P $xHOME
+                 wget -q $xURL2 -P $xTEMPHOME
                  RC2="$?"
                  if [ "$RC2" -ne 1 ]; 
                     then echo "... WGET second attempt succeeded."
@@ -55,7 +57,7 @@ do
           if [ $xSUCCESS == "TRUE" ];
              then echo "OVPN files downloaded."
                   sleep 2
-                  cd $xHOME
+                  cd $xTEMPHOME
                   rm -f *.ovpn
                   rm -f *.txt
                   sleep 2
@@ -63,20 +65,20 @@ do
                   echo "Files unzipped."
                   sleep 2
                   xCONFIGFILE="${xHOME}Server1-UDP53.ovpn"
-                  [[ -e ${xHOME}Server1-UDP53.ovpn ]] && cp ${xHOME}Server1-UDP53.ovpn $xVPNHOME
+                  [[ -e ${xTEMPHOME}Server1-UDP53.ovpn ]] && cp ${xTEMPHOME}Server1-UDP53.ovpn $xVPNHOME
                   xCONFIGFILE="${xVPNHOME}Server1-UDP53.ovpn"
                   echo "Files copied to openvpn folder."
                   echo ""
                   sleep 2
                   echo "Building OVPN login file"
                   echo ""
-                  cd $xHOME
+                  cd $xTEMPHOME
                   [[ -e $xUSERPASS ]] && mv $xUSERPASS ${xUSERPASS}.bak
                   echo 'freevpn.me' >> $xUSERPASS
-                  curl -s https://freevpn.me/accounts/ | html2text > ${xHOME}tmp_html.txt
-                  cat ${xHOME}tmp_html.txt | grep Password > ${xHOME}ipass.txt
-                  cat ${xHOME}ipass.txt | head -3 | tail -1 > ${xHOME}ipass2.txt
-                  grep -o '[^ ]\+$' ${xHOME}ipass2.txt >> $xUSERPASS 
+                  curl -s https://freevpn.me/accounts/ | html2text > ${xTEMPHOME}tmp_html.txt
+                  cat ${xTEMPHOME}tmp_html.txt | grep Password > ${xTEMPHOME}ipass.txt
+                  cat ${xTEMPHOME}ipass.txt | head -3 | tail -1 > ${xTEMPHOME}ipass2.txt
+                  grep -o '[^ ]\+$' ${xTEMPHOME}ipass2.txt >> $xUSERPASS 
                   chown root:root $xUSERPASS
                   chmod 600 $xUSERPASS
              else echo "... OVPN failed to download."
@@ -88,7 +90,7 @@ do
                   echo "VPN CA Service"
                   echo ""
                   echo "Downloading OVPN files..."
-                  cd $xHOME
+                  cd $xTEMPHOME
                   [[ -e $xUSERPASS ]] && mv $xUSERPASS ${xUSERPASS}.bak
                   xURL="https://www.freevpn4you.net/files/Canada-udp.ovpn"
                   wget -q $xURL -P $xVPNHOME
@@ -112,16 +114,16 @@ do
                   xURL="https://www.vpnbook.com/free-openvpn-account/VPNBook.com-OpenVPN-DE4.zip"
                   xFILE="VPNBook.com-OpenVPN-DE4.zip"
                   xVPNFILE="vpnbook-de4-udp53.ovpn"
-                  cd $xHOME
+                  cd $xTEMPHOME
                   rm -rf *.zip
-                  wget -q $xURL -P $xHOME
+                  wget -q $xURL -P $xTEMPHOME
                   RC3="$?"
                   if [ "$RC3" -ne 0 ];
                      then echo "... WGET failed to download OVPN file."
                           xSUCCESS="FALSE"
                      else
                           echo "... WGET succeeded."
-                          cd  $xHOME
+                          cd  $xTEMPHOME
                           rm -f *.ovpn
                           rm -f *.txt
                           sleep 2
@@ -172,7 +174,6 @@ do
           while [ $iStart == "n" ]
           do
             echo ""
-#            echo "Wait 10 seconds, check again"
             for load in $(seq 10 -1 0); do
                echo -ne "Check again in $load seconds...\r"
                sleep 1
@@ -193,7 +194,7 @@ if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
      sleep 2
      echo ""
      echo "Testing VPN..."
-     active=$(python3 /home/pi/MyPiFiles/vpn_active.py)
+     active=$(python3 $xPyFILE)
      echo "VPN test complete. Result: " $active
      if [ "$active" == "secure" ];
        then echo ""
