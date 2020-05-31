@@ -34,6 +34,8 @@ while [[ "$active" == "secure" ]];
     sleep 1
     active=$(python3 $xPyFILE)
     sleep 1
+    now=$(date)
+    echo "$now"
     echo "... VPN test complete. Result:" $active
     firstrun="n"
     sleep 1
