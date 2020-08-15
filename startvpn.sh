@@ -78,7 +78,7 @@ do
                   curl -s https://freevpn.me/accounts/ | html2text > ${xTEMPHOME}tmp_html.txt
                   cat ${xTEMPHOME}tmp_html.txt | grep Password > ${xTEMPHOME}ipass.txt
                   cat ${xTEMPHOME}ipass.txt | head -3 | tail -1 > ${xTEMPHOME}ipass2.txt
-                  grep -o '[^ ]\+$' ${xTEMPHOME}ipass2.txt >> $xUSERPASS 
+                  sed 's/[^,:]*: //g' ${xTEMPHOME}ipass2.txt >> $xUSERPASS 
                   chown root:root $xUSERPASS
                   chmod 600 $xUSERPASS
              else echo "... OVPN failed to download."

@@ -14,7 +14,7 @@ echo ""
 sleep 2
 screen -d -m -S checkip $xCHECKFILE
 sleep 2
-echo "See progress... tail ${xLOGFILE}"
+echo "See progress... tail -f ${xLOGFILE}"
 echo ""
 echo "FINISHED"
 echo ""
