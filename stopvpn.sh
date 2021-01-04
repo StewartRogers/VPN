@@ -9,13 +9,13 @@ SERVICE="deluge-web"
 if pgrep -x "$SERVICE" >/dev/null
 then
     echo "... $SERVICE is running"
-    killall $SERVICE
+    sudo killall $SERVICE
     echo "... $SERVICE has been stopped."
     sleep 2
 else
     echo "... $SERVICE is not running"
 fi
-sleep 3
+sleep 2
 
 echo ""
 echo "... Stopping Deluge Server"
@@ -30,7 +30,7 @@ then
 else
     echo "... $SERVICE is not running"
 fi
-sleep 3
+sleep 2
 
 echo ""
 echo "... Stopping OpenVPN Server"
@@ -38,13 +38,13 @@ SERVICE="openvpn"
 if pgrep -x "$SERVICE" >/dev/null
 then
     echo "... $SERVICE is running"
-    killall $SERVICE
+    sudo killall $SERVICE
     echo "... $SERVICE has been stopped."
     sleep 2
 else
     echo "... $SERVICE is not running"
 fi
-sleep 5
+sleep 2
 
 echo ""
 echo "... Stopping checkip script"
@@ -52,14 +52,21 @@ SERVICE="checkip.sh"
 if pgrep -x "$SERVICE" >/dev/null
 then
     echo "... $SERVICE is running"
-    killall $SERVICE
+    sudo killall $SERVICE
     echo "... $SERVICE has been stopped."
     sleep 2
 else
     echo "... $SERVICE is not running"
 fi
-sleep 5
+sleep 2
 screen -S "checkip" -p 0 -X quit > /dev/null
 echo ""
 echo ""
-sleep 2
+sleep 1
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0
+sleep 1
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0
+sleep 1
+sudo ifconfig wlan0 up
+echo ""
+sleep 1

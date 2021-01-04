@@ -18,7 +18,7 @@ xSUCCESS="FALSE"
 read -p "Which VPN Service (1 = NL, 2 = CA, 3 = DE, q = quit): " VPNSERVICE
 
 while [ $VPNSERVICE != "q" ]
-do 
+do
   echo ""
   echo "Stopping Deluge and VPN..."
   $xSTOPFILE
@@ -32,8 +32,8 @@ do
           rm -rf ${xTEMPHOME}*.zip
           iDATE1=$(date +"%B-%Y")
           iDATE2=$(date '+%B-%Y' --date '1 month ago')
-          xURL1="https://freevpnme.b-cdn.net/FreeVPN.me-OpenVPN-Bundle-$iDATE1.zip"
-          xURL2="https://freevpnme.b-cdn.net/FreeVPN.me-OpenVPN-Bundle-$iDATE2.zip"
+          xURL1="https://freevpnme.b-cdn.net/FreeVPN.me-OpenVPN-Bundle-July-2020.zip"
+          xURL2="https://freevpnme.b-cdn.net/FreeVPN.me-OpenVPN-Bundle-July-2020.zip"
           wget -q $xURL1 -P $xTEMPHOME
           RC1="$?"
           if [ "$RC1" -ne 0 ];
@@ -45,14 +45,14 @@ do
                     then echo "... WGET second attempt succeeded."
                          echo ""
                          xSUCCESS="TRUE"
-                         xFILE="FreeVPN.me-OpenVPN-Bundle-$iDATE2.zip" 
+                         xFILE="FreeVPN.me-OpenVPN-Bundle-July-2020.zip"
                     else echo "... WGET second attempt failed."
                          echo ""
                          xSUCCESS="FALSE"
                  fi
             else 
                  xSUCCESS="TRUE"
-                 xFILE="FreeVPN.me-OpenVPN-Bundle-$iDATE1.zip" 
+                 xFILE="FreeVPN.me-OpenVPN-Bundle-July-2020.zip"
           fi
           if [ $xSUCCESS == "TRUE" ];
              then echo "OVPN files downloaded."
@@ -60,13 +60,15 @@ do
                   cd $xTEMPHOME
                   rm -f *.ovpn
                   rm -f *.txt
+                  rm -f *.crt
+                  rm -f *.key
                   sleep 2
                   unzip -j -q $xFILE
                   echo "Files unzipped."
                   sleep 2
-                  xCONFIGFILE="${xHOME}Server1-UDP53.ovpn"
-                  [[ -e ${xTEMPHOME}Server1-UDP53.ovpn ]] && cp ${xTEMPHOME}Server1-UDP53.ovpn $xVPNHOME
-                  xCONFIGFILE="${xVPNHOME}Server1-UDP53.ovpn"
+                  xCONFIGFILE="${xHOME}Server1-TCP443.ovpn"
+                  [[ -e ${xTEMPHOME}Server1-TCP443.ovpn ]] && sudo cp ${xTEMPHOME}Server1-TCP443.ovpn $xVPNHOME
+                  xCONFIGFILE="${xVPNHOME}Server1-TCP443.ovpn"
                   echo "Files copied to openvpn folder."
                   echo ""
                   sleep 2
@@ -79,34 +81,33 @@ do
                   cat ${xTEMPHOME}tmp_html.txt | grep Password > ${xTEMPHOME}ipass.txt
                   cat ${xTEMPHOME}ipass.txt | head -3 | tail -1 > ${xTEMPHOME}ipass2.txt
                   sed 's/[^,:]*: //g' ${xTEMPHOME}ipass2.txt >> $xUSERPASS 
-                  chown root:root $xUSERPASS
                   chmod 600 $xUSERPASS
              else echo "... OVPN failed to download."
           fi
-     else 
+     else
           if [ $VPNSERVICE == "2" ];
-             then 
+             then
                   echo ""
                   echo "VPN CA Service"
                   echo ""
                   echo "Downloading OVPN files..."
                   cd $xTEMPHOME
                   [[ -e $xUSERPASS ]] && mv $xUSERPASS ${xUSERPASS}.bak
-                  xURL="https://www.freevpn4you.net/files/Canada-udp.ovpn"
-                  wget -q $xURL -P $xVPNHOME
+#                  xURL="https://www.vpngate.net/common/openvpn_download.aspx?sid=1603037986009&udp=1&host=public-vpn-234.opengw.net&port=1195&hid=15134981&/vpngate_public-vpn-234.opengw.net_udp_1195.ovpn"
+#                  wget -q $xURL -P $xVPNHOME
                   RC2="$?"
                   if [ "$RC2" -ne 0 ];
                      then echo "... WGET failed to download OVPN file."
-                          xSUCCESS="FALSE"
+                          xSUCCESS="TRUE"
                      else
                           echo "... WGET succeeded."
-                          echo 'freevpn4you' >> $xUSERPASS
-                          read -p "Enter pasword from - https://freevpn4you.net/locations/canada.php password: " xFREEPASS 
-                          echo $xFREEPASS >> $xUSERPASS
-                          xCONFIGFILE="${xVPNHOME}Canada-udp.ovpn"
+#                          echo 'freevpn4you' >> $xUSERPASS
+#                          read -p "Enter pasword from - https://freevpn4you.net/locations/ukraine.php password: " xFREEPASS 
+#                          echo $xFREEPASS >> $xUSERPASS
+                          xCONFIGFILE="/etc/openvpn/client/vpngate_public-vpn-234.opengw.net_udp_1195.ovpn"
                           xSUCCESS="TRUE"
                   fi
-             else 
+             else
                   echo ""
                   echo "VPN DE Service"
                   echo ""
@@ -137,19 +138,26 @@ do
                           [[ -e $xUSERPASS ]] && mv $xUSERPASS ${xUSERPASS}.bak
                           echo 'vpnbook' >> $xUSERPASS
                           echo ""
-                          read -p "Enter pasword from - https://www.vpnbook.com/freevpn  password: " xFREEPASS 
+                          read -p "Enter pasword from - https://www.vpnbook.com/freevpn  password: " xFREEPASS
                           echo $xFREEPASS >> $xUSERPASS
                           xSUCCESS="TRUE"
                   fi
           fi
   fi
+
   if [[ $xSUCCESS == "TRUE" ]];
      then
+          echo "Taking down IPV6"
+          sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+          sleep 2
+          sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+          sleep 2
+          echo ""
           echo "Taking down WIFI..."
-          ifconfig wlan0 down
+          sudo ifconfig wlan0 down
           sleep 2
           echo "Reloading UFW..."
-          ufw reload
+          sudo ufw reload
           sleep 2
           echo "Flush IP Route Cache"
           sudo ip route flush cache
@@ -168,7 +176,7 @@ do
           echo ""
           echo "View log"
           echo ""
-          tail $xLOGFILE
+          sudo tail $xLOGFILE
           echo ""
           read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
           while [ $iStart == "n" ]
@@ -181,7 +189,7 @@ do
             echo ""
             echo "Showing tail of log..."
             echo ""
-            tail $xLOGFILE
+            sudo tail $xLOGFILE
             echo ""
             read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
           done
@@ -208,7 +216,7 @@ if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
             sleep 2
        else echo ""
             echo "Deluge not started."
-            echo "" 
+            echo ""
      fi
 fi
 echo ""
