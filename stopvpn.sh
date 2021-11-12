@@ -15,8 +15,7 @@ then
 else
     echo "... $SERVICE is not running"
 fi
-sleep 2
-
+sleep 1
 echo ""
 echo "... Stopping Deluge Server"
 SERVICE="deluged"
@@ -30,8 +29,7 @@ then
 else
     echo "... $SERVICE is not running"
 fi
-sleep 2
-
+sleep 1
 echo ""
 echo "... Stopping OpenVPN Server"
 SERVICE="openvpn"
@@ -44,8 +42,7 @@ then
 else
     echo "... $SERVICE is not running"
 fi
-sleep 2
-
+sleep 1
 echo ""
 echo "... Stopping checkip script"
 SERVICE="checkip.sh"
@@ -58,15 +55,9 @@ then
 else
     echo "... $SERVICE is not running"
 fi
-sleep 2
+sleep 1
+echo ""
+echo ""
 screen -S "checkip" -p 0 -X quit > /dev/null
 echo ""
 echo ""
-sleep 1
-sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0
-sleep 1
-sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0
-sleep 1
-sudo ifconfig wlan0 up
-echo ""
-sleep 1
