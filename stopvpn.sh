@@ -5,7 +5,8 @@ xHOME="/home/pi/MyPiFiles/vpn/"
 echo ""
 echo "... Stopping Deluge Web Server"
 
-SERVICE="deluge-web"
+# SERVICE="deluge-web"
+SERVICE="qbittorrent-nox"
 if pgrep -x "$SERVICE" >/dev/null
 then
     echo "... $SERVICE is running"

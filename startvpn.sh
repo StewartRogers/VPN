@@ -12,7 +12,7 @@ xLOGFILE=$xTEMPHOME"openvpn.log"
 xVPNHOME="/etc/openvpn/client/"
 xUSERPASS=$xTEMPHOME"openvpncode.txt"
 xPyFILE=$xHOME"vpn_active.py"
-xCONFIGFILE="/etc/openvpn/client/vpngate_vpn937471368.opengw.net_udp_1195.ovpn"
+xCONFIGFILE="/etc/openvpn/client/vpngate_public-vpn-45.opengw.net_udp_1195.ovpn"
 xSUCCESS="TRUE"
 
 read -p "Which VPN Service (2 = CA, q = quit): " VPNSERVICE
@@ -74,13 +74,14 @@ if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
      if [ "$active" == "secure" ];
        then echo ""
             echo "Starting Deluge Server"
-            deluged
+            # deluged
+            qbittorrent-nox &
             sleep 2
             echo ""
             echo "Starting Deluge Web Server"
             echo ""
-            deluge-web &
-            sleep 2
+            # deluge-web &
+            # sleep 2
        else echo ""
             echo "Deluge not started."
             echo ""
