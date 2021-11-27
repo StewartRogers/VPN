@@ -1,20 +1,15 @@
 #!/bin/bash
 
-xHOME="/home/pi/MyPiFiles/vpn/"
-xCHECKFILE=$xHOME"checkip.sh"
-xLOGFILE=$xHOME"checkvpn.log"
+YHOME="/home/pi/MyPiFiles/vpn/"
+YCHECKFILE=$YHOME"checkip.sh"
+YLOGFILE=$YHOME"checkvpn.log"
 
-rm -rf $xLOGFILE
+rm -rf $YLOGFILE
 
 clear
 echo ""
-echo ""
 echo "Checking IP address..."
-echo ""
-sleep 2
-screen -d -m -S checkip $xCHECKFILE
-sleep 2
-echo "See progress... tail -f ${xLOGFILE}"
-echo ""
+screen -d -m -S checkip $YCHECKFILE
+echo "See progress... tail -f ${YLOGFILE}"
 echo "FINISHED"
 echo ""

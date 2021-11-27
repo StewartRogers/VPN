@@ -9,40 +9,29 @@ xHOME="/home/pi/MyPiFiles/vpn/"
 xSTOPFILE=$xHOME"stopvpn.sh"
 xTEMPHOME=$xHOME"temp/"
 xLOGFILE=$xTEMPHOME"openvpn.log"
-xVPNHOME="/etc/openvpn/client/"
-xUSERPASS=$xTEMPHOME"openvpncode.txt"
+xVPNHOME="/etc/openvpn/"
+xVPNCHOME="/etc/openvpn/client/"
 xPyFILE=$xHOME"vpn_active.py"
-xCONFIGFILE="/etc/openvpn/client/vpngate_public-vpn-45.opengw.net_udp_1195.ovpn"
+xCONFIGFILE=$xVPNCHOME"vpngate_public-vpn-234.opengw.net_udp_1195.ovpn"
 xSUCCESS="TRUE"
 
-read -p "Which VPN Service (2 = CA, q = quit): " VPNSERVICE
+YHOMEIP=$(dig +short myip.opendns.com @resolver1.opendns.com)
+rm -rf $xLOGFILE
+
+read -p "Which VPN Service (1 = CA, q = quit): " VPNSERVICE
 
 while [ $VPNSERVICE != "q" ]
 do
-  echo ""
-  echo "Stopping Deluge and VPN..."
-  $xSTOPFILE
   rm -rf $xLOGFILE
-  if [ $VPNSERVICE == "2" ];
+  if [ $VPNSERVICE == "1" ];
     then
         echo ""
-        echo "VPN CA Service"
-        echo ""
-        echo "Downloading OVPN files..."
-        cd $xTEMPHOME
-        echo "Changing directory..."
-        cd /etc/openvpn
-        echo ""
-        echo "Starting VPN..."
-        echo ""
-        echo $xCONFIGFILE
-        echo $xUSERPASS
-        echo $xLOGFILE
-        sleep 1
+        echo "... Changing directory"
+        cd $xVPNHOME
+        echo "... Starting VPN"
         sudo openvpn --config $xCONFIGFILE --log $xLOGFILE --daemon
         sleep 7
-        echo ""
-        echo "View log"
+        echo "... Viewing log"
         echo ""
         sudo tail $xLOGFILE
         echo ""
@@ -51,42 +40,55 @@ do
         do
           echo ""
           for load in $(seq 10 -1 0); do
-             echo -ne "Check again in $load seconds...\r"
+             echo -ne "... Check again in $load seconds\r"
              sleep 1
           done
           echo ""
-          echo "Showing tail of log..."
+          echo "... Viewing log"
           echo ""
           sudo tail $xLOGFILE
           echo ""
           read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
         done
   fi
-  read -p "Which VPN Service (2 = CA, q = quit): " VPNSERVICE
+  if [[ $iStart == "y" ]];
+     then
+       VPNSERVICE="q"
+     else
+       read -p "Which VPN Service (1 = CA, q = quit): " VPNSERVICE
+  fi
 done
 
 if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
   then
      echo ""
-     echo "Testing VPN..."
-     active=$(python3 $xPyFILE)
-     echo "VPN test complete. Result: " $active
+     echo "... Testing VPN"
+     active=$(python3 $xPyFILE $YHOMEIP)
+     echo "... VPN test result:" $active
      if [ "$active" == "secure" ];
-       then echo ""
-            echo "Starting Deluge Server"
+       then echo "... Starting Torrent Server"
             # deluged
-            qbittorrent-nox &
+            qbittorrent-nox &>$xHOME/qbit.log &
             sleep 2
-            echo ""
-            echo "Starting Deluge Web Server"
-            echo ""
+            # echo ""
+            # echo "Starting Deluge Web Server"
+            # echo ""
             # deluge-web &
             # sleep 2
        else echo ""
-            echo "Deluge not started."
+            echo "Torrent Server not started."
             echo ""
      fi
 fi
-echo ""
-echo "FINISHED"
-echo ""
+
+if [ "$active" == "secure" ];
+  then
+    YHOME="/home/pi/MyPiFiles/vpn/"
+    YCHECKFILE=$YHOME"checkip.sh "$YHOMEIP
+    YLOGFILE=$YHOME"checkvpn.log"
+    rm -rf $YLOGFILE
+    echo "... Checking IP address"
+    screen -d -m -S checkip $YCHECKFILE
+    echo "... See progress: tail -f ${YLOGFILE}"
+    echo ""
+fi

@@ -1,36 +1,49 @@
 #!/bin/bash
 
-xHOME="/home/pi/MyPiFiles/vpn/"
+# SHOME="/home/pi/MyPiFiles/vpn/"
 
 echo ""
-echo "... Stopping Deluge Web Server"
 
-# SERVICE="deluge-web"
-SERVICE="qbittorrent-nox"
+SSERVICE="q"
+
+if [[ "$SSERVICE" == "q" ]];
+  then
+     echo "... Stopping qbittorrent"
+     SERVICE="qbittorrent-nox"
+  else
+     echo "... Stopping Deluge Web Server"
+     SERVICE="deluge-web"
+fi
+
 if pgrep -x "$SERVICE" >/dev/null
 then
     echo "... $SERVICE is running"
     sudo killall $SERVICE
     echo "... $SERVICE has been stopped."
-    sleep 2
+    sleep 1
 else
     echo "... $SERVICE is not running"
 fi
 sleep 1
-echo ""
-echo "... Stopping Deluge Server"
-SERVICE="deluged"
-if pgrep -x "$SERVICE" >/dev/null
-then
-    echo "... $SERVICE is running"
-    echo ""
-    xDELUGE="$(deluge-console "connect 127.0.0.1:58846 ; pause * ; halt ; quit")"
-    echo "... ${xDELUGE}"
-    sleep 2
-else
-    echo "... $SERVICE is not running"
+
+if [[ "$SSERVICE" == "q" ]];
+  then
+     SERVICE="qbittorrent-nox"
+  else
+     echo ""
+     echo "... Stopping Deluge Server"
+     SERVICE="deluged"
+     if pgrep -x "$SERVICE" >/dev/null
+     then
+         echo "... $SERVICE is running"
+         echo ""
+         xDELUGE="$(deluge-console "connect 127.0.0.1:58846 ; pause * ; halt ; quit")"
+         echo "... ${xDELUGE}"
+         sleep 1
+     else
+         echo "... $SERVICE is not running"
+     fi
 fi
-sleep 1
 echo ""
 echo "... Stopping OpenVPN Server"
 SERVICE="openvpn"
@@ -39,11 +52,10 @@ then
     echo "... $SERVICE is running"
     sudo killall $SERVICE
     echo "... $SERVICE has been stopped."
-    sleep 2
+    sleep 1
 else
     echo "... $SERVICE is not running"
 fi
-sleep 1
 echo ""
 echo "... Stopping checkip script"
 SERVICE="checkip.sh"
@@ -52,13 +64,10 @@ then
     echo "... $SERVICE is running"
     sudo killall $SERVICE
     echo "... $SERVICE has been stopped."
-    sleep 2
 else
     echo "... $SERVICE is not running"
 fi
 sleep 1
 echo ""
-echo ""
 screen -S "checkip" -p 0 -X quit > /dev/null
-echo ""
 echo ""
