@@ -9,7 +9,7 @@ SSERVICE="q"
 if [[ "$SSERVICE" == "q" ]];
   then
      echo "... Stopping qbittorrent"
-     SERVICE="qbittorrent"
+     SERVICE="qbittorrent-nox"
   else
      echo "... Stopping Deluge Web Server"
      SERVICE="deluge-web"

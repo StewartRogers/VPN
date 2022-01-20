@@ -15,7 +15,7 @@ xPyFILE=$xHOME"vpn_active.py"
 xCONFIGFILE=$xVPNCHOME"vpngate_public-vpn-234.opengw.net_udp_1195.ovpn"
 xSUCCESS="TRUE"
 
-YHOMEIP=$(dig +short myip.opendns.com @resolver1.opendns.com)
+YHOMEIP=$(curl -s https://ipinfo.io/ip)
 echo "External IP: "$YHOMEIP
 echo ""
 rm -rf $xLOGFILE
@@ -70,7 +70,7 @@ if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
      if [ "$active" == "secure" ];
        then echo "... Starting Torrent Server"
             # deluged
-            qbittorrent &>$xHOME/qbit.log &
+            qbittorrent-nox &>$xHOME/qbit.log &
             sleep 2
             # echo ""
             # echo "Starting Deluge Web Server"
