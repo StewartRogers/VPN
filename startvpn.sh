@@ -5,7 +5,7 @@ echo ""
 echo "VPN Start Script"
 echo ""
 
-xHOME="/home/pi/MyPiFiles/vpn/"
+xHOME=$PWD"/"
 xSTOPFILE=$xHOME"stopvpn.sh"
 xTEMPHOME=$xHOME"temp/"
 xLOGFILE=$xTEMPHOME"openvpn.log"
@@ -16,6 +16,8 @@ xCONFIGFILE=$xVPNCHOME"vpngate_public-vpn-234.opengw.net_udp_1195.ovpn"
 xSUCCESS="TRUE"
 
 YHOMEIP=$(dig +short myip.opendns.com @resolver1.opendns.com)
+echo "External IP: "$YHOMEIP
+echo ""
 rm -rf $xLOGFILE
 
 read -p "Which VPN Service (1 = CA, q = quit): " VPNSERVICE
@@ -68,7 +70,7 @@ if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
      if [ "$active" == "secure" ];
        then echo "... Starting Torrent Server"
             # deluged
-            qbittorrent-nox &>$xHOME/qbit.log &
+            qbittorrent &>$xHOME/qbit.log &
             sleep 2
             # echo ""
             # echo "Starting Deluge Web Server"
@@ -83,7 +85,8 @@ fi
 
 if [ "$active" == "secure" ];
   then
-    YHOME="/home/pi/MyPiFiles/vpn/"
+    cd ~/MyPiFiles/vpn
+    YHOME=$PWD"/"
     YCHECKFILE=$YHOME"checkip.sh "$YHOMEIP
     YLOGFILE=$YHOME"checkvpn.log"
     rm -rf $YLOGFILE

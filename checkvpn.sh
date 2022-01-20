@@ -1,6 +1,10 @@
 #!/bin/bash
 
-YHOME="/home/pi/MyPiFiles/vpn/"
+cd ~/MyPiFiles/vpn
+echo ""
+echo $PWD
+echo ""
+YHOME=$PWD"/"
 YCHECKFILE=$YHOME"checkip.sh"
 YLOGFILE=$YHOME"checkvpn.log"
 

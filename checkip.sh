@@ -5,7 +5,7 @@ echo ""
 echo "Checking IP address for VPN..."
 echo ""
 
-XHOME="/home/pi/MyPiFiles/vpn/"
+XHOME=$PWD"/"
 XPYFILE=$XHOME"vpn_active.py"
 XLOGFILE=$XHOME"checkvpn.log"
 XSTOPFILE=$XHOME"stopvpn.sh"
