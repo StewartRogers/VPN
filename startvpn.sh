@@ -3,11 +3,16 @@
 clear
 echo ""
 echo "VPN Start Script"
-echo ""
-
 xHOME=$PWD"/"
 xSTOPFILE=$xHOME"stopvpn.sh"
 xTEMPHOME=$xHOME"temp/"
+if [ -d "$xTEMPHOME" ]
+then
+    echo ""
+else
+    mkdir $xTEMPHOME
+    echo ""
+fi
 xLOGFILE=$xTEMPHOME"openvpn.log"
 xVPNHOME="/etc/openvpn/"
 xVPNCHOME="/etc/openvpn/client/"
