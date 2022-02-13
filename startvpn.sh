@@ -17,7 +17,7 @@ xLOGFILE=$xTEMPHOME"openvpn.log"
 xVPNHOME="/etc/openvpn/"
 xVPNCHOME="/etc/openvpn/client/"
 xPyFILE=$xHOME"vpn_active.py"
-xCONFIGFILE=$xVPNCHOME"vpngate_public-vpn-234.opengw.net_udp_1195.ovpn"
+xCONFIGFILE=$xVPNCHOME"vpngate_vpn899546555.opengw.net_udp_1195.ovpn"
 xSUCCESS="TRUE"
 
 YHOMEIP=$(curl -s https://ipinfo.io/ip)
