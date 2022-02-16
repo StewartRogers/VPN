@@ -1,4 +1,8 @@
 #!/bin/bash
+#
+# Stewart Rogers
+# rsrogers@Ymail.com
+#
 
 clear
 echo ""
