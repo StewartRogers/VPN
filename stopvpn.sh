@@ -1,5 +1,10 @@
 #!/bin/bash
 
+#
+# Stewart Rogers
+# rsrogers@Ymail.com
+#
+
 # SHOME="/home/pi/MyPiFiles/vpn/"
 
 echo ""
