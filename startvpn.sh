@@ -16,7 +16,6 @@ echo ""
 # VARIABLES
 #
 XHOME=$PWD"/"
-XTEMPHOME=$XHOME"temp/"
 YLOGFILE=$XHOME"checkvpn.log"
 XVPNHOME="/etc/openvpn/"
 XVPNCHOME="/etc/openvpn/client/"
@@ -24,16 +23,6 @@ XVPNLOGFILE="/var/log/openvpn.log"
 XPYFILE=$XHOME"vpn_active.py"
 XSUCCESS="TRUE"
 VPNSERVICE=1
-
-#
-# Create TEMP directory if missing
-#
-if [ -d "$XTEMPHOME" ]
-then
-    :
-else
-    mkdir $XTEMPHOME
-fi
 
 #
 # Get current external IP address for future test
