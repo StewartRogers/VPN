@@ -1,16 +1,22 @@
 #!/bin/bash
+#
+# Original Author: Stewart Rogers
+# This licensed under the MIT License
+# A short and simple permissive license with conditions only requiring
+# preservation of copyright and license notices. Licensed works, modifications,
+# and larger works may be distributed under different terms and without source code.
+#
 
 #
-# Stewart Rogers
-# rsrogers@Ymail.com
+# VARIABLES
 #
-
-# SHOME="/home/pi/MyPiFiles/vpn/"
-
-echo ""
-
+SHOME="/home/pi/MyPiFiles/vpn/"
 SSERVICE="q"
 
+#
+# Stopping torrent server. Change SSERVICE variable from q to use Deluge
+#
+echo ""
 if [[ "$SSERVICE" == "q" ]];
   then
      echo "... Stopping qbittorrent"
@@ -31,6 +37,9 @@ else
 fi
 sleep 1
 
+#
+# Stopping Deluge console server. Change SSERVICE variable from q to use Deluge
+#
 if [[ "$SSERVICE" == "q" ]];
   then
      SERVICE="qbittorrent-nox"
@@ -49,6 +58,10 @@ if [[ "$SSERVICE" == "q" ]];
          echo "... $SERVICE is not running"
      fi
 fi
+
+#
+# Stopping OpenVPN server.
+#
 echo ""
 echo "... Stopping OpenVPN Server"
 SERVICE="openvpn"
@@ -57,10 +70,14 @@ then
     echo "... $SERVICE is running"
     sudo killall $SERVICE
     echo "... $SERVICE has been stopped."
-    sleep 1
 else
     echo "... $SERVICE is not running"
 fi
+sleep 1
+
+#
+# Stopping checkip script server.
+#
 echo ""
 echo "... Stopping checkip script"
 SERVICE="checkip.sh"
@@ -76,3 +93,7 @@ sleep 1
 echo ""
 screen -S "checkip" -p 0 -X quit > /dev/null
 echo ""
+
+#
+# END
+#

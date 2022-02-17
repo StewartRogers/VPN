@@ -1,50 +1,78 @@
 #!/bin/bash
 #
-# Stewart Rogers
-# rsrogers@Ymail.com
+# Original Author: Stewart Rogers
+# This licensed under the MIT License
+# A short and simple permissive license with conditions only requiring
+# preservation of copyright and license notices. Licensed works, modifications,
+# and larger works may be distributed under different terms and without source code.
 #
 
 clear
 echo ""
 echo "VPN Start Script"
-xHOME=$PWD"/"
-xSTOPFILE=$xHOME"stopvpn.sh"
-xTEMPHOME=$xHOME"temp/"
-if [ -d "$xTEMPHOME" ]
-then
-    echo ""
-else
-    mkdir $xTEMPHOME
-    echo ""
-fi
-xLOGFILE=$xTEMPHOME"openvpn.log"
-xVPNHOME="/etc/openvpn/"
-xVPNCHOME="/etc/openvpn/client/"
-xPyFILE=$xHOME"vpn_active.py"
-xCONFIGFILE=$xVPNCHOME"vpngate_vpn899546555.opengw.net_udp_1195.ovpn"
-xSUCCESS="TRUE"
+echo ""
 
+#
+# VARIABLES
+#
+XHOME=$PWD"/"
+XTEMPHOME=$XHOME"temp/"
+YLOGFILE=$XHOME"checkvpn.log"
+XVPNHOME="/etc/openvpn/"
+XVPNCHOME="/etc/openvpn/client/"
+XVPNLOGFILE="/var/log/openvpn.log"
+XPYFILE=$XHOME"vpn_active.py"
+XSUCCESS="TRUE"
+VPNSERVICE=1
+
+#
+# Create TEMP directory if missing
+#
+if [ -d "$XTEMPHOME" ]
+then
+    :
+else
+    mkdir $XTEMPHOME
+fi
+
+#
+# Get current external IP address for future test
+#
 YHOMEIP=$(curl -s https://ipinfo.io/ip)
 echo "External IP: "$YHOMEIP
 echo ""
-rm -rf $xLOGFILE
 
-read -p "Which VPN Service (1 = CA, q = quit): " VPNSERVICE
+#
+# Get OVPN File
+#
+read -p "Do you want to download a new OVPN file? (Y/N) " GETOVPN
 
+if [ $GETOVPN == "y" ] || [ $GETOVPN == "Y" ]
+then
+  read -p "Paste in a URL to download OVPN file: " OVPNURL
+  echo $OVPNURL
+  XCONFIGFILE=$XVPNCHOME"vpngate_vpn899546555.opengw.net_udp_1195.ovpn"
+else
+  XCONFIGFILE=$XVPNCHOME"vpngate_vpn899546555.opengw.net_udp_1195.ovpn"
+fi
+
+#
+# Start VPN service
+#
 while [ $VPNSERVICE != "q" ]
 do
-  rm -rf $xLOGFILE
   if [ $VPNSERVICE == "1" ];
     then
         echo ""
-        echo "... Changing directory"
-        cd $xVPNHOME
+        echo "... Getting organized"
+        cd $XVPNHOME
+        sudo rm -rf $XVPNLOGFILE
         echo "... Starting VPN"
-        sudo openvpn --config $xCONFIGFILE --log $xLOGFILE --daemon
+        sudo openvpn --auth-nocache --config $XCONFIGFILE --log $XVPNLOGFILE --daemon
         sleep 7
         echo "... Viewing log"
         echo ""
-        sudo tail $xLOGFILE
+        sudo tail $XVPNLOGFILE
         echo ""
         read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
         while [ $iStart == "n" ]
@@ -57,7 +85,7 @@ do
           echo ""
           echo "... Viewing log"
           echo ""
-          sudo tail $xLOGFILE
+          sudo tail $XVPNLOGFILE
           echo ""
           read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
         done
@@ -66,7 +94,7 @@ do
      then
        VPNSERVICE="q"
      else
-       read -p "Which VPN Service (1 = CA, q = quit): " VPNSERVICE
+       read -p "Type 'q' to quit: " VPNSERVICE
   fi
 done
 
@@ -74,18 +102,12 @@ if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
   then
      echo ""
      echo "... Testing VPN"
-     active=$(python3 $xPyFILE $YHOMEIP)
+     active=$(python3 $XPYFILE $YHOMEIP)
      echo "... VPN test result:" $active
      if [ "$active" == "secure" ];
        then echo "... Starting Torrent Server"
-            # deluged
-            qbittorrent-nox &>$xHOME/qbit.log &
+            qbittorrent-nox &>$XHOME/qbit.log &
             sleep 2
-            # echo ""
-            # echo "Starting Deluge Web Server"
-            # echo ""
-            # deluge-web &
-            # sleep 2
        else echo ""
             echo "Torrent Server not started."
             echo ""
@@ -94,13 +116,10 @@ fi
 
 if [ "$active" == "secure" ];
   then
-    cd ~/MyPiFiles/vpn
-    YHOME=$PWD"/"
-    YCHECKFILE=$YHOME"checkip.sh "$YHOMEIP
-    YLOGFILE=$YHOME"checkvpn.log"
-    rm -rf $YLOGFILE
+    YCHECKFILE=$XHOME"checkip.sh "$YHOMEIP
     echo "... Checking IP address"
-    screen -d -m -S checkip $YCHECKFILE
+    cd $XHOME
+    ./checkip.sh $YHOMEIP &
     echo "... See progress: tail -f ${YLOGFILE}"
     echo ""
 fi
