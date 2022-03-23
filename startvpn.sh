@@ -32,6 +32,17 @@ echo "External IP: "$YHOMEIP
 echo ""
 
 #
+# Installing required software
+#
+echo "Installing required software..."
+echo "This install qbittorrent-nox and if you have never run that before"
+echo "you must run it manually first to accept the disclaimer"
+sudo apt-get -qq update
+sudo apt-get install -y -qq qbittorrent-nox openvpn
+echo ""
+echo ""
+
+#
 # Get OVPN File
 #
 read -p "Do you want to download a new OVPN file? (Y/N) " GETOVPN
@@ -39,11 +50,16 @@ read -p "Do you want to download a new OVPN file? (Y/N) " GETOVPN
 if [ $GETOVPN == "y" ] || [ $GETOVPN == "Y" ]
 then
   read -p "Paste in a URL to download OVPN file: " OVPNURL
-  echo $OVPNURL
-  XCONFIGFILE=$XVPNCHOME"vpngate_vpn899546555.opengw.net_udp_1195.ovpn"
+  curl -s -O $OVPNURL
 else
-  XCONFIGFILE=$XVPNCHOME"vpngate_vpn899546555.opengw.net_udp_1195.ovpn"
+  echo ""
 fi
+
+for XFILE in `eval ls *.ovpn`
+  do
+    sudo cp $XFILE $XVPNCHOME
+  done
+XCONFIGFILE=$XVPNCHOME$XFILE
 
 #
 # Start VPN service
@@ -54,6 +70,9 @@ do
     then
         echo ""
         echo "... Getting organized"
+        sudo ufw allow out 1195/udp > /dev/null
+        sudo ufw allow 8080/tcp > /dev/null
+        sudo ufw allow out on tun0 from any to any > /dev/null
         cd $XVPNHOME
         sudo rm -rf $XVPNLOGFILE
         echo "... Starting VPN"
