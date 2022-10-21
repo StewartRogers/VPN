@@ -76,7 +76,7 @@ do
         cd $XVPNHOME
         sudo rm -rf $XVPNLOGFILE
         echo "... Starting VPN"
-        sudo openvpn --auth-nocache --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --data-ciphers-fallback 'AES-128-CBC' --data-ciphers 'AES-128-CBC' --verb 6
+        sudo openvpn --auth-nocache --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --data-ciphers-fallback 'AES-128-CBC' --data-ciphers 'AES-128-CBC' --verb 4
         sleep 7
         echo "... Viewing log"
         echo ""
