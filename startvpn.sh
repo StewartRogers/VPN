@@ -38,7 +38,7 @@ echo "Installing required software..."
 echo "This install qbittorrent-nox and if you have never run that before"
 echo "you must run it manually first to accept the disclaimer"
 sudo apt-get -qq update
-sudo apt-get install -y -qq qbittorrent-nox openvpn
+sudo apt-get install -y -qq qbittorrent-nox openvpn screen
 echo ""
 echo ""
 
