@@ -37,8 +37,8 @@ echo ""
 echo "Installing required software..."
 echo "This install qbittorrent-nox and if you have never run that before"
 echo "you must run it manually first to accept the disclaimer"
-sudo apt-get -qq update
-sudo apt-get install -y -qq qbittorrent-nox openvpn screen
+# sudo apt-get -qq update
+# sudo apt-get install -y -qq qbittorrent-nox openvpn screen
 echo ""
 echo ""
 
@@ -49,6 +49,7 @@ read -p "Do you want to download a new OVPN file? (Y/N) " GETOVPN
 
 if [ $GETOVPN == "y" ] || [ $GETOVPN == "Y" ]
 then
+  rm *.ovpn
   read -p "Paste in a URL to download OVPN file: " OVPNURL
   curl -s -O $OVPNURL
 else
@@ -76,7 +77,8 @@ do
         cd $XVPNHOME
         sudo rm -rf $XVPNLOGFILE
         echo "... Starting VPN"
-        sudo openvpn --auth-nocache --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --data-ciphers-fallback 'AES-128-CBC' --data-ciphers 'AES-128-CBC' --verb 4
+        echo "... CONFIGFILE: " $XCONFIGFILE
+        sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --proto tcp --port 443 --auth SHA256 --data-ciphers-fallback 'AES-256-CBC' --data-ciphers 'AES-256-CBC' --tls-client --tls-version-min 1.2 --auth-nocache --mssfix 1300 --mute-replay-warnings --verb 5 --daemon
         sleep 7
         echo "... Viewing log"
         echo ""
