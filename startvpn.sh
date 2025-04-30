@@ -37,8 +37,8 @@ echo ""
 echo "Installing required software..."
 echo "This install qbittorrent-nox and if you have never run that before"
 echo "you must run it manually first to accept the disclaimer"
-# sudo apt-get -qq update
-# sudo apt-get install -y -qq qbittorrent-nox openvpn screen
+sudo apt-get -qq update
+sudo apt-get install -y -qq qbittorrent-nox openvpn screen ufw
 echo ""
 echo ""
 
@@ -83,7 +83,6 @@ do
         echo "... Viewing log"
         echo ""
         sudo tail $XVPNLOGFILE
-        echo ""
         read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
         while [ $iStart == "n" ]
         do
