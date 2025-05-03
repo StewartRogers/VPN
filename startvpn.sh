@@ -34,14 +34,20 @@ echo ""
 #
 # Installing required software
 #
-echo "Installing required software..."
-echo "This install qbittorrent-nox and if you have never run that before"
-echo "you must run it manually first to accept the disclaimer"
-sudo apt-get -qq update
-sudo apt-get install -y -qq qbittorrent-nox openvpn screen ufw
-echo ""
-echo ""
-
+read -p "Do you want to check if all software is installed? (Y/N) " SWCHECK
+if [ $SWCHECK == "Y" ] || [ $SWCHECK == "y" ]
+then
+  echo "Installing required software..."
+  echo "This install qbittorrent-nox and if you have never run that before"
+  echo "you must run it manually first to accept the disclaimer"
+  sudo apt-get -qq update
+  sudo apt-get install -y -qq qbittorrent-nox openvpn screen ufw
+  echo ""
+  echo ""
+else
+  echo ""
+  echo ""
+fi
 #
 # Get OVPN File
 #
