@@ -43,9 +43,7 @@ then
   sudo apt-get -qq update
   sudo apt-get install -y -qq qbittorrent-nox openvpn screen ufw
   echo ""
-  echo ""
 else
-  echo ""
   echo ""
 fi
 #
@@ -89,6 +87,7 @@ do
         echo "... Viewing log"
         echo ""
         sudo tail $XVPNLOGFILE
+        echo ""
         read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
         while [ $iStart == "n" ]
         do
