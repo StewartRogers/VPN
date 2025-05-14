@@ -13,9 +13,8 @@
 XIP_HOME=$PWD"/"
 XIP_PYFILE=$XIP_HOME"vpn_active.py"
 XIP_LOGFILE=$XIP_HOME"checkvpn.log"
-XIP_STOPFILE=$XIP_HOME"stopvpn.sh"
+XIP_STOPFILE=$XIP_HOME"stopvpn.sh --shutdown-only"
 YIP_HOMEIP=$1
-
 #
 # redirect stdout/stderr to a file
 #
