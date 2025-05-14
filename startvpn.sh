@@ -35,29 +35,32 @@ echo ""
 # Installing required software
 #
 read -p "Do you want to check if all software is installed? (Y/N) " SWCHECK
-if [ $SWCHECK == "Y" ] || [ $SWCHECK == "y" ]
+if [[ "${SWCHECK,,}" == "y" ]]
 then
   echo "Installing required software..."
   echo "This install qbittorrent-nox and if you have never run that before"
   echo "you must run it manually first to accept the disclaimer"
   sudo apt-get -qq update
   sudo apt-get install -y -qq qbittorrent-nox openvpn screen ufw
-  echo ""
-else
-  echo ""
 fi
 #
 # Get OVPN File
 #
 read -p "Do you want to download a new OVPN file? (Y/N) " GETOVPN
 
-if [ $GETOVPN == "y" ] || [ $GETOVPN == "Y" ]
+if [[ "${GETOVPN,,}" == "y" ]]
 then
   rm *.ovpn
   read -p "Paste in a URL to download OVPN file: " OVPNURL
   curl -s -O $OVPNURL
 else
   echo ""
+fi
+
+# Check if any .ovpn file exists
+if ! ls *.ovpn 1> /dev/null 2>&1; then
+  echo -e "Error: No .ovpn file found. Aborting script.\n\n"
+  exit 1
 fi
 
 for XFILE in `eval ls *.ovpn`
@@ -89,7 +92,7 @@ do
         sudo tail $XVPNLOGFILE
         echo ""
         read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
-        while [ $iStart == "n" ]
+        while [[ "${iStart,,}" == "n" ]]
         do
           echo ""
           for load in $(seq 10 -1 0); do
@@ -104,7 +107,7 @@ do
           read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
         done
   fi
-  if [[ $iStart == "y" ]];
+  if [[ "${iStart,,}" == "y" ]];
      then
        VPNSERVICE="q"
      else
@@ -112,7 +115,7 @@ do
   fi
 done
 
-if [[ $iStart == "y" && $VPNSERVICE == "q" ]];
+if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]];
   then
      echo ""
      echo "... Testing VPN"
