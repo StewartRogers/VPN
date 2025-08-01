@@ -72,15 +72,27 @@ XCONFIGFILE=$XVPNCHOME$XFILE
 #
 # Start VPN service
 #
+
+
+# Ask user if they want to make a UFW call for a specific port
+read -p "Do you want to allow a port through UFW? (Y/N) " UFWCONFIRM
+if [[ "${UFWCONFIRM,,}" == "y" ]]; then
+    read -p "Enter the port number you want to allow: " UFWPORT
+    read -p "Enter the protocol (tcp/udp): " UFWPROTO
+    echo ""
+    echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
+    sudo ufw allow $UFWPORT/$UFWPROTO > /dev/null
+    echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
+    echo ""
+fi
+
+# Start VPN service
 while [ $VPNSERVICE != "q" ]
 do
   if [ $VPNSERVICE == "1" ];
     then
         echo ""
         echo "... Getting organized"
-        sudo ufw allow out 1195/udp > /dev/null
-        sudo ufw allow 8080/tcp > /dev/null
-        sudo ufw allow out on tun0 from any to any > /dev/null
         cd $XVPNHOME
         sudo rm -rf $XVPNLOGFILE
         echo "... Starting VPN"
