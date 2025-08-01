@@ -10,7 +10,6 @@
 #
 # VARIABLES
 #
-SHOME="/home/pi/MyPiFiles/vpn/"
 SSERVICE="q"
 
 # Function to stop services
