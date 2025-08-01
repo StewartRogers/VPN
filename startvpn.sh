@@ -135,7 +135,7 @@ if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]];
      echo "... VPN test result:" $active
      if [ "$active" == "secure" ];
        then echo "... Starting Torrent Server"
-            qbittorrent-nox &>$XHOME/qbit.log &
+            nohup qbittorrent-nox > "$XHOME/qbit.log" 2>&1 &
             sleep 2
        else echo ""
             echo "Torrent Server not started."
