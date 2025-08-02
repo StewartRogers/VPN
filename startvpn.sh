@@ -113,7 +113,7 @@ do
         echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
         echo "... Starting VPN"
         echo "... CONFIGFILE: " $XCONFIGFILE
-        sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --proto tcp --port 443 --auth SHA256 --data-ciphers-fallback 'AES-256-CBC' --data-ciphers 'AES-256-CBC' --tls-client --tls-version-min 1.2 --auth-nocache --mssfix 1300 --mute-replay-warnings --verb 5 --daemon
+        sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --verb 3
         sleep 7
         echo "... Viewing log"
         echo ""
