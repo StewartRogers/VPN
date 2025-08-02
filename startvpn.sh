@@ -35,6 +35,7 @@ echo ""
 # Installing required software
 #
 read -p "Do you want to check if all software is installed? (Y/N) " SWCHECK
+
 if [[ "${SWCHECK,,}" == "y" ]]
 then
   echo "Installing required software..."
@@ -42,7 +43,22 @@ then
   echo "you must run it manually first to accept the disclaimer"
   sudo apt-get -qq update
   sudo apt-get install -y -qq qbittorrent-nox openvpn screen ufw
+
+  # Ensure python3, pip3, and required Python packages are installed
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 not found, installing..."
+    sudo apt-get update && sudo apt-get install -y -qq python3
+  fi
+
+  if ! command -v pip3 >/dev/null 2>&1; then
+    echo "pip3 not found, installing..."
+    sudo apt-get install -y -qq python3-pip
+  fi
+
+  # Ensure required Python packages are installed
+  pip3 install --user --upgrade requests
 fi
+
 #
 # Get OVPN File
 #
