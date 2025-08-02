@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) 2022-2025 Stewart Rogers
+# SPDX-License-Identifier: MIT
 #
 # Original Author: Stewart Rogers
 # Enhanced for faster VPN disconnect detection
@@ -18,8 +20,8 @@ YIP_HOMEIP=$1
 #
 # New variables for enhanced monitoring
 #
-FAST_CHECK_INTERVAL=2    # Quick process/interface checks every 2 seconds
-IP_CHECK_INTERVAL=10     # Full IP check every 10 seconds
+FAST_CHECK_INTERVAL=1    # Quick process/interface checks every 2 seconds
+IP_CHECK_INTERVAL=5     # Full IP check every 10 seconds
 LAST_IP_CHECK=0
 #
 # redirect stdout/stderr to a file

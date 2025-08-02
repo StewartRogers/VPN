@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) 2022-2025 Stewart Rogers
+# SPDX-License-Identifier: MIT
 #
 # Original Author: Stewart Rogers
 # This licensed under the MIT License
