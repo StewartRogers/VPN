@@ -71,8 +71,6 @@ then
   rm *.ovpn
   read -p "Paste in a URL to download OVPN file: " OVPNURL
   curl -s -O $OVPNURL
-else
-  echo ""
 fi
 
 # Check if any .ovpn file exists
@@ -90,8 +88,6 @@ XCONFIGFILE=$XVPNCHOME$XFILE
 #
 # Start VPN service
 #
-
-
 # Ask user if they want to make a UFW call for a specific port
 read -p "Do you want to allow a port through UFW? (Y/N) " UFWCONFIRM
 if [[ "${UFWCONFIRM,,}" == "y" ]]; then
@@ -113,6 +109,8 @@ do
         echo "... Getting organized"
         cd $XVPNHOME
         sudo rm -rf $XVPNLOGFILE
+        # Echo current external IP after starting VPN
+        echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
         echo "... Starting VPN"
         echo "... CONFIGFILE: " $XCONFIGFILE
         sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --proto tcp --port 443 --auth SHA256 --data-ciphers-fallback 'AES-256-CBC' --data-ciphers 'AES-256-CBC' --tls-client --tls-version-min 1.2 --auth-nocache --mssfix 1300 --mute-replay-warnings --verb 5 --daemon
@@ -139,10 +137,13 @@ do
   fi
   if [[ "${iStart,,}" == "y" ]];
      then
+       # Echo current external IP before exiting loop
+       echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
        VPNSERVICE="q"
      else
        read -p "Type 'q' to quit: " VPNSERVICE
   fi
+
 done
 
 if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]];
