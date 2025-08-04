@@ -123,6 +123,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
     for file in *.mp4 *.mkv; do
         [ -e "$file" ] || continue
         filename=$(basename "$file")
+        ext="${file##*.}"
         cleanname=$(echo "$filename" | \
           sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
           sed -E 's/\[[^]]*\]//g; s/\([^)]*\)//g' | \
@@ -131,8 +132,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
           sed -E 's/ +$//; s/^ +//')
         # Collapse multiple spaces to one, then convert to dot-separated, then remove duplicate dots
         newname="$(echo "$cleanname" | tr -s ' ' | sed -E 's/ /./g; s/\.+/./g')".${ext,,}
-        ext="${file##*.}"
-        newname="$(echo "$cleanname" | tr ' ' '.')".${ext,,}
 
         echo ""
         echo "Rename file:"
