@@ -123,7 +123,12 @@ if [[ "${do_rename,,}" == "y" ]]; then
     for file in *.mp4 *.mkv; do
         [ -e "$file" ] || continue
         filename=$(basename "$file")
-        cleanname=$(echo "$filename" | sed -E 's/\.[0-9]{3,4}p.*//; s/\[[^]]*\]//g; s/\([^)]*\)//g; s/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | sed -E 's/[._]+/ /g' | sed -E 's/ +$//; s/^ +//')
+        cleanname=$(echo "$filename" | \
+          sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
+          sed -E 's/\[[^]]*\]//g; s/\([^)]*\)//g' | \
+          sed -E 's/(1080p|720p|480p|2160p|WEB[-_. ]?DL|BluRay|DDP[0-9.]+|H[ ._-]?264|x264|AAC|FLUX|AMZN|DD5[.1]?|DDP5[.1]?|DDP|EVO|YIFY|RARBG|EZTVx.to|WEB|DL|DDP|H|264)[^ ]*//Ig' | \
+          sed -E 's/[._]+/ /g' | \
+          sed -E 's/ +$//; s/^ +//')
         ext="${file##*.}"
         newname="$(echo "$cleanname" | tr ' ' '.')".${ext,,}
 
