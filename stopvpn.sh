@@ -96,8 +96,8 @@ else
     echo -e "\nSkipped shutting down services.\n"
 fi
 
-# Prompt user to skip rename and move files section
-read -rp "Do you want to rename and move video files? [y/N]: " do_rename
+# Prompt user to skip rename, move and convert files section
+read -rp "Do you want to rename, move and convert (if necessary) video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
     read -rp "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
@@ -146,28 +146,29 @@ if [[ "${do_rename,,}" == "y" ]]; then
                 mv -n "$file" "$newname"
                 echo "  Renamed successfully."
 
-                # If MKV, offer to convert to MP4
-                if [[ "${ext,,}" == "mkv" ]]; then
-                    read -rp "Convert $newname to MP4 using ffmpeg? [y/N]: " confirm_convert
-                    if [[ "$confirm_convert" =~ ^[Yy]$ ]]; then
-                        mp4name="${newname%.*}.mp4"
-                        echo "  Converting $newname to $mp4name ..."
-                        if ffmpeg -i "$newname" -map 0 -c:v libx264 -preset slow -crf 22 -c:a aac -b:a 192k -movflags +faststart -c:s mov_text "$mp4name"; then
-                            echo "  Conversion successful. Removing original MKV."
-                            rm -f "$newname"
-                            newname="$mp4name"
-                        else
-                            echo "  Conversion failed. Keeping original MKV."
-                        fi
-                    fi
-                fi
-
                 read -rp "Move $newname to temporary folder ($TEMP_DEST)? [y/N]: " confirm_move
                 if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
                     mv -n "$newname" "$TEMP_DEST/"
                     echo "  Moved to $TEMP_DEST."
+                    moved_file="$TEMP_DEST/$newname"
                 else
                     echo "  Left in $SOURCE_DIR."
+                    moved_file="$newname"
+                fi
+
+                # If MKV, offer to convert to MP4 in the destination folder
+                if [[ "${ext,,}" == "mkv" ]]; then
+                    read -rp "Convert $moved_file to MP4 using ffmpeg? [y/N]: " confirm_convert
+                    if [[ "$confirm_convert" =~ ^[Yy]$ ]]; then
+                        mp4name="${moved_file%.*}.mp4"
+                        echo "  Converting $moved_file to $mp4name ..."
+                        if ffmpeg -i "$moved_file" -map 0 -c:v libx264 -preset slow -crf 22 -c:a aac -b:a 192k -movflags +faststart -c:s mov_text "$mp4name"; then
+                            echo "  Conversion successful. Removing original MKV."
+                            rm -f "$moved_file"
+                        else
+                            echo "  Conversion failed. Keeping original MKV."
+                        fi
+                    fi
                 fi
             fi
         else
