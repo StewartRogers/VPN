@@ -108,9 +108,9 @@ if [[ "${do_rename,,}" == "y" ]]; then
         exit 1
     fi
 
-    file_count=$(find "$SOURCE_DIR" -mindepth 2 -type f \( -iname "*.mp4" -o -iname "*.mkv" \) | wc -l)
+    file_count=$(find "$SOURCE_DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" \) | wc -l)
     if [[ "$file_count" -eq 0 ]]; then
-        echo "No .mp4 or .mkv files found in subdirectories of $SOURCE_DIR."
+        echo "No .mp4 or .mkv files found in $SOURCE_DIR or its subdirectories."
         echo ""
         exit 0
     fi
