@@ -119,6 +119,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
     cd "$SOURCE_DIR" || { echo "Failed to access $SOURCE_DIR"; exit 1; }
     find . -mindepth 2 -type f \( -iname "*.mp4" -o -iname "*.mkv" \) -exec mv -n "{}" . \;
 
+
     for file in *.mp4 *.mkv; do
         [ -e "$file" ] || continue
         filename=$(basename "$file")
@@ -138,6 +139,22 @@ if [[ "${do_rename,,}" == "y" ]]; then
             else
                 mv -n "$file" "$newname"
                 echo "  Renamed successfully."
+
+                # If MKV, offer to convert to MP4
+                if [[ "${ext,,}" == "mkv" ]]; then
+                    read -rp "Convert $newname to MP4 using ffmpeg? [y/N]: " confirm_convert
+                    if [[ "$confirm_convert" =~ ^[Yy]$ ]]; then
+                        mp4name="${newname%.*}.mp4"
+                        echo "  Converting $newname to $mp4name ..."
+                        if ffmpeg -i "$newname" -map 0 -c:v libx264 -preset slow -crf 22 -c:a aac -b:a 192k -movflags +faststart -c:s mov_text "$mp4name"; then
+                            echo "  Conversion successful. Removing original MKV."
+                            rm -f "$newname"
+                            newname="$mp4name"
+                        else
+                            echo "  Conversion failed. Keeping original MKV."
+                        fi
+                    fi
+                fi
 
                 read -rp "Move $newname to temporary folder ($TEMP_DEST)? [y/N]: " confirm_move
                 if [[ "$confirm_move" =~ ^[Yy]$ ]]; then

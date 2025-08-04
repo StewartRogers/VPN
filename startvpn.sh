@@ -119,8 +119,8 @@ do
         echo ""
         sudo tail $XVPNLOGFILE
         echo ""
-        read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
-        while [[ "${iStart,,}" == "n" ]]
+        read -p "Has it started? [Y/N/F - f is failed] " iStart
+        while [[ "${iStart,,}" == "N" ]]
         do
           echo ""
           for load in $(seq 10 -1 0); do
@@ -132,10 +132,10 @@ do
           echo ""
           sudo tail $XVPNLOGFILE
           echo ""
-          read -p "Has it started? [ y = yes, n = no, f = failed ] " iStart
+          read -p "Has it started? [Y/N/F - f is failed] " iStart
         done
   fi
-  if [[ "${iStart,,}" == "y" ]];
+  if [[ "${iStart,,}" == "Y" ]];
      then
        # Echo current external IP before exiting loop
        echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
@@ -146,7 +146,7 @@ do
 
 done
 
-if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]];
+if [[ "${iStart,,}" == "Y" && $VPNSERVICE == "q" ]];
   then
      echo ""
      echo "... Testing VPN"
