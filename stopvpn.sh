@@ -126,9 +126,11 @@ if [[ "${do_rename,,}" == "y" ]]; then
         cleanname=$(echo "$filename" | \
           sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
           sed -E 's/\[[^]]*\]//g; s/\([^)]*\)//g' | \
-          sed -E 's/(1080p|720p|480p|2160p|WEB[-_. ]?DL|BluRay|DDP[0-9.]+|H[ ._-]?264|x264|AAC|FLUX|AMZN|DD5[.1]?|DDP5[.1]?|DDP|EVO|YIFY|RARBG|EZTVx.to|WEB|DL|DDP|H|264)[^ ]*//Ig' | \
+          sed -E 's/(1080p|720p|480p|2160p|WEB[-_. ]?DL|BluRay|DDP[0-9.]+|H[ ._-]?264|x264|AAC|FLUX|AMZN|DD5[.1]?|DDP5[.1]?|DDP|EVO|YIFY|RARBG|EZTVx.to|WEB|DL|DDP|H|264)[ ._-]*//Ig' | \
           sed -E 's/[._]+/ /g' | \
           sed -E 's/ +$//; s/^ +//')
+        # Collapse multiple spaces to one, then convert to dot-separated, then remove duplicate dots
+        newname="$(echo "$cleanname" | tr -s ' ' | sed -E 's/ /./g; s/\.+/./g')".${ext,,}
         ext="${file##*.}"
         newname="$(echo "$cleanname" | tr ' ' '.')".${ext,,}
 
