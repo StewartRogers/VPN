@@ -103,50 +103,60 @@ fi
 # Start VPN service
 while [ $VPNSERVICE != "q" ]
 do
-  if [ $VPNSERVICE == "1" ];
-    then
-        echo ""
-        echo "... Getting organized"
-        cd $XVPNHOME
-        sudo rm -rf $XVPNLOGFILE
-        # Echo current external IP after starting VPN
-        echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
-        echo "... Starting VPN"
-        echo "... CONFIGFILE: " $XCONFIGFILE
-        sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --verb 3
-        sleep 7
-        echo "... Viewing log"
-        echo ""
-        sudo tail $XVPNLOGFILE
-        echo ""
-        read -p "Has it started? [Y/N/F - f is failed] " iStart
-        while [[ "${iStart,,}" == "N" ]]
-        do
+  if [ "$VPNSERVICE" == "1" ]; then
+    echo ""
+    echo "... Getting organized"
+    cd $XVPNHOME
+    sudo rm -rf $XVPNLOGFILE
+    # Echo current external IP after starting VPN
+    echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
+    echo "... Starting VPN"
+    echo "... CONFIGFILE: " $XCONFIGFILE
+    sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --verb 3
+    sleep 7
+    echo "... Viewing log"
+    echo ""
+    sudo tail $XVPNLOGFILE
+    echo ""
+    while true; do
+      read -p "Has it started? [Y/N/F - f is failed] " iStart
+      case "${iStart,,}" in
+        y)
+          # Echo current external IP before exiting loop
+          echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
+          VPNSERVICE="q"
+          break
+          ;;
+        f)
+          echo "VPN startup failed"
+          VPNSERVICE="q"
+          break
+          ;;
+        n)
           echo ""
           for load in $(seq 10 -1 0); do
-             echo -ne "... Check again in $load seconds\r"
-             sleep 1
+            echo -ne "... Check again in $load seconds\r"
+            sleep 1
           done
           echo ""
           echo "... Viewing log"
           echo ""
           sudo tail $XVPNLOGFILE
           echo ""
-          read -p "Has it started? [Y/N/F - f is failed] " iStart
-        done
-  fi
-  if [[ "${iStart,,}" == "Y" ]];
-     then
-       # Echo current external IP before exiting loop
-       echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
-       VPNSERVICE="q"
-     else
-       read -p "Type 'q' to quit: " VPNSERVICE
+          ;;
+        *)
+          read -p "Type 'q' to quit: " VPNSERVICE
+          if [ "$VPNSERVICE" == "q" ]; then
+            break
+          fi
+          ;;
+      esac
+    done
   fi
 
 done
 
-if [[ "${iStart,,}" == "Y" && $VPNSERVICE == "q" ]];
+if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]];
   then
      echo ""
      echo "... Testing VPN"
