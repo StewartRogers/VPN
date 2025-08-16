@@ -66,24 +66,30 @@ fi
 #
 read -p "Do you want to download a new OVPN file? (Y/N) " GETOVPN
 
-if [[ "${GETOVPN,,}" == "y" ]]
-then
-  rm *.ovpn
+if [[ "${GETOVPN,,}" == "y" ]]; then
+  rm -f *.ovpn
   read -p "Paste in a URL to download OVPN file: " OVPNURL
-  curl -s -O $OVPNURL
-fi
-
-# Check if any .ovpn file exists
-if ! ls *.ovpn 1> /dev/null 2>&1; then
-  echo -e "Error: No .ovpn file found. Aborting script.\n\n"
-  exit 1
-fi
-
-for XFILE in `eval ls *.ovpn`
-  do
-    sudo cp $XFILE $XVPNCHOME
+  curl -s -O "$OVPNURL"
+  # Check if any .ovpn file exists after download
+  if ! ls *.ovpn 1> /dev/null 2>&1; then
+    echo -e "Error: OVPN download failed or no .ovpn file found. Aborting script.\n\n"
+    exit 1
+  fi
+  for XFILE in *.ovpn; do
+    sudo cp "$XFILE" "$XVPNCHOME"
   done
-XCONFIGFILE=$XVPNCHOME$XFILE
+  XCONFIGFILE="$XVPNCHOME$XFILE"
+else
+  # If not downloading, check if any .ovpn file exists in current dir
+  if ! ls *.ovpn 1> /dev/null 2>&1; then
+    echo -e "Error: No .ovpn file found. Aborting script.\n\n"
+    exit 1
+  fi
+  for XFILE in *.ovpn; do
+    sudo cp "$XFILE" "$XVPNCHOME"
+  done
+  XCONFIGFILE="$XVPNCHOME$XFILE"
+fi
 
 #
 # Start VPN service
