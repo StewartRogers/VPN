@@ -36,6 +36,7 @@ echo ""
 #
 # Installing required software
 #
+# Software check block
 while true; do
   read -p "Do you want to check if all software is installed? [y/n]: " SWCHECK
   case "${SWCHECK,,}" in
@@ -43,7 +44,6 @@ while true; do
     *) echo "Please enter 'y' or 'n'.";;
   esac
 done
-
 if [[ "${SWCHECK,,}" == "y" ]]; then
   echo "Installing required software..."
   echo "This install qbittorrent-nox and if you have never run that before"
@@ -66,6 +66,8 @@ if [[ "${SWCHECK,,}" == "y" ]]; then
   pip3 install --user --upgrade requests
 fi
 
+# UFW and OVPN blocks (outside software check)
+
 # ...rest of script continues here, outside the software check loop...
 
 #
@@ -74,6 +76,7 @@ fi
 while true; do
   read -p "Do you want to download a new OVPN file? [y/n]: " GETOVPN
   # Ask user if they want to make a UFW call for a specific port
+  # UFW block
   while true; do
     read -p "Do you want to allow a port through UFW? [y/n]: " UFWCONFIRM
     case "${UFWCONFIRM,,}" in
@@ -91,7 +94,9 @@ while true; do
       echo ""
   fi
 
-  # Get OVPN File
+  # 
+  # OVPN block
+  #
   while true; do
     read -p "Do you want to download a new OVPN file? [y/n]: " GETOVPN
     case "${GETOVPN,,}" in
@@ -123,8 +128,9 @@ while true; do
     done
     XCONFIGFILE="$XVPNCHOME$XFILE"
   fi
-while [ $VPNSERVICE != "q" ]
-do
+
+# OpenVPN block
+while [ $VPNSERVICE != "q" ]; do
   if [ "$VPNSERVICE" == "1" ]; then
     echo ""
     echo "... Getting organized"
@@ -175,31 +181,29 @@ do
       esac
     done
   fi
-
 done
 
-if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]];
-  then
-     echo ""
-     echo "... Testing VPN"
-     active=$(python3 $XPYFILE $YHOMEIP)
-     echo "... VPN test result:" $active
-     if [ "$active" == "secure" ];
-       then echo "... Starting Torrent Server"
-            nohup qbittorrent-nox > "$XHOME/qbit.log" 2>&1 &
-            sleep 2
-       else echo ""
-            echo "Torrent Server not started."
-            echo ""
-     fi
+if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]]; then
+  echo ""
+  echo "... Testing VPN"
+  active=$(python3 $XPYFILE $YHOMEIP)
+  echo "... VPN test result:" $active
+  if [ "$active" == "secure" ]; then
+    echo "... Starting Torrent Server"
+    nohup qbittorrent-nox > "$XHOME/qbit.log" 2>&1 &
+    sleep 2
+  else
+    echo ""
+    echo "Torrent Server not started."
+    echo ""
+  fi
 fi
 
-if [ "$active" == "secure" ];
-  then
-    YCHECKFILE=$XHOME"checkip.sh "$YHOMEIP
-    echo "... Checking IP address"
-    cd $XHOME
-    ./checkip.sh $YHOMEIP &
-    echo "... See progress: tail -f ${YLOGFILE}"
-    echo ""
+if [ "$active" == "secure" ]; then
+  YCHECKFILE=$XHOME"checkip.sh "$YHOMEIP
+  echo "... Checking IP address"
+  cd $XHOME
+  ./checkip.sh $YHOMEIP &
+  echo "... See progress: tail -f ${YLOGFILE}"
+  echo ""
 fi
