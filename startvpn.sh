@@ -43,6 +43,7 @@ while true; do
     *) echo "Please enter 'y' or 'n'.";;
   esac
 done
+
 if [[ "${SWCHECK,,}" == "y" ]]; then
   echo "Installing required software..."
   echo "This install qbittorrent-nox and if you have never run that before"
@@ -64,6 +65,8 @@ if [[ "${SWCHECK,,}" == "y" ]]; then
   # Ensure required Python packages are installed
   pip3 install --user --upgrade requests
 fi
+
+# ...rest of script continues here, outside the software check loop...
 
 #
 # Get OVPN File
