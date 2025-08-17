@@ -1,12 +1,16 @@
 #!/bin/bash
+#
 # Copyright (c) 2022-2025 Stewart Rogers
 # SPDX-License-Identifier: MIT
 #
-# Original Author: Stewart Rogers
 # This licensed under the MIT License
 # A short and simple permissive license with conditions only requiring
 # preservation of copyright and license notices. Licensed works, modifications,
 # and larger works may be distributed under different terms and without source code.
+#
+# Usage: ./startvpn.sh
+# Author: Stewart Rogers
+# Date: Aug 2025
 #
 
 clear
@@ -27,16 +31,17 @@ XSUCCESS="TRUE"
 VPNSERVICE=1
 
 #
-# Get current external IP address for future test
+# Retrieve and display the current external IP address for later VPN verification
 #
 YHOMEIP=$(curl -s https://ipinfo.io/ip)
 echo "External IP: "$YHOMEIP
 echo ""
 
 #
-# Installing required software
+# Check and install required software and Python packages
+# Prompts user to optionally install OpenVPN, qbittorrent-nox, 
+# screen, ufw, python3, pip3, and Python dependencies.
 #
-# Software check block
 while true; do
   read -p "Do you want to check if all software is installed? [y/n]: " SWCHECK
   case "${SWCHECK,,}" in
@@ -66,13 +71,11 @@ if [[ "${SWCHECK,,}" == "y" ]]; then
   pip3 install --user --upgrade requests
 fi
 
-# UFW and OVPN blocks (outside software check)
-# ...rest of script continues here, outside the software check loop...
-
 #
-# Get OVPN File
+# Optional: Configure UFW firewall rules for VPN traffic
+# Prompts user to allow a specific port and protocol through 
+# UFW before starting VPN
 #
-# UFW block
 while true; do
   read -p "Do you want to allow a port through UFW? [y/n]: " UFWCONFIRM
   case "${UFWCONFIRM,,}" in
@@ -90,7 +93,11 @@ if [[ "${UFWCONFIRM,,}" == "y" ]]; then
     echo ""
 fi
 
-# OVPN block
+#
+# OVPN Configuration: Download or select VPN config file
+# Prompts user to download a new .ovpn file or use an existing one,
+# then copies it to the OpenVPN client directory for use.
+#
 while true; do
   read -p "Do you want to download a new OVPN file? [y/n]: " GETOVPN
   case "${GETOVPN,,}" in
@@ -133,7 +140,11 @@ else
   XCONFIGFILE="$XVPNCHOME$XFILE"
 fi
 
-# OpenVPN block
+#
+# Start and monitor OpenVPN service
+# Uses the selected config file, starts OpenVPN in daemon mode,
+# and monitors log output and connection status interactively.
+#
 while [ $VPNSERVICE != "q" ]; do
   if [ "$VPNSERVICE" == "1" ]; then
     echo ""
@@ -187,11 +198,16 @@ while [ $VPNSERVICE != "q" ]; do
   fi
 done
 
+#
+# Test VPN connection and start torrent server if secure
+#
 if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]]; then
   echo ""
   echo "... Testing VPN"
+  # Run Python script to verify VPN is active and IP is changed
   active=$(python3 $XPYFILE $YHOMEIP)
   echo "... VPN test result:" $active
+  # If VPN is secure, start torrent server
   if [ "$active" == "secure" ]; then
     echo "... Starting Torrent Server"
     nohup qbittorrent-nox > "$XHOME/qbit.log" 2>&1 &
@@ -203,6 +219,9 @@ if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]]; then
   fi
 fi
 
+#
+# Run checkip script to monitor external IP address if VPN is secure
+#
 if [ "$active" == "secure" ]; then
   YCHECKFILE=$XHOME"checkip.sh "$YHOMEIP
   echo "... Checking IP address"
