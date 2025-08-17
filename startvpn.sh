@@ -102,8 +102,10 @@ if [[ "${GETOVPN,,}" == "y" ]]; then
   rm -f *.ovpn
   read -p "Paste in a URL to download OVPN file: " OVPNURL
   echo "Downloading OVPN file from: $OVPNURL"
-  curl -s -O "$OVPNURL"
+  curl -s -L -O "$OVPNURL"
   CURL_EXIT=$?
+  echo "Directory contents after download:"
+  ls -l
   if [ $CURL_EXIT -ne 0 ]; then
     echo -e "Error: curl failed to download file. Aborting script.\n\n"
     exit 1
@@ -111,7 +113,7 @@ if [[ "${GETOVPN,,}" == "y" ]]; then
   # Check if any .ovpn file exists after download
   OVPN_COUNT=$(ls *.ovpn 2>/dev/null | wc -l)
   if [ "$OVPN_COUNT" -eq 0 ]; then
-    echo -e "Error: No .ovpn file found after download. Check the URL or file extension. Aborting script.\n\n"
+    echo -e "Error: No .ovpn file found after download. The file may not be a valid .ovpn file or the URL may not point directly to a .ovpn file. Aborting script.\n\n"
     exit 1
   fi
   echo "Found $OVPN_COUNT .ovpn file(s) after download."
