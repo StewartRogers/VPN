@@ -101,13 +101,22 @@ done
 if [[ "${GETOVPN,,}" == "y" ]]; then
   rm -f *.ovpn
   read -p "Paste in a URL to download OVPN file: " OVPNURL
+  echo "Downloading OVPN file from: $OVPNURL"
   curl -s -O "$OVPNURL"
-  # Check if any .ovpn file exists after download
-  if ! ls *.ovpn 1> /dev/null 2>&1; then
-    echo -e "Error: OVPN download failed or no .ovpn file found. Aborting script.\n\n"
+  CURL_EXIT=$?
+  if [ $CURL_EXIT -ne 0 ]; then
+    echo -e "Error: curl failed to download file. Aborting script.\n\n"
     exit 1
   fi
+  # Check if any .ovpn file exists after download
+  OVPN_COUNT=$(ls *.ovpn 2>/dev/null | wc -l)
+  if [ "$OVPN_COUNT" -eq 0 ]; then
+    echo -e "Error: No .ovpn file found after download. Check the URL or file extension. Aborting script.\n\n"
+    exit 1
+  fi
+  echo "Found $OVPN_COUNT .ovpn file(s) after download."
   for XFILE in *.ovpn; do
+    echo "Copying $XFILE to $XVPNCHOME"
     sudo cp "$XFILE" "$XVPNCHOME"
   done
   XCONFIGFILE="$XVPNCHOME$XFILE"
