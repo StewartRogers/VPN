@@ -10,7 +10,7 @@
 #
 # Usage: ./startvpn.sh
 # Author: Stewart Rogers
-# Date: Aug 2025
+# Date: August 2025
 #
 
 clear
