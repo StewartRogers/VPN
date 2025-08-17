@@ -67,67 +67,61 @@ if [[ "${SWCHECK,,}" == "y" ]]; then
 fi
 
 # UFW and OVPN blocks (outside software check)
-
 # ...rest of script continues here, outside the software check loop...
 
 #
 # Get OVPN File
 #
+# UFW block
+while true; do
+  read -p "Do you want to allow a port through UFW? [y/n]: " UFWCONFIRM
+  case "${UFWCONFIRM,,}" in
+    y|n) break;;
+    *) echo "Please enter 'y' or 'n'.";;
+  esac
+done
+if [[ "${UFWCONFIRM,,}" == "y" ]]; then
+    read -p "Enter the port number you want to allow: " UFWPORT
+    read -p "Enter the protocol (tcp/udp): " UFWPROTO
+    echo ""
+    echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
+    sudo ufw allow $UFWPORT/$UFWPROTO > /dev/null
+    echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
+    echo ""
+fi
+
+# OVPN block
 while true; do
   read -p "Do you want to download a new OVPN file? [y/n]: " GETOVPN
-  # Ask user if they want to make a UFW call for a specific port
-  # UFW block
-  while true; do
-    read -p "Do you want to allow a port through UFW? [y/n]: " UFWCONFIRM
-    case "${UFWCONFIRM,,}" in
-      y|n) break;;
-      *) echo "Please enter 'y' or 'n'.";;
-    esac
-  done
-  if [[ "${UFWCONFIRM,,}" == "y" ]]; then
-      read -p "Enter the port number you want to allow: " UFWPORT
-      read -p "Enter the protocol (tcp/udp): " UFWPROTO
-      echo ""
-      echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
-      sudo ufw allow $UFWPORT/$UFWPROTO > /dev/null
-      echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
-      echo ""
+  case "${GETOVPN,,}" in
+    y|n) break;;
+    *) echo "Please enter 'y' or 'n'.";;
+  esac
+done
+if [[ "${GETOVPN,,}" == "y" ]]; then
+  rm -f *.ovpn
+  read -p "Paste in a URL to download OVPN file: " OVPNURL
+  curl -s -O "$OVPNURL"
+  # Check if any .ovpn file exists after download
+  if ! ls *.ovpn 1> /dev/null 2>&1; then
+    echo -e "Error: OVPN download failed or no .ovpn file found. Aborting script.\n\n"
+    exit 1
   fi
-
-  # 
-  # OVPN block
-  #
-  while true; do
-    read -p "Do you want to download a new OVPN file? [y/n]: " GETOVPN
-    case "${GETOVPN,,}" in
-      y|n) break;;
-      *) echo "Please enter 'y' or 'n'.";;
-    esac
+  for XFILE in *.ovpn; do
+    sudo cp "$XFILE" "$XVPNCHOME"
   done
-  if [[ "${GETOVPN,,}" == "y" ]]; then
-    rm -f *.ovpn
-    read -p "Paste in a URL to download OVPN file: " OVPNURL
-    curl -s -O "$OVPNURL"
-    # Check if any .ovpn file exists after download
-    if ! ls *.ovpn 1> /dev/null 2>&1; then
-      echo -e "Error: OVPN download failed or no .ovpn file found. Aborting script.\n\n"
-      exit 1
-    fi
-    for XFILE in *.ovpn; do
-      sudo cp "$XFILE" "$XVPNCHOME"
-    done
-    XCONFIGFILE="$XVPNCHOME$XFILE"
-  else
-    # If not downloading, check if any .ovpn file exists in current dir
-    if ! ls *.ovpn 1> /dev/null 2>&1; then
-      echo -e "Error: No .ovpn file found. Aborting script.\n\n"
-      exit 1
-    fi
-    for XFILE in *.ovpn; do
-      sudo cp "$XFILE" "$XVPNCHOME"
-    done
-    XCONFIGFILE="$XVPNCHOME$XFILE"
+  XCONFIGFILE="$XVPNCHOME$XFILE"
+else
+  # If not downloading, check if any .ovpn file exists in current dir
+  if ! ls *.ovpn 1> /dev/null 2>&1; then
+    echo -e "Error: No .ovpn file found. Aborting script.\n\n"
+    exit 1
   fi
+  for XFILE in *.ovpn; do
+    sudo cp "$XFILE" "$XVPNCHOME"
+  done
+  XCONFIGFILE="$XVPNCHOME$XFILE"
+fi
 
 # OpenVPN block
 while [ $VPNSERVICE != "q" ]; do
