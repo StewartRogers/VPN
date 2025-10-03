@@ -106,7 +106,7 @@ fi
 #
 read -rp "Do you want to rename, move and convert (if necessary) video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
-    read -rp "Enter the full path to the source directory: " SOURCE_DIR
+    read -er -p "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
     TEMP_DEST="$SOURCE_DIR"
 
