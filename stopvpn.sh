@@ -138,46 +138,68 @@ if [[ "${do_rename,,}" == "y" ]]; then
 
     cd "$SOURCE_DIR" || { echo "Failed to access $SOURCE_DIR"; exit 1; }
 
-    # Process subdirectories if requested
-    read -rp "Do you want to move files from subdirectories to the main directory? [y/N]: " process_subdirs
-    if [[ "$process_subdirs" =~ ^[Yy]$ ]]; then
-        # Find and display files that would be moved
-        echo -e "\nFiles that will be moved from subdirectories:"
-        subdir_files=$(find . -mindepth 2 -type f \( -iname "*.mp4" -o -iname "*.mkv" \) -print)
-        
-        if [[ -z "$subdir_files" ]]; then
-            echo "No files found in subdirectories."
-        else
-            echo "$subdir_files"
-            read -rp "Proceed with moving these files to the main directory? [y/N]: " confirm_submove
-            
-            if [[ "$confirm_submove" =~ ^[Yy]$ ]]; then
-                # Move files with error checking
-                if find . -mindepth 2 -type f \( -iname "*.mp4" -o -iname "*.mkv" \) -exec mv -n "{}" . \; ; then
-                    echo "Files moved successfully from subdirectories."
-                else
-                    echo "Error: Some files could not be moved."
-                    exit 1
-                fi
-            else
-                echo "Skipped moving files from subdirectories."
-            fi
-        fi
+    # Get all video files (including those in subdirectories)
+    readarray -t files < <(find . -type f \( -iname "*.mp4" -o -iname "*.mkv" \))
+    total_files=${#files[@]}
+
+    if [[ $total_files -eq 0 ]]; then
+        echo "No video files found."
+        exit 0
     fi
 
-    # Get list of files to process
+    # Sort files by directory depth (subdirectories first)
+    IFS=$'\n' files=($(printf "%s\n" "${files[@]}" | sort))
     files=(*.mp4 *.mkv)
     total_files=${#files[@]}
     current_file=1
 
-    # Process files in the current directory one at a time
+    # Process each file one at a time
     for file in "${files[@]}"; do
         [ -e "$file" ] || continue
 
+        # Get relative path for display
+        rel_path="${file#./}"
+        
         echo -e "\n----------------------------------------"
         echo "File $current_file of $total_files"
         echo "----------------------------------------"
-        echo "Current file: $file"
+        echo "Current file: $rel_path"
+
+        # If file is in subdirectory, ask about moving it to main directory first
+        if [[ "$file" =~ / ]]; then
+            dir_path=$(dirname "$file")
+            echo "This file is in subdirectory: $dir_path"
+            read -rp "Move this file to main directory before processing? [y/N/q=quit]: " move_to_main
+            
+            if [[ "${move_to_main,,}" == "q" ]]; then
+                echo "Exiting file processing..."
+                break
+            fi
+            
+            if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
+                base_name=$(basename "$file")
+                if [[ -e "./$base_name" ]]; then
+                    echo "Error: File with same name already exists in main directory"
+                    read -rp "Skip this file? [Y/n]: " skip_file
+                    if [[ ! "$skip_file" =~ ^[Nn]$ ]]; then
+                        ((current_file++))
+                        continue
+                    fi
+                else
+                    echo -e "\nReady to move:"
+                    echo "  From: $file"
+                    echo "  To: ./$base_name"
+                    read -rp "Confirm move to main directory? [y/N]: " confirm_main_move
+                    if [[ "$confirm_main_move" =~ ^[Yy]$ ]]; then
+                        mv "$file" "./"
+                        file="./$base_name"
+                        echo "Moved to main directory"
+                    else
+                        echo "Keeping file in subdirectory"
+                    fi
+                fi
+            fi
+        fi
 
         # Ask if user wants to rename this file
         read -rp "Do you want to rename this file? [y/N/q=quit]: " rename_file
