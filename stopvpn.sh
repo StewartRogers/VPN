@@ -165,9 +165,18 @@ if [[ "${do_rename,,}" == "y" ]]; then
         fi
     fi
 
-    # Process files in the current directory
-    for file in *.mp4 *.mkv; do
+    # Get list of files to process
+    files=(*.mp4 *.mkv)
+    total_files=${#files[@]}
+    current_file=1
+
+    # Process files in the current directory one at a time
+    for file in "${files[@]}"; do
         [ -e "$file" ] || continue
+
+        echo -e "\n----------------------------------------"
+        echo "Processing file $current_file of $total_files"
+        echo "----------------------------------------"
         # Extract filename and extension
         filename=$(basename "$file")
         ext="${file##*.}"
@@ -191,11 +200,20 @@ if [[ "${do_rename,,}" == "y" ]]; then
         # 4. Add lowercase extension
         newname="$(echo "$cleanname" | tr -s ' ' | sed -E 's/ /./g; s/\.+/./g')".${ext,,}
 
-        echo ""
-        echo "Rename file:"
-        echo "  From: $file"
-        echo "  To:   $newname"
-        read -rp "Proceed with rename? [y/N]: " confirm_rename
+        echo -e "\nCurrent file:"
+        echo "  Current name: $file"
+        echo "  Suggested name: $newname"
+        
+        # Ask to process this file or skip to next
+        read -rp "Process this file? [y/N/q=quit]: " process_file
+        
+        if [[ "${process_file,,}" == "q" ]]; then
+            echo "Exiting file processing..."
+            break
+        fi
+        
+        if [[ "$process_file" =~ ^[Yy]$ ]]; then
+            read -rp "Proceed with rename? [y/N]: " confirm_rename
 
         if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
             if [[ -e "$newname" ]]; then
@@ -240,6 +258,22 @@ if [[ "${do_rename,,}" == "y" ]]; then
         else
             echo "  Skipping rename and move operations."
             moved_file="$file"
+        fi
+        
+        # Increment file counter
+        ((current_file++))
+        
+        # Ask to continue to next file if not the last one
+        if [[ $current_file -le $total_files ]]; then
+            echo -e "\n----------------------------------------"
+            read -rp "Continue to next file? [Y/n/q=quit]: " continue_processing
+            if [[ "${continue_processing,,}" == "q" ]]; then
+                echo "Exiting file processing..."
+                break
+            elif [[ "${continue_processing,,}" == "n" ]]; then
+                echo "Stopping file processing..."
+                break
+            fi
         fi
     done
 
