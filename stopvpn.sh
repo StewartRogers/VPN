@@ -215,7 +215,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
         if [[ "$process_file" =~ ^[Yy]$ ]]; then
             read -rp "Proceed with rename? [y/N]: " confirm_rename
 
-        if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
+            if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
             if [[ -e "$newname" ]]; then
                 echo "  File already exists: $newname"
                 read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_overwrite
@@ -258,6 +258,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
         else
             echo "  Skipping rename and move operations."
             moved_file="$file"
+        fi
         fi
         
         # Increment file counter
