@@ -166,40 +166,12 @@ if [[ "${do_rename,,}" == "y" ]]; then
         echo "----------------------------------------"
         echo "Current file: $rel_path"
 
-        # If file is in subdirectory, ask about moving it to main directory first
+        # Note if file is in subdirectory for later
+        in_subdir=false
         if [[ "$file" =~ / ]]; then
+            in_subdir=true
             dir_path=$(dirname "$file")
-            echo "This file is in subdirectory: $dir_path"
-            read -rp "Move this file to main directory before processing? [y/N/q=quit]: " move_to_main
-            
-            if [[ "${move_to_main,,}" == "q" ]]; then
-                echo "Exiting file processing..."
-                break
-            fi
-            
-            if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
-                base_name=$(basename "$file")
-                if [[ -e "./$base_name" ]]; then
-                    echo "Error: File with same name already exists in main directory"
-                    read -rp "Skip this file? [Y/n]: " skip_file
-                    if [[ ! "$skip_file" =~ ^[Nn]$ ]]; then
-                        ((current_file++))
-                        continue
-                    fi
-                else
-                    echo -e "\nReady to move:"
-                    echo "  From: $file"
-                    echo "  To: ./$base_name"
-                    read -rp "Confirm move to main directory? [y/N]: " confirm_main_move
-                    if [[ "$confirm_main_move" =~ ^[Yy]$ ]]; then
-                        mv "$file" "./"
-                        file="./$base_name"
-                        echo "Moved to main directory"
-                    else
-                        echo "Keeping file in subdirectory"
-                    fi
-                fi
-            fi
+            echo "Note: This file is in subdirectory: $dir_path"
         fi
 
         # Ask if user wants to rename this file
@@ -257,22 +229,51 @@ if [[ "${do_rename,,}" == "y" ]]; then
                 mv -n "$file" "$newname"
                 echo "  Renamed successfully."
 
-                # Prompt for moving the renamed file
-                read -rp "Move $newname to destination folder ($TEMP_DEST)? [y/N]: " confirm_move
+                # If file was in subdirectory, ask about moving it to main directory first
+                if [[ "$in_subdir" == "true" ]]; then
+                    read -rp "Move renamed file to main directory? [y/N/q=quit]: " move_to_main
+                    
+                    if [[ "${move_to_main,,}" == "q" ]]; then
+                        echo "Exiting file processing..."
+                        break
+                    fi
+                    
+                    if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
+                        if [[ -e "./$newname" ]]; then
+                            echo "Error: File with same name already exists in main directory"
+                            read -rp "Keep in subdirectory? [Y/n]: " keep_in_subdir
+                            if [[ "$keep_in_subdir" =~ ^[Nn]$ ]]; then
+                                read -rp "Overwrite file in main directory? [y/N]: " overwrite_main
+                                if [[ "$overwrite_main" =~ ^[Yy]$ ]]; then
+                                    mv -f "$file" "./$newname"
+                                    file="./$newname"
+                                    echo "Moved to main directory (overwritten)"
+                                fi
+                            fi
+                        else
+                            mv "$file" "./$newname"
+                            file="./$newname"
+                            echo "Moved to main directory"
+                        fi
+                    fi
+                fi
+
+                # Ask about moving to destination folder
+                read -rp "Move file to destination folder ($TEMP_DEST)? [y/N]: " confirm_move
                 if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
-                    # Check if file already exists in destination
+                    # Check if file exists in destination
                     if [[ -e "$TEMP_DEST/$newname" ]]; then
                         echo "  Warning: File already exists in destination: $TEMP_DEST/$newname"
                         read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_move_overwrite
                         if [[ "$confirm_move_overwrite" =~ ^[Yy]$ ]]; then
-                            mv -f "$newname" "$TEMP_DEST/"
+                            mv -f "$file" "$TEMP_DEST/"
                             echo "  Moved to $TEMP_DEST (overwritten)."
                         else
                             echo "  Skipping move: keeping file in current location."
-                            moved_file="$newname"
+                            moved_file="$file"
                         fi
                     else
-                        mv -n "$newname" "$TEMP_DEST/"
+                        mv -n "$file" "$TEMP_DEST/"
                         echo "  Moved to $TEMP_DEST"
                     fi
                     moved_file="$TEMP_DEST/$newname"
