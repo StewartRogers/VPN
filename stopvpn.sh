@@ -149,9 +149,10 @@ if [[ "${do_rename,,}" == "y" ]]; then
 
     # Sort files by directory depth (subdirectories first)
     IFS=$'\n' files=($(printf "%s\n" "${files[@]}" | sort))
-    files=(*.mp4 *.mkv)
     total_files=${#files[@]}
     current_file=1
+
+    echo -e "\nFound $total_files video files to process."
 
     # Process each file one at a time
     for file in "${files[@]}"; do
