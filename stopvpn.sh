@@ -175,45 +175,48 @@ if [[ "${do_rename,,}" == "y" ]]; then
         [ -e "$file" ] || continue
 
         echo -e "\n----------------------------------------"
-        echo "Processing file $current_file of $total_files"
+        echo "File $current_file of $total_files"
         echo "----------------------------------------"
-        # Extract filename and extension
-        filename=$(basename "$file")
-        ext="${file##*.}"
-        
-        # Clean up filename using multiple sed operations:
-        # 1. Remove file extensions
-        # 2. Remove content in brackets and parentheses
-        # 3. Remove quality tags, release group names, and encoding info
-        # 4. Convert dots and underscores to spaces
-        # 5. Trim leading/trailing spaces
-        cleanname=$(echo "$filename" | \
-          sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
-          sed -E 's/\[[^]]*\]//g; s/\([^)]*\)//g' | \
-          sed -E 's/(1080p|720p|480p|2160p|AMZN|WEB[-_. ]?DL|BluRay|DDP[0-9.]+|H[ ._-]?264|x264|AAC|FLUX|DD5[.1]?|DDP5[.1]?|DDP|EVO|YIFY|RARBG|EZTVx.to|WEB|DL|DDP|H|264)[^ ]*.*$//' | \
-          sed -E 's/[._]+/ /g' | \
-          sed -E 's/ +$//; s/^ +//')
-        # Format the cleaned filename:
-        # 1. Collapse multiple spaces into single space
-        # 2. Replace spaces with dots
-        # 3. Remove duplicate dots
-        # 4. Add lowercase extension
-        newname="$(echo "$cleanname" | tr -s ' ' | sed -E 's/ /./g; s/\.+/./g')".${ext,,}
+        echo "Current file: $file"
 
-        echo -e "\nCurrent file:"
-        echo "  Current name: $file"
-        echo "  Suggested name: $newname"
+        # Ask if user wants to rename this file
+        read -rp "Do you want to rename this file? [y/N/q=quit]: " rename_file
         
-        # Ask to process this file or skip to next
-        read -rp "Process this file? [y/N/q=quit]: " process_file
-        
-        if [[ "${process_file,,}" == "q" ]]; then
+        # Check for quit command
+        if [[ "${rename_file,,}" == "q" ]]; then
             echo "Exiting file processing..."
             break
         fi
         
-        if [[ "$process_file" =~ ^[Yy]$ ]]; then
-            read -rp "Proceed with rename? [y/N]: " confirm_rename
+        # Process rename if requested
+        if [[ "$rename_file" =~ ^[Yy]$ ]]; then
+            # Extract filename and extension
+            filename=$(basename "$file")
+            ext="${file##*.}"
+            
+            # Clean up filename using multiple sed operations:
+            # 1. Remove file extensions
+            # 2. Remove content in brackets and parentheses
+            # 3. Remove quality tags, release group names, and encoding info
+            # 4. Convert dots and underscores to spaces
+            # 5. Trim leading/trailing spaces
+            cleanname=$(echo "$filename" | \
+              sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
+              sed -E 's/\[[^]]*\]//g; s/\([^)]*\)//g' | \
+              sed -E 's/(1080p|720p|480p|2160p|AMZN|WEB[-_. ]?DL|BluRay|DDP[0-9.]+|H[ ._-]?264|x264|AAC|FLUX|DD5[.1]?|DDP5[.1]?|DDP|EVO|YIFY|RARBG|EZTVx.to|WEB|DL|DDP|H|264)[^ ]*.*$//' | \
+              sed -E 's/[._]+/ /g' | \
+              sed -E 's/ +$//; s/^ +//')
+            
+            # Format the cleaned filename
+            newname="$(echo "$cleanname" | tr -s ' ' | sed -E 's/ /./g; s/\.+/./g')".${ext,,}
+
+            # Show the proposed new name
+            echo -e "\nProposed rename:"
+            echo "  From: $file"
+            echo "  To:   $newname"
+
+            # Confirm the rename
+            read -rp "Proceed with this rename? [y/N]: " confirm_rename
 
             if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
             if [[ -e "$newname" ]]; then
@@ -247,18 +250,23 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         fi
                     else
                         mv -n "$newname" "$TEMP_DEST/"
-                        echo "  Moved to $TEMP_DEST."
+                        echo "  Moved to $TEMP_DEST"
                     fi
                     moved_file="$TEMP_DEST/$newname"
                 else
-                    echo "  Left in $SOURCE_DIR."
+                    echo "  Left in $SOURCE_DIR"
                     moved_file="$newname"
                 fi
             fi
         else
-            echo "  Skipping rename and move operations."
-            moved_file="$file"
+            echo "Skipping file move operation"
+            moved_file="$newname"
         fi
+
+        echo -e "\nFile processing completed successfully"
+        else
+            echo "Skipping rename operation"
+            # Don't offer move since we didn't rename
         fi
         
         # Increment file counter
