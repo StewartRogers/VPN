@@ -198,8 +198,11 @@ if [[ "${do_rename,,}" == "y" ]]; then
             cleanname=$(echo "$filename" | \
               sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
               sed -E 's/\[[^]]*\]//g; s/\([^)]*\)//g' | \
-              sed -E 's/(1080p|720p|480p|2160p|AMZN|WEB[-_. ]?DL|BluRay|DDP[0-9.]+|H[ ._-]?264|x264|AAC|FLUX|DD5[.1]?|DDP5[.1]?|DDP|EVO|YIFY|RARBG|EZTVx.to|WEB|DL|DDP|H|264)[^ ]*.*$//' | \
-              sed -E 's/[._]+/ /g' | \
+              sed -E 's/\.1080p\.(.*$)//' | \
+              sed -E 's/\.720p\.(.*$)//' | \
+              sed -E 's/\.480p\.(.*$)//' | \
+              sed -E 's/\.2160p\.(.*$)//' | \
+              sed -E 's/(\.BluRay\.|\.WEB-DL\.|\.WEB\.|\.[Xx]264\.|\.AAC.*|\.AMZN\.|\.DDP.*|\.H264\.|\.FLUX\.|\.YIFY\.|\.RARBG\.|\.EZTVx\.to\.)(.*$)//' | \
               sed -E 's/ +$//; s/^ +//')
             
             # Format the cleaned filename
