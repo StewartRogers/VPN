@@ -97,7 +97,8 @@ fi
 # Prompt user to skip rename and move files section
 read -rp "Do you want to rename and move video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
-    read -rp "Enter the full path to the source directory: " SOURCE_DIR
+    # enable readline so the user can use tab-completion when entering the path
+    read -e -r -p "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
 
     if [[ ! -d "$SOURCE_DIR" ]]; then
