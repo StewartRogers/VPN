@@ -99,56 +99,75 @@ read -rp "Do you want to rename and move video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
     read -rp "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
-    TEMP_DEST="$SOURCE_DIR"
 
     if [[ ! -d "$SOURCE_DIR" ]]; then
         echo "Error: Source directory not found: $SOURCE_DIR"
         exit 1
     fi
 
-    file_count=$(find "$SOURCE_DIR" -mindepth 2 -type f \( -iname "*.mp4" -o -iname "*.mkv" \) | wc -l)
+    # Count all matching files (root + subdirectories)
+    file_count=$(find "$SOURCE_DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" \) | wc -l)
     if [[ "$file_count" -eq 0 ]]; then
-        echo "No .mp4 or .mkv files found in subdirectories of $SOURCE_DIR."
+        echo "No .mp4 or .mkv files found in $SOURCE_DIR."
         echo ""
         exit 0
     fi
 
-    mkdir -p "$TEMP_DEST"
+    # Work from the source directory so we can use relative paths
     cd "$SOURCE_DIR" || { echo "Failed to access $SOURCE_DIR"; exit 1; }
-    find . -mindepth 2 -type f \( -iname "*.mp4" -o -iname "*.mkv" \) -exec mv -n "{}" . \;
 
-    for file in *.mp4 *.mkv; do
-        [ -e "$file" ] || continue
-        filename=$(basename "$file")
+    # Iterate over every matching file (including subdirectories)
+    while IFS= read -r -d '' file; do
+        # file is like ./subdir/movie.mp4 or ./movie.mp4
+        rel=${file#./}
+        [ -n "$rel" ] || rel="$file"
+
+        # Ask whether to process this file
+        echo ""
+        read -rp "Process file '$rel'? [y/N]: " process_file
+        if [[ "${process_file,,}" != "y" ]]; then
+            echo "  Skipping $rel"
+            continue
+        fi
+
+        filename=$(basename "$rel")
+        # Clean the filename (same rules as before)
         cleanname=$(echo "$filename" | sed -E 's/\.[0-9]{3,4}p.*//; s/\[[^]]*\]//g; s/\([^)]*\)//g; s/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | sed -E 's/[._]+/ /g' | sed -E 's/ +$//; s/^ +//')
-        ext="${file##*.}"
+        ext="${filename##*.}"
         newname="$(echo "$cleanname" | tr ' ' '.')".${ext,,}
 
-        echo ""
-        echo "Rename file:"
-        echo "  From: $file"
+        echo "  From: $rel"
         echo "  To:   $newname"
-        read -rp "Proceed with rename? [y/N]: " confirm_rename
+        read -rp "  Confirm rename? [y/N]: " confirm_rename
+        if [[ "${confirm_rename,,}" != "y" ]]; then
+            echo "  Rename skipped for $rel"
+            continue
+        fi
 
-        if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
+        # If the file is in a subdirectory (rel contains a slash), move it to the SOURCE_DIR when renaming
+        if [[ "$rel" == */* ]]; then
+            # Ensure target does not already exist
+            if [[ -e "$newname" ]]; then
+                echo "  Skipping: $newname already exists in target directory."
+                continue
+            fi
+            mv -n -- "$rel" "$newname"
+            echo "  Moved and renamed to $newname"
+        else
+            # File already in root SOURCE_DIR
+            if [[ "$filename" == "$newname" ]]; then
+                echo "  Name unchanged, skipping."
+                continue
+            fi
             if [[ -e "$newname" ]]; then
                 echo "  Skipping: $newname already exists."
-            else
-                mv -n "$file" "$newname"
-                echo "  Renamed successfully."
-
-                read -rp "Move $newname to temporary folder ($TEMP_DEST)? [y/N]: " confirm_move
-                if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
-                    mv -n "$newname" "$TEMP_DEST/"
-                    echo "  Moved to $TEMP_DEST."
-                else
-                    echo "  Left in $SOURCE_DIR."
-                fi
+                continue
             fi
-        else
-            echo "  Skipped."
+            mv -n -- "$rel" "$newname"
+            echo "  Renamed to $newname"
         fi
-    done
+
+    done < <(find . -type f \( -iname "*.mp4" -o -iname "*.mkv" \) -print0)
 
     echo -e "\n\nDone.\n"
 else
