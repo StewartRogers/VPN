@@ -1,6 +1,4 @@
 #!/bin/bash
-# Copyright (c) 2022-2025 Stewart Rogers
-# SPDX-License-Identifier: MIT
 #
 # Original Author: Stewart Rogers
 # This licensed under the MIT License
@@ -14,9 +12,8 @@
 #
 SSERVICE="q"
 
-#
 # Function to stop services
-#
+
 shutdown_services() {
     echo ""
     if [[ "$SSERVICE" == "q" ]]; then
@@ -81,9 +78,7 @@ shutdown_services() {
     screen -S "checkip" -p 0 -X quit > /dev/null
 }
 
-#
-# Main script logic
-#
+ # Main script logic
 if [[ "$1" == "--shutdown-only" ]]; then
     echo "Running shutdown commands only..."
     shutdown_services
@@ -91,9 +86,7 @@ if [[ "$1" == "--shutdown-only" ]]; then
     exit 0
 fi
 
-#
 # Prompt user to shutdown services
-#
 read -rp "Do you want to shutdown services? [y/N]: " do_shutdown
 if [[ "${do_shutdown,,}" == "y" ]]; then
     shutdown_services
@@ -101,41 +94,26 @@ else
     echo -e "\nSkipped shutting down services.\n"
 fi
 
-#############################################################################
-# File Processing Section
-# This section handles the organization and cleanup of video files:
-# 1. Prompts for source directory
-# 2. Processes files from subdirectories (optional)
-# 3. Renames files to a clean format
-# 4. Moves files to a destination folder
-# Each operation requires explicit user confirmation for safety
-#############################################################################
-
-# Initial prompt to run the file processing section
-read -rp "Do you want to rename, move and convert (if necessary) video files? [y/N]: " do_rename
+# Prompt user to skip rename and move files section
+read -rp "Do you want to rename and move video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
-    # Get source directory with tab completion enabled (-e flag)
-    read -er -p "Enter the full path to the source directory: " SOURCE_DIR
-    # Remove trailing slash if present
+    read -rp "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
-    # Set destination to same directory (can be modified for different destination)
-    TEMP_DEST="$SOURCE_DIR"
 
-    # Validate source directory exists
     if [[ ! -d "$SOURCE_DIR" ]]; then
         echo "Error: Source directory not found: $SOURCE_DIR"
         exit 1
     fi
 
-    # Count number of video files (MP4 and MKV) in directory and subdirectories
+    # Count all matching files (root + subdirectories)
     file_count=$(find "$SOURCE_DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" \) | wc -l)
-    # Exit if no video files found
     if [[ "$file_count" -eq 0 ]]; then
-        echo "No .mp4 or .mkv files found in $SOURCE_DIR or its subdirectories."
+        echo "No .mp4 or .mkv files found in $SOURCE_DIR."
         echo ""
         exit 0
     fi
 
+    # Work from the source directory so we can use relative paths
     cd "$SOURCE_DIR" || { echo "Failed to access $SOURCE_DIR"; exit 1; }
 
     # Get all video files (including those in subdirectories)
@@ -242,25 +220,21 @@ if [[ "${do_rename,,}" == "y" ]]; then
                     fi
                     
                     if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
-                        # Get the directory where the renamed file currently is
-                        current_dir=$(dirname "$file")
-                        current_file="$current_dir/$newname"
-                        
-                        # Check if file with same name exists in main directory
-                        if [[ -e "$newname" ]]; then
+                        dir_path=$(dirname "$file")
+                        if [[ -e "./$newname" ]]; then
                             echo "Note: File with same name exists in main directory"
                             read -rp "Overwrite file in main directory? [y/N]: " overwrite_main
                             if [[ "$overwrite_main" =~ ^[Yy]$ ]]; then
-                                mv -f "$current_file" "$newname"
-                                file="$newname"
+                                mv -f "$dir_path/$newname" "./"
+                                file="./$newname"
                                 echo "Moved to main directory (overwritten)"
                             else
-                                file="$current_file"
+                                file="$dir_path/$newname"
                                 echo "Keeping file in subdirectory"
                             fi
                         else
-                            mv "$current_file" "$newname"
-                            file="$newname"
+                            mv "$dir_path/$newname" "./"
+                            file="./$newname"
                             echo "Moved to main directory"
                         fi
                     fi
@@ -326,7 +300,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
     exit 0
 else
     echo -e "\nSkipped renaming and moving files.\n"
-    exit 0
 fi
 
 #
