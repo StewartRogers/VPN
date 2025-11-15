@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright (c) 2022-2025 Stewart Rogers
+# SPDX-License-Identifier: MIT
 #
 # Original Author: Stewart Rogers
 # This licensed under the MIT License
@@ -11,6 +13,7 @@
 # VARIABLES
 #
 SSERVICE="q"
+TEMP_DEST=""  # Will be set to SOURCE_DIR during file processing
 
 # Function to stop services
 
@@ -99,6 +102,8 @@ read -rp "Do you want to rename and move video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
     read -rp "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
+    # Set destination to same directory as source
+    TEMP_DEST="$SOURCE_DIR"
 
     if [[ ! -d "$SOURCE_DIR" ]]; then
         echo "Error: Source directory not found: $SOURCE_DIR"
@@ -171,20 +176,17 @@ if [[ "${do_rename,,}" == "y" ]]; then
             # 1. Remove file extensions
             # 2. Remove content in brackets and parentheses
             # 3. Remove quality tags, release group names, and encoding info
-            # 4. Convert dots and underscores to spaces
-            # 5. Trim leading/trailing spaces
+            # 4. Trim trailing/leading spaces
             cleanname=$(echo "$filename" | \
               sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
-              sed -E 's/\[[^]]*\]//g; s/\([^)]*\)//g' | \
-              sed -E 's/\.1080p\.(.*$)//' | \
-              sed -E 's/\.720p\.(.*$)//' | \
-              sed -E 's/\.480p\.(.*$)//' | \
-              sed -E 's/\.2160p\.(.*$)//' | \
-              sed -E 's/(\.BluRay\.|\.WEB-DL\.|\.WEB\.|\.[Xx]264\.|\.AAC.*|\.AMZN\.|\.DDP.*|\.H264\.|\.FLUX\.|\.YIFY\.|\.RARBG\.|\.EZTVx\.to\.)(.*$)//' | \
-              sed -E 's/ +$//; s/^ +//')
+              sed -E 's/\s+1080p.*$//i; s/\s+720p.*$//i; s/\s+480p.*$//i; s/\s+2160p.*$//i' | \
+              sed -E 's/\s+x264.*$//i; s/\s+x265.*$//i; s/\s+h\.?264.*$//i' | \
+              sed -E 's/\s+(BluRay|WEB-DL|WEB|AMZN|FLUX|YIFY|RARBG).*$//i' | \
+              sed -E 's/\[.*\]//g; s/\(.*\)//g' | \
+              sed -E 's/\s+$//; s/^\s+//')
             
-            # Format the cleaned filename
-            newname="$(echo "$cleanname" | tr -s ' ' | sed -E 's/ /./g; s/\.+/./g')".${ext,,}
+            # Format the cleaned filename by converting spaces to dots
+            newname="$(echo "$cleanname" | sed -E 's/\s+/./g')".${ext,,}
 
             # Show the proposed new name
             echo -e "\nProposed rename:"
@@ -196,85 +198,95 @@ if [[ "${do_rename,,}" == "y" ]]; then
 
             if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
                 if [[ -e "$newname" ]]; then
-                echo "  File already exists: $newname"
-                read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_overwrite
-                if [[ "$confirm_overwrite" =~ ^[Yy]$ ]]; then
-                    mv -f "$file" "$newname"
-                    echo "  File overwritten successfully."
-                else
-                    echo "  Skipping: keeping original file."
-                    moved_file="$file"
-                    continue
-                fi
-            else
-                mv -n "$file" "$newname"
-                echo "  Renamed successfully."
-
-                # If file was in subdirectory, ask about moving it to main directory first
-                if [[ "$in_subdir" == "true" ]]; then
-                    read -rp "Move renamed file to main directory? [y/N/q=quit]: " move_to_main
-                    
-                    if [[ "${move_to_main,,}" == "q" ]]; then
-                        echo "Exiting file processing..."
-                        break
-                    fi
-                    
-                    if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
-                        dir_path=$(dirname "$file")
-                        if [[ -e "./$newname" ]]; then
-                            echo "Note: File with same name exists in main directory"
-                            read -rp "Overwrite file in main directory? [y/N]: " overwrite_main
-                            if [[ "$overwrite_main" =~ ^[Yy]$ ]]; then
-                                mv -f "$dir_path/$newname" "./"
-                                file="./$newname"
-                                echo "Moved to main directory (overwritten)"
-                            else
-                                file="$dir_path/$newname"
-                                echo "Keeping file in subdirectory"
-                            fi
+                    echo "  File already exists: $newname"
+                    read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_overwrite
+                    if [[ "$confirm_overwrite" =~ ^[Yy]$ ]]; then
+                        if mv -f "$file" "$newname" 2>/dev/null; then
+                            echo "  File overwritten successfully."
                         else
-                            mv "$dir_path/$newname" "./"
-                            file="./$newname"
-                            echo "Moved to main directory"
-                        fi
-                    fi
-                fi
-
-                # Ask about moving to destination folder
-                read -rp "Move file to destination folder ($TEMP_DEST)? [y/N]: " confirm_move
-                if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
-                    # Check if file exists in destination
-                    if [[ -e "$TEMP_DEST/$newname" ]]; then
-                        echo "  Warning: File already exists in destination: $TEMP_DEST/$newname"
-                        read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_move_overwrite
-                        if [[ "$confirm_move_overwrite" =~ ^[Yy]$ ]]; then
-                            mv -f "$file" "$TEMP_DEST/"
-                            echo "  Moved to $TEMP_DEST (overwritten)."
-                        else
-                            echo "  Skipping move: keeping file in current location."
-                            moved_file="$file"
+                            echo "  Error: Failed to overwrite file."
+                            continue
                         fi
                     else
-                        mv -n "$file" "$TEMP_DEST/"
-                        echo "  Moved to $TEMP_DEST"
+                        echo "  Skipping: keeping original file."
+                        continue
                     fi
-                    moved_file="$TEMP_DEST/$newname"
                 else
-                    echo "  Left in $SOURCE_DIR"
-                    moved_file="$newname"
+                    if mv -n "$file" "$newname" 2>/dev/null; then
+                        echo "  Renamed successfully."
+                    else
+                        echo "  Error: Failed to rename file."
+                        continue
+                    fi
+
+                    # If file was in subdirectory, ask about moving it to main directory first
+                    if [[ "$in_subdir" == "true" ]]; then
+                        read -rp "Move renamed file to main directory? [y/N/q=quit]: " move_to_main
+                        
+                        if [[ "${move_to_main,,}" == "q" ]]; then
+                            echo "Exiting file processing..."
+                            break
+                        fi
+                        
+                        if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
+                            current_dir=$(dirname "$file")
+                            if [[ -e "$newname" ]]; then
+                                echo "Note: File with same name exists in main directory"
+                                read -rp "Overwrite file in main directory? [y/N]: " overwrite_main
+                                if [[ "$overwrite_main" =~ ^[Yy]$ ]]; then
+                                    if mv -f "$current_dir/$newname" "$newname" 2>/dev/null; then
+                                        file="$newname"
+                                        echo "Moved to main directory (overwritten)"
+                                    else
+                                        echo "Error: Failed to move file to main directory"
+                                    fi
+                                else
+                                    file="$current_dir/$newname"
+                                    echo "Keeping file in subdirectory"
+                                fi
+                            else
+                                if mv "$current_dir/$newname" "$newname" 2>/dev/null; then
+                                    file="$newname"
+                                    echo "Moved to main directory"
+                                else
+                                    echo "Error: Failed to move file to main directory"
+                                fi
+                            fi
+                        fi
+                    fi
+
+                    # Ask about moving to destination folder
+                    read -rp "Move file to destination folder? [y/N]: " confirm_move
+                    if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
+                        # Check if file exists in destination
+                        if [[ -e "$TEMP_DEST/$newname" ]]; then
+                            echo "  Warning: File already exists in destination: $TEMP_DEST/$newname"
+                            read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_move_overwrite
+                            if [[ "$confirm_move_overwrite" =~ ^[Yy]$ ]]; then
+                                if mv -f "$file" "$TEMP_DEST/" 2>/dev/null; then
+                                    echo "  Moved to destination (overwritten)."
+                                else
+                                    echo "  Error: Failed to move file to destination."
+                                fi
+                            else
+                                echo "  Skipping move: keeping file in current location."
+                            fi
+                        else
+                            if mv -n "$file" "$TEMP_DEST/" 2>/dev/null; then
+                                echo "  Moved to destination folder."
+                            else
+                                echo "  Error: Failed to move file to destination."
+                            fi
+                        fi
+                    else
+                        echo "  Keeping file in current location."
+                    fi
                 fi
-                fi
-            else
-                echo "Skipping move operation"
-                moved_file="$newname"
-            fi
         else
-            echo "Skipping rename operation"
-            # Don't offer move since we didn't rename
-            moved_file="$file"
+            echo "Skipping rename and move operations for this file."
         fi
 
-        echo -e "\nFile processing completed successfully"
+        echo -e "\nFile processing completed."
         
         # Increment file counter
         ((current_file++))
@@ -296,7 +308,11 @@ if [[ "${do_rename,,}" == "y" ]]; then
     # Return to original directory
     cd - > /dev/null || { echo "Failed to return to original directory"; exit 1; }
     
-    echo -e "\nDone processing files.\n"
+    echo -e "\n========================================="
+    echo "File processing completed."
+    echo "Processed $current_file of $total_files files."
+    echo "========================================="
+    echo ""
     exit 0
 else
     echo -e "\nSkipped renaming and moving files.\n"
