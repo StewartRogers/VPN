@@ -100,7 +100,7 @@ fi
 # Prompt user to skip rename and move files section
 read -rp "Do you want to rename and move video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
-    read -rp "Enter the full path to the source directory: " SOURCE_DIR
+    read -er -p "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
     # Set destination to same directory as source
     TEMP_DEST="$SOURCE_DIR"
