@@ -242,21 +242,25 @@ if [[ "${do_rename,,}" == "y" ]]; then
                     fi
                     
                     if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
-                        dir_path=$(dirname "$file")
-                        if [[ -e "./$newname" ]]; then
+                        # Get the directory where the renamed file currently is
+                        current_dir=$(dirname "$file")
+                        current_file="$current_dir/$newname"
+                        
+                        # Check if file with same name exists in main directory
+                        if [[ -e "$newname" ]]; then
                             echo "Note: File with same name exists in main directory"
                             read -rp "Overwrite file in main directory? [y/N]: " overwrite_main
                             if [[ "$overwrite_main" =~ ^[Yy]$ ]]; then
-                                mv -f "$dir_path/$newname" "./"
-                                file="./$newname"
+                                mv -f "$current_file" "$newname"
+                                file="$newname"
                                 echo "Moved to main directory (overwritten)"
                             else
-                                file="$dir_path/$newname"
+                                file="$current_file"
                                 echo "Keeping file in subdirectory"
                             fi
                         else
-                            mv "$dir_path/$newname" "./"
-                            file="./$newname"
+                            mv "$current_file" "$newname"
+                            file="$newname"
                             echo "Moved to main directory"
                         fi
                     fi
