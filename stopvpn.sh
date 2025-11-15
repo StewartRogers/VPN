@@ -282,9 +282,9 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         echo "  Keeping file in current location."
                     fi
                 fi
-        else
-            echo "Skipping rename and move operations for this file."
-        fi
+            else
+                echo "Skipping rename and move operations for this file."
+            fi
 
         echo -e "\nFile processing completed."
         
