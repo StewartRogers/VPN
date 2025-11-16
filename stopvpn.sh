@@ -133,7 +133,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
     # Sort files by directory depth (subdirectories first)
     IFS=$'\n' files=($(printf "%s\n" "${files[@]}" | sort))
     total_files=${#files[@]}
-    current_file=1
 
     echo -e "\nFound $total_files video files to process."
 
@@ -141,15 +140,10 @@ if [[ "${do_rename,,}" == "y" ]]; then
     for file in "${files[@]}"; do
         [ -e "$file" ] || continue
 
-        # Track if this file was processed
-        file_processed=false
-
         # Get relative path for display
         rel_path="${file#./}"
         
         echo -e "\n----------------------------------------"
-        echo "File $current_file of $total_files"
-        echo "----------------------------------------"
         echo "Current file: $rel_path"
 
         # Note if file is in subdirectory for later
@@ -214,7 +208,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         if [[ "$confirm_overwrite" =~ ^[Yy]$ ]]; then
                             if mv -f "$file" "$newname" 2>/dev/null; then
                                 echo "  File overwritten successfully."
-                                file_processed=true
                             else
                                 echo "  Error: Failed to overwrite file."
                                 continue
@@ -233,7 +226,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         if mv -n "$file" "$subdir_newname" 2>/dev/null; then
                             echo "  Renamed successfully."
                             file="$subdir_newname"
-                            file_processed=true
                         else
                             echo "  Error: Failed to rename file."
                             continue
@@ -242,7 +234,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         if mv -n "$file" "$newname" 2>/dev/null; then
                             echo "  Renamed successfully."
                             file="$newname"
-                            file_processed=true
                         else
                             echo "  Error: Failed to rename file."
                             continue
@@ -353,22 +344,15 @@ if [[ "${do_rename,,}" == "y" ]]; then
                 echo "Skipping rename and move operations for this file."
             fi
         
-        # Ask to continue to next file if not the last one
-        if [[ $current_file -lt $total_files && "$file_processed" == "true" ]]; then
-            echo -e "\n----------------------------------------"
-            read -rp "Continue to next file? [Y/n/q=quit]: " continue_processing
-            if [[ "${continue_processing,,}" == "q" ]]; then
-                echo "Exiting file processing..."
-                break
-            elif [[ "${continue_processing,,}" == "n" ]]; then
-                echo "Stopping file processing..."
-                break
-            fi
-        fi
-        
-        # Increment file counter only if file was actually processed
-        if [[ "$file_processed" == "true" ]]; then
-            ((current_file++))
+        # Ask to continue to next file
+        echo -e "\n----------------------------------------"
+        read -rp "Continue to next file? [Y/n/q=quit]: " continue_processing
+        if [[ "${continue_processing,,}" == "q" ]]; then
+            echo "Exiting file processing..."
+            break
+        elif [[ "${continue_processing,,}" == "n" ]]; then
+            echo "Stopping file processing..."
+            break
         fi
     done
 
@@ -377,7 +361,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
     
     echo -e "\n========================================="
     echo "File processing completed."
-    echo "Processed $current_file of $total_files files."
     echo "========================================="
     echo ""
     exit 0
