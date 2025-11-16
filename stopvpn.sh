@@ -252,35 +252,37 @@ if [[ "${do_rename,,}" == "y" ]]; then
                             echo "Keeping file in subdirectory"
                         fi
                     else
-                        echo "File is already in main directory."
+                        # File is already in main directory, no need to move
                         file="$newname"
                     fi
 
-                    # Ask about moving to destination folder
-                    read -rp "Move file to destination folder? [y/N]: " confirm_move
-                    if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
-                        # Check if file exists in destination
-                        if [[ -e "$TEMP_DEST/$newname" ]]; then
-                            echo "  Warning: File already exists in destination: $TEMP_DEST/$newname"
-                            read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_move_overwrite
-                            if [[ "$confirm_move_overwrite" =~ ^[Yy]$ ]]; then
-                                if mv -f "$file" "$TEMP_DEST/" 2>/dev/null; then
-                                    echo "  Moved to destination (overwritten)."
+                    # Only ask about moving to destination folder if it's different from source
+                    if [[ "$TEMP_DEST" != "." && "$TEMP_DEST" != "$SOURCE_DIR" ]]; then
+                        read -rp "Move file to destination folder? [y/N]: " confirm_move
+                        if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
+                            # Check if file exists in destination
+                            if [[ -e "$TEMP_DEST/$newname" ]]; then
+                                echo "  Warning: File already exists in destination: $TEMP_DEST/$newname"
+                                read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_move_overwrite
+                                if [[ "$confirm_move_overwrite" =~ ^[Yy]$ ]]; then
+                                    if mv -f "$file" "$TEMP_DEST/" 2>/dev/null; then
+                                        echo "  Moved to destination (overwritten)."
+                                    else
+                                        echo "  Error: Failed to move file to destination."
+                                    fi
+                                else
+                                    echo "  Skipping move: keeping file in current location."
+                                fi
+                            else
+                                if mv -n "$file" "$TEMP_DEST/" 2>/dev/null; then
+                                    echo "  Moved to destination folder."
                                 else
                                     echo "  Error: Failed to move file to destination."
                                 fi
-                            else
-                                echo "  Skipping move: keeping file in current location."
                             fi
                         else
-                            if mv -n "$file" "$TEMP_DEST/" 2>/dev/null; then
-                                echo "  Moved to destination folder."
-                            else
-                                echo "  Error: Failed to move file to destination."
-                            fi
+                            echo "  Keeping file in current location."
                         fi
-                    else
-                        echo "  Keeping file in current location."
                     fi
                 fi
             else
