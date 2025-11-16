@@ -207,7 +207,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         echo "  File with same name and size already exists: $newname"
                         echo "  Skipping rename operation."
                         file="$newname"  # Update file reference to the renamed version
-                        file_processed=true
                     else
                         # Different file with same name - ask to overwrite
                         echo "  File already exists: $newname (different size)"
