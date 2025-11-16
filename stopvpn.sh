@@ -168,11 +168,13 @@ if [[ "${do_rename,,}" == "y" ]]; then
         # 4. Trim trailing/leading spaces
         cleanname=$(echo "$filename" | \
           sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
-          sed -E 's/\s+1080p.*$//i; s/\s+720p.*$//i; s/\s+480p.*$//i; s/\s+2160p.*$//i' | \
-          sed -E 's/\s+x264.*$//i; s/\s+x265.*$//i; s/\s+h\.?264.*$//i' | \
-          sed -E 's/\s+(BluRay|WEB-DL|WEB|AMZN|FLUX|YIFY|RARBG).*$//i' | \
+          sed -E 's/[\s.]+1080p.*$//i; s/[\s.]+720p.*$//i; s/[\s.]+480p.*$//i; s/[\s.]+2160p.*$//i' | \
+          sed -E 's/[\s.]+(HEVC|x264|x265|H\.?264|h\.?264).*$//i' | \
+          sed -E 's/[\s.]+(BluRay|BLU-RAY|WEBRip|WEB-DL|WEB|AMZN|FLUX|YIFY|RARBG|MeGusta).*$//i' | \
+          sed -E 's/[\s.]+(10bit|8bit|AAC|DDP|FLAC).*$//i' | \
           sed -E 's/\[.*\]//g; s/\(.*\)//g' | \
-          sed -E 's/\s+$//; s/^\s+//')
+          sed -E 's/[\s.]+$//; s/^[\s.]+//' | \
+          sed -E 's/\./ /g')
         
         # Format the cleaned filename by converting spaces to dots
         newname="$(echo "$cleanname" | sed -E 's/\s+/./g')".${ext,,}
