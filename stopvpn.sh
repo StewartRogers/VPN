@@ -196,9 +196,6 @@ if [[ "${do_rename,,}" == "y" ]]; then
             break
         fi
 
-        # Mark file as processed (we showed the user the file and got their response)
-        file_processed=true
-
         if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
                 if [[ -e "$newname" ]]; then
                     # Check if it's the same file (same size)
@@ -210,6 +207,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         echo "  File with same name and size already exists: $newname"
                         echo "  Skipping rename operation."
                         file="$newname"  # Update file reference to the renamed version
+                        file_processed=true
                     else
                         # Different file with same name - ask to overwrite
                         echo "  File already exists: $newname (different size)"
@@ -217,6 +215,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         if [[ "$confirm_overwrite" =~ ^[Yy]$ ]]; then
                             if mv -f "$file" "$newname" 2>/dev/null; then
                                 echo "  File overwritten successfully."
+                                file_processed=true
                             else
                                 echo "  Error: Failed to overwrite file."
                                 continue
@@ -235,6 +234,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         if mv -n "$file" "$subdir_newname" 2>/dev/null; then
                             echo "  Renamed successfully."
                             file="$subdir_newname"
+                            file_processed=true
                         else
                             echo "  Error: Failed to rename file."
                             continue
@@ -243,6 +243,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         if mv -n "$file" "$newname" 2>/dev/null; then
                             echo "  Renamed successfully."
                             file="$newname"
+                            file_processed=true
                         else
                             echo "  Error: Failed to rename file."
                             continue
