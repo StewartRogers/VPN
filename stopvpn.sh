@@ -221,13 +221,26 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         fi
                     fi
                 else
-                    if mv -n "$file" "$newname" 2>/dev/null; then
-                        echo "  Renamed successfully."
-                        # Update file reference to the renamed version
-                        file="$newname"
+                    # For subdirectory files, rename within the subdirectory
+                    # For main directory files, rename in place
+                    if [[ "$in_subdir" == "true" ]]; then
+                        current_dir=$(dirname "$file")
+                        subdir_newname="$current_dir/$newname"
+                        if mv -n "$file" "$subdir_newname" 2>/dev/null; then
+                            echo "  Renamed successfully."
+                            file="$subdir_newname"
+                        else
+                            echo "  Error: Failed to rename file."
+                            continue
+                        fi
                     else
-                        echo "  Error: Failed to rename file."
-                        continue
+                        if mv -n "$file" "$newname" 2>/dev/null; then
+                            echo "  Renamed successfully."
+                            file="$newname"
+                        else
+                            echo "  Error: Failed to rename file."
+                            continue
+                        fi
                     fi
 
                     # If file was in subdirectory, ask about moving it to main directory first
@@ -240,35 +253,32 @@ if [[ "${do_rename,,}" == "y" ]]; then
                         fi
                         
                         if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
-                            current_dir=$(dirname "$file")
                             if [[ -e "$newname" ]]; then
                                 # Check if it's the same file (same size)
-                                subdir_size=$(stat -c%s "$current_dir/$newname" 2>/dev/null)
+                                subdir_size=$(stat -c%s "$file" 2>/dev/null)
                                 main_size=$(stat -c%s "$newname" 2>/dev/null)
                                 
                                 if [[ "$subdir_size" == "$main_size" ]]; then
                                     # Same file already exists in main - skip move
                                     echo "Note: File with same name and size already exists in main directory"
                                     echo "Skipping move operation."
-                                    file="$newname"
                                 else
                                     # Different file with same name - ask to overwrite
                                     echo "Note: File with same name exists in main directory (different size)"
                                     read -rp "Overwrite file in main directory? [y/N]: " overwrite_main
                                     if [[ "$overwrite_main" =~ ^[Yy]$ ]]; then
-                                        if mv -f "$current_dir/$newname" "$newname" 2>/dev/null; then
+                                        if mv -f "$file" "$newname" 2>/dev/null; then
                                             file="$newname"
                                             echo "Moved to main directory (overwritten)"
                                         else
                                             echo "Error: Failed to move file to main directory"
                                         fi
                                     else
-                                        file="$current_dir/$newname"
                                         echo "Keeping file in subdirectory"
                                     fi
                                 fi
                             else
-                                if mv "$current_dir/$newname" "$newname" 2>/dev/null; then
+                                if mv "$file" "$newname" 2>/dev/null; then
                                     file="$newname"
                                     echo "Moved to main directory"
                                 else
