@@ -151,7 +151,8 @@ if [[ "${do_rename,,}" == "y" ]]; then
 
         # Note if file is in subdirectory for later
         in_subdir=false
-        if [[ "$file" =~ / ]]; then
+        if [[ "$file" =~ ^\.\/[^/]+\/ ]]; then
+            # File path has at least one subdirectory level after ./
             in_subdir=true
             dir_path=$(dirname "$file")
             echo "Note: This file is in subdirectory: $dir_path"
@@ -258,11 +259,17 @@ if [[ "${do_rename,,}" == "y" ]]; then
 
                     # Only ask about moving to destination folder if it's different from source
                     if [[ "$TEMP_DEST" != "." && "$TEMP_DEST" != "$SOURCE_DIR" ]]; then
-                        read -rp "Move file to destination folder? [y/N]: " confirm_move
-                        if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
-                            # Check if file exists in destination
-                            if [[ -e "$TEMP_DEST/$newname" ]]; then
-                                echo "  Warning: File already exists in destination: $TEMP_DEST/$newname"
+                        # Check if file exists in destination with same name and size
+                        if [[ -e "$TEMP_DEST/$newname" ]]; then
+                            current_size=$(stat -c%s "$file" 2>/dev/null)
+                            dest_size=$(stat -c%s "$TEMP_DEST/$newname" 2>/dev/null)
+                            
+                            if [[ "$current_size" == "$dest_size" ]]; then
+                                # File with same name and size exists - skip silently
+                                echo "  Skipping move: file with same name and size already exists in destination."
+                            else
+                                # File exists but different size - ask about overwrite
+                                echo "  Warning: File already exists in destination with different size: $TEMP_DEST/$newname"
                                 read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_move_overwrite
                                 if [[ "$confirm_move_overwrite" =~ ^[Yy]$ ]]; then
                                     if mv -f "$file" "$TEMP_DEST/" 2>/dev/null; then
@@ -273,15 +280,18 @@ if [[ "${do_rename,,}" == "y" ]]; then
                                 else
                                     echo "  Skipping move: keeping file in current location."
                                 fi
-                            else
+                            fi
+                        else
+                            read -rp "Move file to destination folder? [y/N]: " confirm_move
+                            if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
                                 if mv -n "$file" "$TEMP_DEST/" 2>/dev/null; then
                                     echo "  Moved to destination folder."
                                 else
                                     echo "  Error: Failed to move file to destination."
                                 fi
+                            else
+                                echo "  Keeping file in current location."
                             fi
-                        else
-                            echo "  Keeping file in current location."
                         fi
                     fi
                 fi
