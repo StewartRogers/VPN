@@ -270,6 +270,12 @@ if [[ "${do_rename,,}" == "y" ]]; then
                                         if mv -f "$file" "$newname" 2>/dev/null; then
                                             file="$newname"
                                             echo "Moved to main directory (overwritten)"
+                                            # Remove the subdirectory if the move was successful
+                                            subdir_path=$(dirname "$file")
+                                            if [[ -d "$subdir_path" ]]; then
+                                                rm -rf "$subdir_path" 2>/dev/null
+                                                echo "Removed subdirectory: $subdir_path"
+                                            fi
                                         else
                                             echo "Error: Failed to move file to main directory"
                                         fi
@@ -281,6 +287,12 @@ if [[ "${do_rename,,}" == "y" ]]; then
                                 if mv "$file" "$newname" 2>/dev/null; then
                                     file="$newname"
                                     echo "Moved to main directory"
+                                    # Remove the subdirectory if the move was successful
+                                    subdir_path=$(dirname "$file")
+                                    if [[ -d "$subdir_path" ]]; then
+                                        rm -rf "$subdir_path" 2>/dev/null
+                                        echo "Removed subdirectory: $subdir_path"
+                                    fi
                                 else
                                     echo "Error: Failed to move file to main directory"
                                 fi
@@ -334,10 +346,8 @@ if [[ "${do_rename,,}" == "y" ]]; then
             else
                 echo "Skipping rename and move operations for this file."
             fi
-
-            echo -e "\nFile processing completed."
         
-        # Increment file counter
+        # Increment file counter only if we showed the processing dialog
         ((current_file++))
         
         # Ask to continue to next file if not the last one
@@ -349,6 +359,8 @@ if [[ "${do_rename,,}" == "y" ]]; then
                 break
             elif [[ "${continue_processing,,}" == "n" ]]; then
                 echo "Stopping file processing..."
+                # Decrement counter since we're not processing this file
+                ((current_file--))
                 break
             fi
         fi
