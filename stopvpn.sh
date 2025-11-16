@@ -195,18 +195,30 @@ if [[ "${do_rename,,}" == "y" ]]; then
 
         if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
                 if [[ -e "$newname" ]]; then
-                    echo "  File already exists: $newname"
-                    read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_overwrite
-                    if [[ "$confirm_overwrite" =~ ^[Yy]$ ]]; then
-                        if mv -f "$file" "$newname" 2>/dev/null; then
-                            echo "  File overwritten successfully."
+                    # Check if it's the same file (same size)
+                    current_size=$(stat -c%s "$file" 2>/dev/null)
+                    existing_size=$(stat -c%s "$newname" 2>/dev/null)
+                    
+                    if [[ "$current_size" == "$existing_size" ]]; then
+                        # Same file already exists - skip rename
+                        echo "  File with same name and size already exists: $newname"
+                        echo "  Skipping rename operation."
+                        file="$newname"  # Update file reference to the renamed version
+                    else
+                        # Different file with same name - ask to overwrite
+                        echo "  File already exists: $newname (different size)"
+                        read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_overwrite
+                        if [[ "$confirm_overwrite" =~ ^[Yy]$ ]]; then
+                            if mv -f "$file" "$newname" 2>/dev/null; then
+                                echo "  File overwritten successfully."
+                            else
+                                echo "  Error: Failed to overwrite file."
+                                continue
+                            fi
                         else
-                            echo "  Error: Failed to overwrite file."
+                            echo "  Skipping: keeping original file."
                             continue
                         fi
-                    else
-                        echo "  Skipping: keeping original file."
-                        continue
                     fi
                 else
                     if mv -n "$file" "$newname" 2>/dev/null; then
