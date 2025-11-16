@@ -141,6 +141,9 @@ if [[ "${do_rename,,}" == "y" ]]; then
     for file in "${files[@]}"; do
         [ -e "$file" ] || continue
 
+        # Track if this file was processed
+        file_processed=false
+
         # Get relative path for display
         rel_path="${file#./}"
         
@@ -192,6 +195,9 @@ if [[ "${do_rename,,}" == "y" ]]; then
             echo "Exiting file processing..."
             break
         fi
+
+        # Mark file as processed (we showed the user the file and got their response)
+        file_processed=true
 
         if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
                 if [[ -e "$newname" ]]; then
@@ -348,7 +354,7 @@ if [[ "${do_rename,,}" == "y" ]]; then
             fi
         
         # Ask to continue to next file if not the last one
-        if [[ $current_file -lt $total_files ]]; then
+        if [[ $current_file -lt $total_files && "$file_processed" == "true" ]]; then
             echo -e "\n----------------------------------------"
             read -rp "Continue to next file? [Y/n/q=quit]: " continue_processing
             if [[ "${continue_processing,,}" == "q" ]]; then
@@ -360,8 +366,10 @@ if [[ "${do_rename,,}" == "y" ]]; then
             fi
         fi
         
-        # Increment file counter after processing
-        ((current_file++))
+        # Increment file counter only if file was actually processed
+        if [[ "$file_processed" == "true" ]]; then
+            ((current_file++))
+        fi
     done
 
     # Return to original directory
