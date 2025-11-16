@@ -347,11 +347,8 @@ if [[ "${do_rename,,}" == "y" ]]; then
                 echo "Skipping rename and move operations for this file."
             fi
         
-        # Increment file counter only if we showed the processing dialog
-        ((current_file++))
-        
         # Ask to continue to next file if not the last one
-        if [[ $current_file -le $total_files ]]; then
+        if [[ $current_file -lt $total_files ]]; then
             echo -e "\n----------------------------------------"
             read -rp "Continue to next file? [Y/n/q=quit]: " continue_processing
             if [[ "${continue_processing,,}" == "q" ]]; then
@@ -359,11 +356,12 @@ if [[ "${do_rename,,}" == "y" ]]; then
                 break
             elif [[ "${continue_processing,,}" == "n" ]]; then
                 echo "Stopping file processing..."
-                # Decrement counter since we're not processing this file
-                ((current_file--))
                 break
             fi
         fi
+        
+        # Increment file counter after processing
+        ((current_file++))
     done
 
     # Return to original directory
