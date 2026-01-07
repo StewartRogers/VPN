@@ -10,26 +10,127 @@
 #
 
 #
+# Load configuration file if exists
+#
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+if [ -f "$HOME/.vpn_config.conf" ]; then
+    source "$HOME/.vpn_config.conf"
+elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
+    source "$SCRIPT_DIR/vpn_config.conf"
+fi
+
+# Set default values if not in config
+BACKUP_DIR="${BACKUP_DIR:-/tmp/vpn_backups}"
+PID_DIR="${PID_DIR:-/tmp/vpn_pids}"
+LOG_DIR="${LOG_DIR:-$HOME/.vpn_logs}"
+
+#
+# Logging function
+#
+log_message() {
+    local level=$1
+    local message=$2
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_DIR/vpn.log" 2>/dev/null
+}
+
+#
 # VARIABLES
 #
 SSERVICE="q"
 TEMP_DEST=""  # Will be set to SOURCE_DIR during file processing
 
+#
+# Cleanup security measures
+#
+cleanup_killswitch() {
+    if [ -f "$BACKUP_DIR/iptables.backup" ]; then
+        echo "... Restoring original iptables rules"
+        log_message "INFO" "Restoring original iptables rules"
+        sudo iptables-restore < "$BACKUP_DIR/iptables.backup"
+        rm "$BACKUP_DIR/iptables.backup"
+        echo "... iptables rules restored"
+    fi
+}
+
+cleanup_dns() {
+    if [ -f "$BACKUP_DIR/resolv.conf.backup" ]; then
+        echo "... Restoring original DNS configuration"
+        log_message "INFO" "Restoring original DNS configuration"
+        sudo chattr -i /etc/resolv.conf 2>/dev/null || true
+        sudo mv "$BACKUP_DIR/resolv.conf.backup" /etc/resolv.conf
+        echo "... DNS configuration restored"
+    fi
+}
+
+restore_ipv6() {
+    if [ -f "$BACKUP_DIR/ipv6.backup" ]; then
+        echo "... Restoring IPv6 settings"
+        log_message "INFO" "Restoring IPv6 settings"
+        ORIGINAL=$(cat "$BACKUP_DIR/ipv6.backup")
+        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL > /dev/null
+        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL > /dev/null
+        rm "$BACKUP_DIR/ipv6.backup"
+        echo "... IPv6 settings restored"
+    fi
+}
+
+restore_qbittorrent_config() {
+    local CONFIG_FILE="$HOME/.config/qBittorrent/qBittorrent.conf"
+    if [ -f "$BACKUP_DIR/qBittorrent.conf.backup" ]; then
+        echo "... Restoring qBittorrent configuration"
+        log_message "INFO" "Restoring qBittorrent configuration"
+        mv "$BACKUP_DIR/qBittorrent.conf.backup" "$CONFIG_FILE"
+        echo "... qBittorrent configuration restored"
+    fi
+}
+
+#
+# PID-based process stopping
+#
+stop_service_by_pid() {
+    local service=$1
+    local pid_file="$PID_DIR/${service}.pid"
+    
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file")
+        if kill -0 $pid 2>/dev/null; then
+            echo "... Stopping $service (PID: $pid)"
+            log_message "INFO" "Stopping $service (PID: $pid)"
+            kill $pid 2>/dev/null
+            sleep 1
+            # Force kill if still running
+            if kill -0 $pid 2>/dev/null; then
+                kill -9 $pid 2>/dev/null
+            fi
+            rm "$pid_file"
+            echo "... $service has been stopped"
+        else
+            echo "... $service not running (stale PID file)"
+            rm "$pid_file"
+        fi
+    else
+        # Fallback to pkill if no PID file
+        if pgrep -f "$service" >/dev/null; then
+            echo "... Stopping $service (no PID file, using pkill)"
+            log_message "WARN" "Stopping $service using pkill (no PID file found)"
+            sudo pkill -f "$service"
+            echo "... $service has been stopped"
+        else
+            echo "... $service is not running"
+        fi
+    fi
+}
+
 # Function to stop services
 
 shutdown_services() {
     echo ""
+    log_message "INFO" "Starting service shutdown"
+    
     if [[ "$SSERVICE" == "q" ]]; then
-        # Shutdown qbittorrent
-        SERVICE="qbittorrent-nox"
+        # Shutdown qbittorrent using PID
         echo "... Stopping qbittorrent"
-        if pgrep -x "$SERVICE" >/dev/null; then
-            echo "... $SERVICE is running"
-            sudo pkill -f "$SERVICE"
-            echo "... $SERVICE has been stopped."
-        else
-            echo "... $SERVICE is not running"
-        fi
+        stop_service_by_pid "qbittorrent"
         sleep 1
     else
         # Shutdown Deluge Web and Deluge Daemon
@@ -55,35 +156,39 @@ shutdown_services() {
     fi
 
     echo ""
-    echo "... Stopping OpenVPN Server"
-    SERVICE="openvpn"
-    if pgrep -x "$SERVICE" >/dev/null; then
-        echo "... $SERVICE is running"
-        sudo pkill -f "$SERVICE"
-        echo "... $SERVICE has been stopped."
-    else
-        echo "... $SERVICE is not running"
-    fi
+    echo "... Stopping checkip script"
+    stop_service_by_pid "checkip"
     sleep 1
+    screen -S "checkip" -p 0 -X quit > /dev/null 2>&1
 
     echo ""
-    echo "... Stopping checkip script"
-    SERVICE="checkip.sh"
-    if pgrep -x "$SERVICE" >/dev/null; then
-        echo "... $SERVICE is running"
-        sudo pkill -f "$SERVICE"
-        echo "... $SERVICE has been stopped."
+    echo "... Stopping OpenVPN"
+    if pgrep -f "openvpn" >/dev/null; then
+        log_message "INFO" "Stopping OpenVPN"
+        sudo pkill -f "openvpn"
+        echo "... OpenVPN has been stopped"
+        sleep 2
     else
-        echo "... $SERVICE is not running"
+        echo "... OpenVPN is not running"
     fi
-    sleep 1
+
+    # Clean up all security measures
     echo ""
-    screen -S "checkip" -p 0 -X quit > /dev/null
+    echo "... Cleaning up security measures"
+    log_message "INFO" "Cleaning up security measures"
+    cleanup_killswitch
+    cleanup_dns
+    restore_ipv6
+    restore_qbittorrent_config
+    echo "... All security measures reversed"
+    log_message "INFO" "All security measures reversed - system restored to normal"
+    echo ""
 }
 
  # Main script logic
 if [[ "$1" == "--shutdown-only" ]]; then
     echo "Running shutdown commands only..."
+    log_message "INFO" "Shutdown requested (--shutdown-only)"
     shutdown_services
     echo -e "\nDone."
     exit 0
