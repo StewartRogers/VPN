@@ -24,7 +24,7 @@ else
 fi
 
 # Check VPN interface
-if ip link show tun0 &>/dev/null 2>&1; then
+if ip link show tun0 &>/dev/null; then
     echo "✓ VPN Interface: Up (tun0)"
     # Get interface IP
     TUN_IP=$(ip addr show tun0 2>/dev/null | grep "inet " | awk '{print $2}')
