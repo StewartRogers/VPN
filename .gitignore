@@ -1,2 +1,4 @@
 *.log
 *.ovpn
+__pycache__/
+*.pyc
