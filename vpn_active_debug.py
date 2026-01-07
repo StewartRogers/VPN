@@ -1,3 +1,6 @@
+
+# Copyright (c) 2022-2025 Stewart Rogers
+# SPDX-License-Identifier: MIT
 #! /usr/bin/python3
 
 import urllib.request
