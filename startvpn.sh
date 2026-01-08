@@ -165,11 +165,19 @@ setup_killswitch() {
     sudo iptables -A OUTPUT -o tun+ -j ACCEPT
     
     # Allow VPN connection itself (to VPN server)
-    local VPN_SERVER=$(grep "^remote " /etc/openvpn/client/*.ovpn 2>/dev/null | head -1 | awk '{print $2}')
-    local VPN_PORT=$(grep "^remote " /etc/openvpn/client/*.ovpn 2>/dev/null | head -1 | awk '{print $3}')
-    if [ -n "$VPN_SERVER" ] && [ -n "$VPN_PORT" ]; then
-        sudo iptables -A OUTPUT -d $VPN_SERVER -p udp --dport $VPN_PORT -j ACCEPT
-        log_message "INFO" "Kill switch configured for VPN server: $VPN_SERVER:$VPN_PORT"
+    # Use the XCONFIGFILE if available, otherwise search for OVPN file
+    local OVPN_FILE="${1:-}"
+    if [ -z "$OVPN_FILE" ]; then
+        OVPN_FILE=$(find /etc/openvpn/client -name "*.ovpn" -type f 2>/dev/null | head -1)
+    fi
+    
+    if [ -n "$OVPN_FILE" ] && [ -f "$OVPN_FILE" ]; then
+        local VPN_SERVER=$(grep "^remote " "$OVPN_FILE" 2>/dev/null | head -1 | awk '{print $2}')
+        local VPN_PORT=$(grep "^remote " "$OVPN_FILE" 2>/dev/null | head -1 | awk '{print $3}')
+        if [ -n "$VPN_SERVER" ] && [ -n "$VPN_PORT" ]; then
+            sudo iptables -A OUTPUT -d "$VPN_SERVER" -p udp --dport "$VPN_PORT" -j ACCEPT
+            log_message "INFO" "Kill switch configured for VPN server: $VPN_SERVER:$VPN_PORT"
+        fi
     fi
     
     # Drop everything else
@@ -269,7 +277,6 @@ if ! validate_ip "$YHOMEIP"; then
     log_message "WARN" "Could not retrieve valid external IP address"
     YHOMEIP=""
 fi
-echo "External IP: "$YHOMEIP
 log_message "INFO" "Current external IP: $YHOMEIP"
 echo ""
 
@@ -309,7 +316,11 @@ if [[ "${SWCHECK,,}" == "y" ]]; then
   fi
 
   # Ensure required Python packages are installed
-  pip3 install --user --upgrade requests
+  # Use apt to install python3-requests to avoid externally-managed-environment error
+  if ! python3 -c "import requests" >/dev/null 2>&1; then
+    echo "Installing python3-requests..."
+    sudo apt-get install -y -qq python3-requests
+  fi
 fi
 
 #
@@ -373,26 +384,48 @@ if [[ "${GETOVPN,,}" == "y" ]]; then
   fi
   
   echo "Downloading OVPN file from: $OVPNURL"
-  log_message "INFO" "Downloading OVPN from: $OVPNURL"
-  curl -s -L -O "$OVPNURL"
+  
+  # Extract filename from URL and ensure .ovpn extension
+  OVPN_FILENAME=$(basename "$OVPNURL" | sed 's/[?&].*//')
+  # If filename doesn't end with .ovpn or has aspx, generate a proper name
+  if [[ ! "$OVPN_FILENAME" =~ \.ovpn$ ]] || [[ "$OVPN_FILENAME" =~ \.aspx ]]; then
+    # Try to extract meaningful name from URL path
+    OVPN_FILENAME=$(echo "$OVPNURL" | grep -oP '/[^/]*\.ovpn' | tail -1 | sed 's|^/||')
+    # If still no valid name, use a timestamp-based name
+    if [ -z "$OVPN_FILENAME" ] || [[ ! "$OVPN_FILENAME" =~ \.ovpn$ ]]; then
+      OVPN_FILENAME="downloaded_config_$(date +%Y%m%d_%H%M%S).ovpn"
+    fi
+  fi
+  
+  # Download directly with specified filename
+  curl -s -L -o "$OVPN_FILENAME" "$OVPNURL"
   CURL_EXIT=$?
   if [ $CURL_EXIT -ne 0 ]; then
     echo -e "Error: curl failed to download file. Aborting script.\n\n"
     log_message "ERROR" "Failed to download OVPN file"
+    rm -f "$OVPN_FILENAME"
     exit 1
   fi
+  
+  # Verify the downloaded file is valid
+  if [ ! -s "$OVPN_FILENAME" ]; then
+    echo -e "Error: Downloaded file is empty. Aborting script.\n\n"
+    log_message "ERROR" "Downloaded file is empty"
+    rm -f "$OVPN_FILENAME"
+    exit 1
+  fi
+  
   OVPN_COUNT=$(ls *.ovpn 2>/dev/null | wc -l)
   if [ "$OVPN_COUNT" -eq 0 ]; then
-    echo -e "Error: No .ovpn file found after download. The file may not be a valid .ovpn file or the URL may not point directly to a .ovpn file. Aborting script.\n\n"
+    echo -e "Error: No .ovpn file found after download. Aborting script.\n\n"
     log_message "ERROR" "No .ovpn file found after download"
     exit 1
   fi
-  echo "Found $OVPN_COUNT .ovpn file(s) after download."
   log_message "INFO" "Downloaded $OVPN_COUNT .ovpn file(s)"
   LAST_OVPN=""
   for XFILE in *.ovpn; do
-    echo "Copying $XFILE to $XVPNCHOME"
-    sudo cp "$XFILE" "$XVPNCHOME"
+    echo "Moving $XFILE to $XVPNCHOME"
+    sudo mv "$XFILE" "$XVPNCHOME"
     LAST_OVPN="$XFILE"
   done
   XCONFIGFILE="$XVPNCHOME$LAST_OVPN"
@@ -403,7 +436,7 @@ else
     exit 1
   fi
   for XFILE in *.ovpn; do
-    sudo cp "$XFILE" "$XVPNCHOME"
+    sudo mv "$XFILE" "$XVPNCHOME"
   done
   XCONFIGFILE="$XVPNCHOME$XFILE"
 fi
@@ -423,7 +456,7 @@ while [ $VPNSERVICE != "q" ]; do
     echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
     echo "... Starting VPN"
     echo "... CONFIGFILE: " $XCONFIGFILE
-    sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --verb 3
+    sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC --data-ciphers-fallback AES-128-CBC --verb 3
     sleep 7
     echo "... Viewing log"
     echo ""
@@ -493,7 +526,7 @@ if [[ "${iStart,,}" == "y" ]]; then
   
   # Setup kill switch
   if [ "$SETUP_KILLSWITCH" = true ]; then
-    setup_killswitch
+    setup_killswitch "$XCONFIGFILE"
   fi
   
   # Setup DNS leak prevention

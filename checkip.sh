@@ -27,6 +27,7 @@ XIP_HOME=$PWD"/"
 XIP_PYFILE=$XIP_HOME"vpn_active.py"
 XIP_LOGFILE=$XIP_HOME"checkvpn.log"
 XIP_STOPFILE=$XIP_HOME"stopvpn.sh --shutdown-only"
+PID_DIR="${PID_DIR:-/tmp/vpn_pids}"
 YIP_HOMEIP=$1
 #
 # New variables for enhanced monitoring
@@ -61,6 +62,68 @@ check_vpn_interface() {
     return 0
 }
 
+# qBittorrent control helpers
+is_qbittorrent_running() {
+    # Prefer PID file if present
+    local pid_file="$PID_DIR/qbittorrent.pid"
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "$(date): qBittorrent running (PID: $pid)"
+            return 0
+        fi
+    fi
+    # Fallback to process check
+    if pgrep -f "qbittorrent-nox" >/dev/null; then
+        echo "$(date): qBittorrent running (detected by process)"
+        return 0
+    fi
+    return 1
+}
+
+stop_qbittorrent() {
+    local pid_file="$PID_DIR/qbittorrent.pid"
+    if [ -f "$pid_file" ]; then
+        local pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "$(date): Stopping qBittorrent (PID: $pid)"
+            kill "$pid" 2>/dev/null || true
+            sleep 1
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        fi
+        rm -f "$pid_file"
+    fi
+    # Ensure stopped even without PID file
+    if pgrep -f "qbittorrent-nox" >/dev/null; then
+        echo "$(date): Stopping qBittorrent (pkill fallback)"
+        sudo pkill -f "qbittorrent-nox" 2>/dev/null || true
+    fi
+}
+
+start_qbittorrent() {
+    # Avoid duplicate starts
+    if is_qbittorrent_running; then
+        echo "$(date): qBittorrent already running; skip start"
+        return 0
+    fi
+    echo "$(date): Starting qBittorrent"
+    nohup qbittorrent-nox > "$XIP_HOME/qbit.log" 2>&1 &
+    local qpid=$!
+    mkdir -p "$PID_DIR"
+    echo "$qpid" > "$PID_DIR/qbittorrent.pid"
+    # Verify
+    sleep 1
+    if kill -0 "$qpid" 2>/dev/null; then
+        echo "$(date): qBittorrent started (PID: $qpid)"
+        return 0
+    else
+        echo "$(date): WARNING - qBittorrent may have failed to start"
+        return 1
+    fi
+}
+
 perform_ip_check() {
     echo "$(date): Performing full IP check..."
     local result=$(python3 $XIP_PYFILE $YIP_HOMEIP)
@@ -93,7 +156,7 @@ attempt_reconnect() {
     echo "$(date): Restarting VPN with config: $XCONFIGFILE"
     
     # Restart VPN
-    sudo openvpn --config $XCONFIGFILE --log /var/log/openvpn.log --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --verb 3
+    sudo openvpn --config $XCONFIGFILE --log /var/log/openvpn.log --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC --data-ciphers-fallback AES-128-CBC --verb 3
     
     # Wait for connection
     sleep 10
@@ -104,6 +167,8 @@ attempt_reconnect() {
         sleep 5
         if perform_ip_check; then
             echo "$(date): Reconnection successful!"
+            # Safe to restart torrent
+            start_qbittorrent
             return 0
         fi
     fi
@@ -132,6 +197,11 @@ while [[ "$active" == "secure" ]]; do
     # Always do fast checks (process and interface)
     if ! check_openvpn_process || ! check_vpn_interface; then
         # VPN failure detected - attempt reconnection
+        # Immediately stop torrent to prevent leaks
+        if is_qbittorrent_running; then
+            echo "$(date): Immediate action: Stopping qBittorrent due to VPN failure"
+            stop_qbittorrent
+        fi
         if [ $reconnect_count -lt $MAX_RECONNECT_ATTEMPTS ]; then
             reconnect_count=$((reconnect_count + 1))
             echo "$(date): VPN failure detected - initiating reconnect attempt $reconnect_count/$MAX_RECONNECT_ATTEMPTS"
@@ -160,6 +230,11 @@ while [[ "$active" == "secure" ]]; do
         
         if ! perform_ip_check; then
             # IP leak detected - attempt reconnection
+            # Immediately stop torrent to prevent leaks
+            if is_qbittorrent_running; then
+                echo "$(date): Immediate action: Stopping qBittorrent due to IP leak"
+                stop_qbittorrent
+            fi
             if [ $reconnect_count -lt $MAX_RECONNECT_ATTEMPTS ]; then
                 reconnect_count=$((reconnect_count + 1))
                 echo "$(date): IP leak detected - initiating reconnect attempt $reconnect_count/$MAX_RECONNECT_ATTEMPTS"
