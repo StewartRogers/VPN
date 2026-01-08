@@ -345,16 +345,29 @@ fi
 if [[ "${UFWCONFIRM,,}" == "y" ]]; then
     read -p "Enter the port number you want to allow: " UFWPORT
     read -p "Enter the protocol (tcp/udp): " UFWPROTO
-    echo ""
-    echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
     
-    # Save UFW rule for later removal
-    echo "$UFWPORT/$UFWPROTO" > "$BACKUP_DIR/ufw_rule.backup"
-    
-    sudo ufw allow $UFWPORT/$UFWPROTO > /dev/null
-    echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
-    log_message "INFO" "UFW rule added: $UFWPORT/$UFWPROTO"
-    echo ""
+    # Validate port number (1-65535)
+    if ! [[ "$UFWPORT" =~ ^[0-9]+$ ]] || [ "$UFWPORT" -lt 1 ] || [ "$UFWPORT" -gt 65535 ]; then
+        echo "Error: Invalid port number. Must be between 1 and 65535."
+        log_message "ERROR" "Invalid UFW port number: $UFWPORT"
+        echo ""
+    # Validate protocol (tcp or udp only)
+    elif ! [[ "${UFWPROTO,,}" =~ ^(tcp|udp)$ ]]; then
+        echo "Error: Invalid protocol. Must be 'tcp' or 'udp'."
+        log_message "ERROR" "Invalid UFW protocol: $UFWPROTO"
+        echo ""
+    else
+        echo ""
+        echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
+        
+        # Save UFW rule for later removal
+        echo "$UFWPORT/$UFWPROTO" > "$BACKUP_DIR/ufw_rule.backup"
+        
+        sudo ufw allow $UFWPORT/$UFWPROTO > /dev/null
+        echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
+        log_message "INFO" "UFW rule added: $UFWPORT/$UFWPROTO"
+        echo ""
+    fi
 fi
 
 #

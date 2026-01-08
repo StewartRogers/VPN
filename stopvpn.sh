@@ -68,19 +68,33 @@ restore_ipv6() {
         log_message "INFO" "Restoring IPv6 settings"
         ORIGINAL_ALL=$(cat "$BACKUP_DIR/ipv6_all.backup")
         ORIGINAL_DEFAULT=$(cat "$BACKUP_DIR/ipv6_default.backup")
-        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL_ALL > /dev/null
-        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL_DEFAULT > /dev/null
-        rm "$BACKUP_DIR/ipv6_all.backup" "$BACKUP_DIR/ipv6_default.backup"
-        echo "... IPv6 settings restored"
+        
+        # Validate values are 0 or 1
+        if [[ "$ORIGINAL_ALL" =~ ^[01]$ ]] && [[ "$ORIGINAL_DEFAULT" =~ ^[01]$ ]]; then
+            sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL_ALL > /dev/null
+            sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL_DEFAULT > /dev/null
+            rm "$BACKUP_DIR/ipv6_all.backup" "$BACKUP_DIR/ipv6_default.backup"
+            echo "... IPv6 settings restored"
+        else
+            echo "... Warning: Invalid IPv6 backup values, skipping restoration"
+            log_message "WARN" "Invalid IPv6 backup values: all=$ORIGINAL_ALL, default=$ORIGINAL_DEFAULT"
+        fi
     elif [ -f "$BACKUP_DIR/ipv6.backup" ]; then
         # Fallback for old backup format
         echo "... Restoring IPv6 settings (legacy format)"
         log_message "INFO" "Restoring IPv6 settings (legacy format)"
         ORIGINAL=$(cat "$BACKUP_DIR/ipv6.backup")
-        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL > /dev/null
-        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL > /dev/null
-        rm "$BACKUP_DIR/ipv6.backup"
-        echo "... IPv6 settings restored"
+        
+        # Validate value is 0 or 1
+        if [[ "$ORIGINAL" =~ ^[01]$ ]]; then
+            sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL > /dev/null
+            sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL > /dev/null
+            rm "$BACKUP_DIR/ipv6.backup"
+            echo "... IPv6 settings restored"
+        else
+            echo "... Warning: Invalid IPv6 backup value, skipping restoration"
+            log_message "WARN" "Invalid IPv6 backup value: $ORIGINAL"
+        fi
     fi
 }
 
@@ -99,7 +113,7 @@ cleanup_ufw_rule() {
         echo "... Removing UFW rule added by VPN startup"
         log_message "INFO" "Removing UFW rule"
         UFW_RULE=$(cat "$BACKUP_DIR/ufw_rule.backup")
-        sudo ufw delete allow $UFW_RULE > /dev/null 2>&1
+        sudo ufw delete allow "$UFW_RULE" > /dev/null 2>&1
         rm "$BACKUP_DIR/ufw_rule.backup"
         echo "... UFW rule removed"
     fi
