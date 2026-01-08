@@ -63,9 +63,19 @@ cleanup_dns() {
 }
 
 restore_ipv6() {
-    if [ -f "$BACKUP_DIR/ipv6.backup" ]; then
+    if [ -f "$BACKUP_DIR/ipv6_all.backup" ] && [ -f "$BACKUP_DIR/ipv6_default.backup" ]; then
         echo "... Restoring IPv6 settings"
         log_message "INFO" "Restoring IPv6 settings"
+        ORIGINAL_ALL=$(cat "$BACKUP_DIR/ipv6_all.backup")
+        ORIGINAL_DEFAULT=$(cat "$BACKUP_DIR/ipv6_default.backup")
+        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL_ALL > /dev/null
+        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL_DEFAULT > /dev/null
+        rm "$BACKUP_DIR/ipv6_all.backup" "$BACKUP_DIR/ipv6_default.backup"
+        echo "... IPv6 settings restored"
+    elif [ -f "$BACKUP_DIR/ipv6.backup" ]; then
+        # Fallback for old backup format
+        echo "... Restoring IPv6 settings (legacy format)"
+        log_message "INFO" "Restoring IPv6 settings (legacy format)"
         ORIGINAL=$(cat "$BACKUP_DIR/ipv6.backup")
         sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL > /dev/null
         sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL > /dev/null
@@ -81,6 +91,17 @@ restore_qbittorrent_config() {
         log_message "INFO" "Restoring qBittorrent configuration"
         mv "$BACKUP_DIR/qBittorrent.conf.backup" "$CONFIG_FILE"
         echo "... qBittorrent configuration restored"
+    fi
+}
+
+cleanup_ufw_rule() {
+    if [ -f "$BACKUP_DIR/ufw_rule.backup" ]; then
+        echo "... Removing UFW rule added by VPN startup"
+        log_message "INFO" "Removing UFW rule"
+        UFW_RULE=$(cat "$BACKUP_DIR/ufw_rule.backup")
+        sudo ufw delete allow $UFW_RULE > /dev/null 2>&1
+        rm "$BACKUP_DIR/ufw_rule.backup"
+        echo "... UFW rule removed"
     fi
 }
 
@@ -180,6 +201,7 @@ shutdown_services() {
     cleanup_dns
     restore_ipv6
     restore_qbittorrent_config
+    cleanup_ufw_rule
     echo "... All security measures reversed"
     log_message "INFO" "All security measures reversed - system restored to normal"
     echo ""
