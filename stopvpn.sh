@@ -113,9 +113,22 @@ cleanup_ufw_rule() {
         echo "... Removing UFW rule added by VPN startup"
         log_message "INFO" "Removing UFW rule"
         UFW_RULE=$(cat "$BACKUP_DIR/ufw_rule.backup")
-        sudo ufw delete allow "$UFW_RULE" > /dev/null 2>&1
+        
+        # Validate the rule format (port/protocol) and port range
+        if [[ "$UFW_RULE" =~ ^([0-9]+)/(tcp|udp)$ ]]; then
+            local PORT="${BASH_REMATCH[1]}"
+            if [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
+                sudo ufw delete allow "$UFW_RULE" > /dev/null 2>&1
+                echo "... UFW rule removed"
+            else
+                echo "... Warning: Invalid UFW port number in backup, skipping removal"
+                log_message "WARN" "Invalid UFW port number: $UFW_RULE"
+            fi
+        else
+            echo "... Warning: Invalid UFW rule format in backup, skipping removal"
+            log_message "WARN" "Invalid UFW rule format: $UFW_RULE"
+        fi
         rm "$BACKUP_DIR/ufw_rule.backup"
-        echo "... UFW rule removed"
     fi
 }
 

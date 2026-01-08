@@ -363,7 +363,7 @@ if [[ "${UFWCONFIRM,,}" == "y" ]]; then
         # Save UFW rule for later removal
         echo "$UFWPORT/$UFWPROTO" > "$BACKUP_DIR/ufw_rule.backup"
         
-        sudo ufw allow $UFWPORT/$UFWPROTO > /dev/null
+        sudo ufw allow "$UFWPORT/$UFWPROTO" > /dev/null
         echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
         log_message "INFO" "UFW rule added: $UFWPORT/$UFWPROTO"
         echo ""
