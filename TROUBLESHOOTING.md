@@ -376,7 +376,7 @@
 ### Important Log Locations
 
 - VPN connection log: `/var/log/openvpn.log`
-- Application log: `~/.vpn_logs/vpn.log`
+- Application log: `./vpn_logs/vpn.log`
 - Monitoring log: `./checkvpn.log`
 - qBittorrent log: `./qbit.log`
 
@@ -393,7 +393,7 @@ sudo tail -f /var/log/openvpn.log
 tail -f checkvpn.log
 
 # View application log
-tail -f ~/.vpn_logs/vpn.log
+tail -f ./vpn_logs/vpn.log
 
 # Check network interfaces
 ip addr show

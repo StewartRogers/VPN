@@ -32,7 +32,7 @@ fi
 # Set default values if not in config
 BACKUP_DIR="${BACKUP_DIR:-/tmp/vpn_backups}"
 PID_DIR="${PID_DIR:-/tmp/vpn_pids}"
-LOG_DIR="${LOG_DIR:-$HOME/.vpn_logs}"
+LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/vpn_logs}"
 SETUP_KILLSWITCH="${SETUP_KILLSWITCH:-false}"
 PREVENT_DNS_LEAK="${PREVENT_DNS_LEAK:-true}"
 DISABLE_IPV6="${DISABLE_IPV6:-true}"
@@ -87,13 +87,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-#
+##
 # Logging functions
-#
+##
 log_message() {
-    local level=$1
-    local message=$2
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_DIR/vpn.log"
+  local level=$1
+  local message=$2
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_DIR/vpn.log"
 }
 
 rotate_logs() {
@@ -238,13 +238,16 @@ configure_qbittorrent_binding() {
 #
 # Cleanup trap handler
 #
+# Track whether we've already handled an error to avoid duplicate messages
+ERROR_HANDLED=false
+
 cleanup_on_error() {
     local exit_code=$?
-    if [ $exit_code -ne 0 ]; then
-        log_message "ERROR" "Script exited with error code $exit_code"
-        echo ""
-        echo "An error occurred. Check logs at: $LOG_DIR/vpn.log"
-        echo ""
+  if [ $exit_code -ne 0 ] && [ "$ERROR_HANDLED" != true ]; then
+    log_message "ERROR" "Script exited with error code $exit_code"
+    echo ""
+    echo "An error occurred. Check logs at: $LOG_DIR/vpn.log"
+    echo ""
     fi
 }
 
@@ -300,29 +303,57 @@ else
 fi
 
 if [[ "${SWCHECK,,}" == "y" ]]; then
-  echo "Installing required software..."
-  echo "This install qbittorrent-nox and if you have never run that before"
-  echo "you must run it manually first to accept the disclaimer"
-  sudo apt-get -qq update
-  sudo apt-get install -y -qq qbittorrent-nox openvpn screen ufw
-
-  # Ensure python3, pip3, and required Python packages are installed
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 not found, installing..."
-    sudo apt-get update && sudo apt-get install -y -qq python3
+  log_message "INFO" "Checking and updating required software..."
+  echo ""
+  
+  # Update package lists
+  sudo apt-get -qq update 2>/dev/null || true
+  
+  # Array of packages to check and manage
+  declare -a PACKAGES=("qbittorrent-nox" "openvpn" "screen" "ufw" "python3" "python3-pip")
+  declare -a TO_INSTALL=()
+  declare -a TO_UPDATE=()
+  
+  # Check each package
+  for pkg in "${PACKAGES[@]}"; do
+    if dpkg -l | grep -q "^ii  $pkg"; then
+      echo "✓ $pkg is installed"
+      TO_UPDATE+=("$pkg")
+    else
+      echo "✗ $pkg not found - will install"
+      TO_INSTALL+=("$pkg")
+    fi
+  done
+  
+  # Update existing packages
+  if [ ${#TO_UPDATE[@]} -gt 0 ]; then
+    echo ""
+    echo "Updating existing packages..."
+    sudo apt-get install --only-upgrade -y -qq "${TO_UPDATE[@]}" 2>/dev/null || true
+    log_message "INFO" "Updated ${#TO_UPDATE[@]} existing package(s)"
   fi
-
-  if ! command -v pip3 >/dev/null 2>&1; then
-    echo "pip3 not found, installing..."
-    sudo apt-get install -y -qq python3-pip
+  
+  # Install missing packages
+  if [ ${#TO_INSTALL[@]} -gt 0 ]; then
+    echo ""
+    echo "Installing missing packages: ${TO_INSTALL[*]}"
+    echo "Note: qbittorrent-nox requires manual first run to accept disclaimer"
+    sudo apt-get install -y -qq "${TO_INSTALL[@]}"
+    log_message "INFO" "Installed ${#TO_INSTALL[@]} missing package(s)"
   fi
-
-  # Ensure required Python packages are installed
-  # Use apt to install python3-requests to avoid externally-managed-environment error
-  if ! python3 -c "import requests" >/dev/null 2>&1; then
+  
+  # Check Python requests library (special case - may be installed via pip or apt)
+  echo ""
+  if python3 -c "import requests" >/dev/null 2>&1; then
+    echo "✓ python3-requests is available"
+  else
     echo "Installing python3-requests..."
     sudo apt-get install -y -qq python3-requests
+    log_message "INFO" "Installed python3-requests"
   fi
+  
+  echo ""
+  log_message "INFO" "Software check complete"
 fi
 
 #
@@ -348,24 +379,18 @@ if [[ "${UFWCONFIRM,,}" == "y" ]]; then
     
     # Validate port number (1-65535)
     if ! [[ "$UFWPORT" =~ ^[0-9]+$ ]] || [ "$UFWPORT" -lt 1 ] || [ "$UFWPORT" -gt 65535 ]; then
-        echo "Error: Invalid port number. Must be between 1 and 65535."
-        log_message "ERROR" "Invalid UFW port number: $UFWPORT"
-        echo ""
+        log_message "ERROR" "Invalid port number: $UFWPORT (must be 1-65535)"
     # Validate protocol (tcp or udp only)
     elif ! [[ "${UFWPROTO,,}" =~ ^(tcp|udp)$ ]]; then
-        echo "Error: Invalid protocol. Must be 'tcp' or 'udp'."
-        log_message "ERROR" "Invalid UFW protocol: $UFWPROTO"
-        echo ""
+        log_message "ERROR" "Invalid protocol: $UFWPROTO (must be tcp or udp)"
     else
-        echo ""
-        echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
+        log_message "INFO" "Configuring UFW rule for port $UFWPORT/$UFWPROTO"
         
         # Save UFW rule for later removal
         echo "$UFWPORT/$UFWPROTO" > "$BACKUP_DIR/ufw_rule.backup"
         
         sudo ufw allow "$UFWPORT/$UFWPROTO" > /dev/null
-        echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
-        log_message "INFO" "UFW rule added: $UFWPORT/$UFWPROTO"
+        log_message "INFO" "UFW rule applied for $UFWPORT/$UFWPROTO"
         echo ""
     fi
 fi
@@ -397,12 +422,12 @@ if [[ "${GETOVPN,,}" == "y" ]]; then
   fi
   
   if ! validate_url "$OVPNURL"; then
-    echo -e "Error: Invalid URL. Aborting script.\n\n"
     log_message "ERROR" "Invalid OVPN URL provided"
+    ERROR_HANDLED=true
     exit 1
   fi
   
-  echo "Downloading OVPN file from: $OVPNURL"
+  log_message "INFO" "Downloading OVPN file from: $OVPNURL"
   
   # Extract filename from URL and ensure .ovpn extension
   OVPN_FILENAME=$(basename "$OVPNURL" | sed 's/[?&].*//')
@@ -420,30 +445,30 @@ if [[ "${GETOVPN,,}" == "y" ]]; then
   curl -s -L -o "$OVPN_FILENAME" "$OVPNURL"
   CURL_EXIT=$?
   if [ $CURL_EXIT -ne 0 ]; then
-    echo -e "Error: curl failed to download file. Aborting script.\n\n"
     log_message "ERROR" "Failed to download OVPN file"
     rm -f "$OVPN_FILENAME"
+    ERROR_HANDLED=true
     exit 1
   fi
   
   # Verify the downloaded file is valid
   if [ ! -s "$OVPN_FILENAME" ]; then
-    echo -e "Error: Downloaded file is empty. Aborting script.\n\n"
     log_message "ERROR" "Downloaded file is empty"
     rm -f "$OVPN_FILENAME"
+    ERROR_HANDLED=true
     exit 1
   fi
   
   OVPN_COUNT=$(ls *.ovpn 2>/dev/null | wc -l)
   if [ "$OVPN_COUNT" -eq 0 ]; then
-    echo -e "Error: No .ovpn file found after download. Aborting script.\n\n"
     log_message "ERROR" "No .ovpn file found after download"
+    ERROR_HANDLED=true
     exit 1
   fi
   log_message "INFO" "Downloaded $OVPN_COUNT .ovpn file(s)"
   LAST_OVPN=""
   for XFILE in *.ovpn; do
-    echo "Moving $XFILE to $XVPNCHOME"
+    log_message "INFO" "Moving $XFILE to $XVPNCHOME"
     sudo mv "$XFILE" "$XVPNCHOME"
     LAST_OVPN="$XFILE"
   done
@@ -451,7 +476,8 @@ if [[ "${GETOVPN,,}" == "y" ]]; then
 else
   # If not downloading, check if any .ovpn file exists in current dir
   if ! ls *.ovpn 1> /dev/null 2>&1; then
-    echo -e "Error: No .ovpn file found. Aborting script.\n\n"
+    log_message "ERROR" "No .ovpn file found in current directory"
+    ERROR_HANDLED=true
     exit 1
   fi
   for XFILE in *.ovpn; do
@@ -467,34 +493,31 @@ fi
 #
 while [ $VPNSERVICE != "q" ]; do
   if [ "$VPNSERVICE" == "1" ]; then
-    echo ""
-    echo "... Getting organized"
+    log_message "INFO" "Preparing to start OpenVPN"
     cd $XVPNHOME
     sudo rm -rf $XVPNLOGFILE
-    # Echo current external IP after starting VPN
-    echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
-    echo "... Starting VPN"
-    echo "... CONFIGFILE: " $XCONFIGFILE
+    log_message "INFO" "Current external IP: $(curl -s https://ipinfo.io/ip)"
+    log_message "INFO" "Starting VPN with config: $XCONFIGFILE"
     sudo openvpn --config $XCONFIGFILE --log $XVPNLOGFILE --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC --data-ciphers-fallback AES-128-CBC --verb 3
     sleep 7
-    echo "... Viewing log"
+    echo "... Viewing OpenVPN log"
     echo ""
     sudo tail $XVPNLOGFILE
     echo ""
     
     if [ "$NON_INTERACTIVE" = true ]; then
       # In non-interactive mode, wait and auto-detect VPN connection
-      echo "... Waiting for VPN connection (non-interactive mode)..."
+      log_message "INFO" "Waiting for VPN connection (non-interactive mode)..."
       sleep 10
       # Check if tun0 interface exists
       if ip link show tun0 &>/dev/null 2>&1; then
         iStart="y"
-        echo "... VPN interface detected (tun0)"
-        echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
+        log_message "INFO" "VPN interface detected (tun0)"
+        log_message "INFO" "Current external IP: $(curl -s https://ipinfo.io/ip)"
         VPNSERVICE="q"
       else
         iStart="f"
-        echo "... VPN interface not detected - startup failed"
+        log_message "ERROR" "VPN interface not detected - startup failed"
         VPNSERVICE="q"
       fi
     else
@@ -502,13 +525,12 @@ while [ $VPNSERVICE != "q" ]; do
         read -p "Has it started? [Y/N/F - f is failed] " iStart
         case "${iStart,,}" in
           y)
-            # Echo current external IP before exiting loop
-            echo "... Current external IP: $(curl -s https://ipinfo.io/ip)"
+            # Log current external IP before exiting loop
+            log_message "INFO" "Current external IP: $(curl -s https://ipinfo.io/ip)"
             VPNSERVICE="q"
             break
             ;;
           f)
-            echo "VPN startup failed"
             log_message "ERROR" "VPN startup failed"
             VPNSERVICE="q"
             break
@@ -571,16 +593,13 @@ fi
 #
 if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]]; then
   echo ""
-  echo "... Testing VPN"
   log_message "INFO" "Testing VPN connection"
   # Run Python script to verify VPN is active and IP is changed
   active=$(python3 $XPYFILE $YHOMEIP)
-  echo "... VPN test result:" $active
   log_message "INFO" "VPN test result: $active"
   
   # If VPN is secure, start torrent server
   if [ "$active" == "secure" ]; then
-    echo "... Starting Torrent Server"
     log_message "INFO" "Starting qbittorrent-nox"
     
     # Start qbittorrent and save PID
@@ -593,14 +612,12 @@ if [[ "${iStart,,}" == "y" && $VPNSERVICE == "q" ]]; then
     
     # Verify it's still running
     if kill -0 $QBIT_PID 2>/dev/null; then
-      echo "... Torrent Server started successfully (PID: $QBIT_PID)"
+      log_message "INFO" "Torrent Server started successfully (PID: $QBIT_PID)"
     else
-      echo "... Warning: Torrent Server may have failed to start"
-      log_message "WARN" "qbittorrent-nox may have failed to start"
+      log_message "WARN" "Torrent Server may have failed to start"
     fi
   else
     echo ""
-    echo "Torrent Server not started."
     log_message "WARN" "Torrent Server not started - VPN not secure"
     echo ""
   fi
@@ -611,7 +628,6 @@ fi
 #
 if [ "$active" == "secure" ]; then
   YCHECKFILE=$XHOME"checkip.sh "$YHOMEIP
-  echo "... Checking IP address"
   log_message "INFO" "Starting VPN monitoring script"
   cd $XHOME
   ./checkip.sh $YHOMEIP &

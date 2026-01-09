@@ -22,7 +22,10 @@ fi
 # Set default values if not in config
 BACKUP_DIR="${BACKUP_DIR:-/tmp/vpn_backups}"
 PID_DIR="${PID_DIR:-/tmp/vpn_pids}"
-LOG_DIR="${LOG_DIR:-$HOME/.vpn_logs}"
+LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/vpn_logs}"
+
+# Ensure required directories exist
+mkdir -p "$BACKUP_DIR" "$PID_DIR" "$LOG_DIR"
 
 #
 # Logging function
@@ -31,6 +34,18 @@ log_message() {
     local level=$1
     local message=$2
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_DIR/vpn.log" 2>/dev/null
+}
+
+rotate_logs() {
+    if [ -f "$LOG_DIR/vpn.log" ]; then
+        local size=$(stat -c%s "$LOG_DIR/vpn.log" 2>/dev/null || echo 0)
+        if [ $size -gt 10485760 ]; then  # 10MB
+            mv "$LOG_DIR/vpn.log" "$LOG_DIR/vpn.log.1"
+            [ -f "$LOG_DIR/vpn.log.1.gz" ] && rm "$LOG_DIR/vpn.log.1.gz"
+            gzip "$LOG_DIR/vpn.log.1" 2>/dev/null || true
+            log_message "INFO" "Log rotated (previous file > 10MB)"
+        fi
+    fi
 }
 
 #
@@ -44,21 +59,17 @@ TEMP_DEST=""  # Will be set to SOURCE_DIR during file processing
 #
 cleanup_killswitch() {
     if [ -f "$BACKUP_DIR/iptables.backup" ]; then
-        echo "... Restoring original iptables rules"
         log_message "INFO" "Restoring original iptables rules"
         sudo iptables-restore < "$BACKUP_DIR/iptables.backup"
         rm "$BACKUP_DIR/iptables.backup"
-        echo "... iptables rules restored"
     fi
 }
 
 cleanup_dns() {
     if [ -f "$BACKUP_DIR/resolv.conf.backup" ]; then
-        echo "... Restoring original DNS configuration"
         log_message "INFO" "Restoring original DNS configuration"
         sudo chattr -i /etc/resolv.conf 2>/dev/null || true
         sudo mv "$BACKUP_DIR/resolv.conf.backup" /etc/resolv.conf
-        echo "... DNS configuration restored"
     fi
 }
 
@@ -142,7 +153,6 @@ stop_service_by_pid() {
     if [ -f "$pid_file" ]; then
         local pid=$(cat "$pid_file")
         if kill -0 $pid 2>/dev/null; then
-            echo "... Stopping $service (PID: $pid)"
             log_message "INFO" "Stopping $service (PID: $pid)"
             kill $pid 2>/dev/null
             sleep 1
@@ -151,20 +161,17 @@ stop_service_by_pid() {
                 kill -9 $pid 2>/dev/null
             fi
             rm "$pid_file"
-            echo "... $service has been stopped"
         else
-            echo "... $service not running (stale PID file)"
+            log_message "INFO" "$service not running (stale PID file removed)"
             rm "$pid_file"
         fi
     else
         # Fallback to pkill if no PID file
         if pgrep -f "$service" >/dev/null; then
-            echo "... Stopping $service (no PID file, using pkill)"
             log_message "WARN" "Stopping $service using pkill (no PID file found)"
             sudo pkill -f "$service"
-            echo "... $service has been stopped"
         else
-            echo "... $service is not running"
+            log_message "INFO" "$service is not running"
         fi
     fi
 }
@@ -172,64 +179,51 @@ stop_service_by_pid() {
 # Function to stop services
 
 shutdown_services() {
-    echo ""
+    rotate_logs
     log_message "INFO" "Starting service shutdown"
+    echo ""
     
     if [[ "$SSERVICE" == "q" ]]; then
         # Shutdown qbittorrent using PID
-        echo "... Stopping qbittorrent"
         stop_service_by_pid "qbittorrent"
         sleep 1
     else
         # Shutdown Deluge Web and Deluge Daemon
         for SERVICE in deluge-web deluged; do
             if [[ "$SERVICE" == "deluge-web" ]]; then
-                echo "... Stopping Deluge Web Server"
+                log_message "INFO" "Stopping Deluge Web Server"
             else
-                echo "... Stopping Deluge Server"
+                log_message "INFO" "Stopping Deluge Server"
             fi
             if pgrep -x "$SERVICE" >/dev/null; then
-                echo "... $SERVICE is running"
                 if [[ "$SERVICE" == "deluged" ]]; then
                     xDELUGE="$(deluge-console "connect 127.0.0.1:58846 ; pause * ; halt ; quit")"
-                    echo "... ${xDELUGE}"
+                    log_message "INFO" "$xDELUGE"
                 fi
                 sudo pkill -f "$SERVICE"
-                echo "... $SERVICE has been stopped."
-            else
-                echo "... $SERVICE is not running"
             fi
             sleep 1
         done
     fi
 
-    echo ""
-    echo "... Stopping checkip script"
+    log_message "INFO" "Stopping checkip script"
     stop_service_by_pid "checkip"
     sleep 1
     screen -S "checkip" -p 0 -X quit > /dev/null 2>&1
 
-    echo ""
-    echo "... Stopping OpenVPN"
+    log_message "INFO" "Stopping OpenVPN"
     if pgrep -f "openvpn" >/dev/null; then
-        log_message "INFO" "Stopping OpenVPN"
         sudo pkill -f "openvpn"
-        echo "... OpenVPN has been stopped"
         sleep 2
-    else
-        echo "... OpenVPN is not running"
     fi
 
     # Clean up all security measures
-    echo ""
-    echo "... Cleaning up security measures"
     log_message "INFO" "Cleaning up security measures"
     cleanup_killswitch
     cleanup_dns
     restore_ipv6
     restore_qbittorrent_config
     cleanup_ufw_rule
-    echo "... All security measures reversed"
     log_message "INFO" "All security measures reversed - system restored to normal"
     echo ""
 }

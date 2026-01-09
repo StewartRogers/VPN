@@ -1,4 +1,24 @@
 *.log
+*.log.*.gz
 *.ovpn
 __pycache__/
 *.pyc
+
+# VPN runtime logs and state
+vpn_logs/
+
+# Backup and temporary files
+/tmp/vpn_backups/
+/tmp/vpn_pids/
+
+# IDE and system files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# qBittorrent logs
+qbit.log
+checkvpn.log

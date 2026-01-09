@@ -194,8 +194,8 @@ curl https://api.ipify.org
 # Check monitoring logs
 tail -f checkvpn.log
 
-# Check application logs
-tail -f ~/.vpn_logs/vpn.log
+# Check application logs (default location)
+tail -f ./vpn_logs/vpn.log
 ```
 
 ## Troubleshooting
@@ -216,7 +216,7 @@ See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues and solutions.
 
 3. Remove configuration and logs:
    ```bash
-   rm -rf ~/.vpn_config.conf ~/.vpn_logs /tmp/vpn_backups /tmp/vpn_pids
+   rm -rf ~/.vpn_config.conf ./vpn_logs /tmp/vpn_backups /tmp/vpn_pids
    ```
 
 ## Notes
