@@ -33,7 +33,7 @@ fi
 BACKUP_DIR="${BACKUP_DIR:-/tmp/vpn_backups}"
 PID_DIR="${PID_DIR:-/tmp/vpn_pids}"
 LOG_DIR="${LOG_DIR:-$HOME/.vpn_logs}"
-SETUP_KILLSWITCH="${SETUP_KILLSWITCH:-true}"
+SETUP_KILLSWITCH="${SETUP_KILLSWITCH:-false}"
 PREVENT_DNS_LEAK="${PREVENT_DNS_LEAK:-true}"
 DISABLE_IPV6="${DISABLE_IPV6:-true}"
 BIND_TO_VPN_INTERFACE="${BIND_TO_VPN_INTERFACE:-true}"
@@ -205,9 +205,11 @@ setup_dns() {
 disable_ipv6() {
     log_message "INFO" "Disabling IPv6 to prevent leaks..."
     
-    # Save current state
-    local CURRENT_IPV6=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}')
-    echo "$CURRENT_IPV6" > "$BACKUP_DIR/ipv6.backup"
+    # Save current state for both settings
+    local CURRENT_IPV6_ALL=$(sysctl net.ipv6.conf.all.disable_ipv6 2>/dev/null | awk '{print $3}')
+    local CURRENT_IPV6_DEFAULT=$(sysctl net.ipv6.conf.default.disable_ipv6 2>/dev/null | awk '{print $3}')
+    echo "$CURRENT_IPV6_ALL" > "$BACKUP_DIR/ipv6_all.backup"
+    echo "$CURRENT_IPV6_DEFAULT" > "$BACKUP_DIR/ipv6_default.backup"
     
     # Disable IPv6
     sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1 > /dev/null
@@ -343,12 +345,29 @@ fi
 if [[ "${UFWCONFIRM,,}" == "y" ]]; then
     read -p "Enter the port number you want to allow: " UFWPORT
     read -p "Enter the protocol (tcp/udp): " UFWPROTO
-    echo ""
-    echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
-    sudo ufw allow $UFWPORT/$UFWPROTO > /dev/null
-    echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
-    log_message "INFO" "UFW rule added: $UFWPORT/$UFWPROTO"
-    echo ""
+    
+    # Validate port number (1-65535)
+    if ! [[ "$UFWPORT" =~ ^[0-9]+$ ]] || [ "$UFWPORT" -lt 1 ] || [ "$UFWPORT" -gt 65535 ]; then
+        echo "Error: Invalid port number. Must be between 1 and 65535."
+        log_message "ERROR" "Invalid UFW port number: $UFWPORT"
+        echo ""
+    # Validate protocol (tcp or udp only)
+    elif ! [[ "${UFWPROTO,,}" =~ ^(tcp|udp)$ ]]; then
+        echo "Error: Invalid protocol. Must be 'tcp' or 'udp'."
+        log_message "ERROR" "Invalid UFW protocol: $UFWPROTO"
+        echo ""
+    else
+        echo ""
+        echo "... Configuring UFW rule for port $UFWPORT/$UFWPROTO"
+        
+        # Save UFW rule for later removal
+        echo "$UFWPORT/$UFWPROTO" > "$BACKUP_DIR/ufw_rule.backup"
+        
+        sudo ufw allow "$UFWPORT/$UFWPROTO" > /dev/null
+        echo "... UFW rule applied for $UFWPORT/$UFWPROTO"
+        log_message "INFO" "UFW rule added: $UFWPORT/$UFWPROTO"
+        echo ""
+    fi
 fi
 
 #

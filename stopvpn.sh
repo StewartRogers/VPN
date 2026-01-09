@@ -63,14 +63,38 @@ cleanup_dns() {
 }
 
 restore_ipv6() {
-    if [ -f "$BACKUP_DIR/ipv6.backup" ]; then
+    if [ -f "$BACKUP_DIR/ipv6_all.backup" ] && [ -f "$BACKUP_DIR/ipv6_default.backup" ]; then
         echo "... Restoring IPv6 settings"
         log_message "INFO" "Restoring IPv6 settings"
+        ORIGINAL_ALL=$(cat "$BACKUP_DIR/ipv6_all.backup")
+        ORIGINAL_DEFAULT=$(cat "$BACKUP_DIR/ipv6_default.backup")
+        
+        # Validate values are 0 or 1
+        if [[ "$ORIGINAL_ALL" =~ ^[01]$ ]] && [[ "$ORIGINAL_DEFAULT" =~ ^[01]$ ]]; then
+            sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL_ALL > /dev/null
+            sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL_DEFAULT > /dev/null
+            rm "$BACKUP_DIR/ipv6_all.backup" "$BACKUP_DIR/ipv6_default.backup"
+            echo "... IPv6 settings restored"
+        else
+            echo "... Warning: Invalid IPv6 backup values, skipping restoration"
+            log_message "WARN" "Invalid IPv6 backup values: all=$ORIGINAL_ALL, default=$ORIGINAL_DEFAULT"
+        fi
+    elif [ -f "$BACKUP_DIR/ipv6.backup" ]; then
+        # Fallback for old backup format
+        echo "... Restoring IPv6 settings (legacy format)"
+        log_message "INFO" "Restoring IPv6 settings (legacy format)"
         ORIGINAL=$(cat "$BACKUP_DIR/ipv6.backup")
-        sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL > /dev/null
-        sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL > /dev/null
-        rm "$BACKUP_DIR/ipv6.backup"
-        echo "... IPv6 settings restored"
+        
+        # Validate value is 0 or 1
+        if [[ "$ORIGINAL" =~ ^[01]$ ]]; then
+            sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL > /dev/null
+            sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL > /dev/null
+            rm "$BACKUP_DIR/ipv6.backup"
+            echo "... IPv6 settings restored"
+        else
+            echo "... Warning: Invalid IPv6 backup value, skipping restoration"
+            log_message "WARN" "Invalid IPv6 backup value: $ORIGINAL"
+        fi
     fi
 }
 
@@ -81,6 +105,30 @@ restore_qbittorrent_config() {
         log_message "INFO" "Restoring qBittorrent configuration"
         mv "$BACKUP_DIR/qBittorrent.conf.backup" "$CONFIG_FILE"
         echo "... qBittorrent configuration restored"
+    fi
+}
+
+cleanup_ufw_rule() {
+    if [ -f "$BACKUP_DIR/ufw_rule.backup" ]; then
+        echo "... Removing UFW rule added by VPN startup"
+        log_message "INFO" "Removing UFW rule"
+        UFW_RULE=$(cat "$BACKUP_DIR/ufw_rule.backup")
+        
+        # Validate the rule format (port/protocol) and port range
+        if [[ "$UFW_RULE" =~ ^([0-9]+)/(tcp|udp)$ ]]; then
+            local PORT="${BASH_REMATCH[1]}"
+            if [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
+                sudo ufw delete allow "$UFW_RULE" > /dev/null 2>&1
+                echo "... UFW rule removed"
+            else
+                echo "... Warning: Invalid UFW port number in backup, skipping removal"
+                log_message "WARN" "Invalid UFW port number: $UFW_RULE"
+            fi
+        else
+            echo "... Warning: Invalid UFW rule format in backup, skipping removal"
+            log_message "WARN" "Invalid UFW rule format: $UFW_RULE"
+        fi
+        rm "$BACKUP_DIR/ufw_rule.backup"
     fi
 }
 
@@ -180,6 +228,7 @@ shutdown_services() {
     cleanup_dns
     restore_ipv6
     restore_qbittorrent_config
+    cleanup_ufw_rule
     echo "... All security measures reversed"
     log_message "INFO" "All security measures reversed - system restored to normal"
     echo ""

@@ -83,7 +83,9 @@ IP_CHECK_INTERVAL=10
 MAX_RECONNECT_ATTEMPTS=3
 
 # Network security settings
-SETUP_KILLSWITCH=true
+# Note: Killswitch disabled by default. Use UFW for firewall management.
+# Set to true to enable iptables-based killswitch (may conflict with UFW)
+SETUP_KILLSWITCH=false
 PREVENT_DNS_LEAK=true
 DISABLE_IPV6=true
 
