@@ -93,7 +93,8 @@ IP_CHECK_INTERVAL=10
 MAX_RECONNECT_ATTEMPTS=3
 
 # Security
-SETUP_KILLSWITCH=true
+# Note: Killswitch disabled by default. Use UFW for firewall management.
+SETUP_KILLSWITCH=false
 PREVENT_DNS_LEAK=true
 DISABLE_IPV6=true
 BIND_TO_VPN_INTERFACE=true
