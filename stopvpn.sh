@@ -245,275 +245,176 @@ else
     echo -e "\nSkipped shutting down services.\n"
 fi
 
+#
+# Helper functions for file processing
+#
+clean_filename() {
+    local filename=$1
+    local ext=$2
+    
+    # Remove extensions, quality tags, release info, brackets/parens, convert spaces to dots
+    local cleanname=$(echo "$filename" | \
+      sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
+      sed -E 's/[\s.]+[0-9]{3,4}p.*$//i' | \
+      sed -E 's/[\s.]+(HEVC|x26[45]|H\.?264|h\.?264|BluRay|BLU-RAY|WEBRip|WEB-DL|WEB|AMZN|FLUX|YIFY|RARBG|MeGusta|10bit|8bit|AAC|DDP|FLAC).*$//i' | \
+      sed -E 's/\[.*\]//g; s/\(.*\)//g' | \
+      sed -E 's/[\s.]+$//; s/^[\s.]+//' | \
+      sed -E 's/\./ /g' | \
+      sed -E 's/\s+/./g')
+    
+    echo "${cleanname}.${ext,,}"
+}
+
+file_exists_same_size() {
+    local file1=$1
+    local file2=$2
+    
+    if [[ ! -e "$file2" ]]; then
+        return 1
+    fi
+    
+    local size1=$(stat -c%s "$file1" 2>/dev/null)
+    local size2=$(stat -c%s "$file2" 2>/dev/null)
+    
+    [[ "$size1" == "$size2" ]]
+}
+
+rename_video_file() {
+    local src=$1
+    local dst=$2
+    local force=${3:-false}
+    
+    if file_exists_same_size "$src" "$dst"; then
+        log_message "INFO" "File already exists with same size: $dst"
+        echo "  Already exists (same size) - skipping"
+        return 2  # Skip code
+    fi
+    
+    local mv_flag="-n"
+    [[ "$force" == "true" ]] && mv_flag="-f"
+    
+    if mv $mv_flag "$src" "$dst" 2>/dev/null; then
+        log_message "INFO" "Renamed: $src -> $dst"
+        echo "  ✓ Renamed successfully"
+        return 0
+    else
+        log_message "ERROR" "Failed to rename: $src -> $dst"
+        echo "  ✗ Failed to rename"
+        return 1
+    fi
+}
+
 # Prompt user to skip rename and move files section
 read -rp "Do you want to rename and move video files? [y/N]: " do_rename
 if [[ "${do_rename,,}" == "y" ]]; then
+    log_message "INFO" "Starting video file processing"
     read -er -p "Enter the full path to the source directory: " SOURCE_DIR
     SOURCE_DIR="${SOURCE_DIR%/}"
-    # Set destination to same directory as source
-    TEMP_DEST="$SOURCE_DIR"
 
     if [[ ! -d "$SOURCE_DIR" ]]; then
+        log_message "ERROR" "Source directory not found: $SOURCE_DIR"
         echo "Error: Source directory not found: $SOURCE_DIR"
         exit 1
     fi
 
-    # Count all matching files (root + subdirectories)
+    # Count matching files
     file_count=$(find "$SOURCE_DIR" -type f \( -iname "*.mp4" -o -iname "*.mkv" \) | wc -l)
+    log_message "INFO" "Found $file_count video files in $SOURCE_DIR"
+    
     if [[ "$file_count" -eq 0 ]]; then
         echo "No .mp4 or .mkv files found in $SOURCE_DIR."
         echo ""
         exit 0
     fi
 
-    # Work from the source directory so we can use relative paths
-    cd "$SOURCE_DIR" || { echo "Failed to access $SOURCE_DIR"; exit 1; }
+    cd "$SOURCE_DIR" || { log_message "ERROR" "Failed to access $SOURCE_DIR"; exit 1; }
 
-    # Get all video files (including those in subdirectories)
-    readarray -t files < <(find . -type f \( -iname "*.mp4" -o -iname "*.mkv" \))
-    total_files=${#files[@]}
+    # Get and sort files
+    readarray -t files < <(find . -type f \( -iname "*.mp4" -o -iname "*.mkv" \) | sort)
+    echo -e "\nFound ${#files[@]} video files to process.\n"
 
-    if [[ $total_files -eq 0 ]]; then
-        echo "No video files found."
-        exit 0
-    fi
-
-    # Sort files by directory depth (subdirectories first)
-    IFS=$'\n' files=($(printf "%s\n" "${files[@]}" | sort))
-    total_files=${#files[@]}
-
-    echo -e "\nFound $total_files video files to process."
-
-    # Process each file one at a time
+    # Process each file
     for file in "${files[@]}"; do
         [ -e "$file" ] || continue
 
-        # Get relative path for display
         rel_path="${file#./}"
+        echo -e "----------------------------------------"
+        echo "File: $rel_path"
         
-        echo -e "\n----------------------------------------"
-        echo "Current file: $rel_path"
-
-        # Note if file is in subdirectory for later
+        # Check if in subdirectory
         in_subdir=false
+        subdir_path=""
         if [[ "$file" =~ ^\.\/[^/]+\/ ]]; then
-            # File path has at least one subdirectory level after ./
             in_subdir=true
-            dir_path=$(dirname "$file")
-            echo "Note: This file is in subdirectory: $dir_path"
+            subdir_path=$(dirname "$file")
+            echo "  Location: subdirectory ($subdir_path)"
         fi
         
-        # Extract filename and extension
+        # Generate clean filename
         filename=$(basename "$file")
         ext="${file##*.}"
+        newname=$(clean_filename "$filename" "$ext")
         
-        # Clean up filename using multiple sed operations:
-        # 1. Remove file extensions
-        # 2. Remove content in brackets and parentheses
-        # 3. Remove quality tags, release group names, and encoding info
-        # 4. Trim trailing/leading spaces
-        cleanname=$(echo "$filename" | \
-          sed -E 's/\.[mM][kK][vV]$//; s/\.[mM][pP]4$//' | \
-          sed -E 's/[\s.]+1080p.*$//i; s/[\s.]+720p.*$//i; s/[\s.]+480p.*$//i; s/[\s.]+2160p.*$//i' | \
-          sed -E 's/[\s.]+(HEVC|x264|x265|H\.?264|h\.?264).*$//i' | \
-          sed -E 's/[\s.]+(BluRay|BLU-RAY|WEBRip|WEB-DL|WEB|AMZN|FLUX|YIFY|RARBG|MeGusta).*$//i' | \
-          sed -E 's/[\s.]+(10bit|8bit|AAC|DDP|FLAC).*$//i' | \
-          sed -E 's/\[.*\]//g; s/\(.*\)//g' | \
-          sed -E 's/[\s.]+$//; s/^[\s.]+//' | \
-          sed -E 's/\./ /g')
-        
-        # Format the cleaned filename by converting spaces to dots
-        newname="$(echo "$cleanname" | sed -E 's/\s+/./g')".${ext,,}
+        echo -e "\n  Proposed: $newname"
+        read -rp "  Rename? [y/N/q]: " confirm_rename
 
-        # Show the proposed new name
-        echo -e "\nProposed rename:"
-        echo "  From: $file"
-        echo "  To:   $newname"
-
-        # Confirm the rename
-        read -rp "Proceed with this rename? [y/N/q=quit]: " confirm_rename
-
-        if [[ "${confirm_rename,,}" == "q" ]]; then
-            echo "Exiting file processing..."
-            break
-        fi
-
-        if [[ "$confirm_rename" =~ ^[Yy]$ ]]; then
-                if [[ -e "$newname" ]]; then
-                    # Check if it's the same file (same size)
-                    current_size=$(stat -c%s "$file" 2>/dev/null)
-                    existing_size=$(stat -c%s "$newname" 2>/dev/null)
-                    
-                    if [[ "$current_size" == "$existing_size" ]]; then
-                        # Same file already exists - skip rename
-                        echo "  File with same name and size already exists: $newname"
-                        echo "  Skipping rename operation."
-                        file="$newname"  # Update file reference to the renamed version
-                    else
-                        # Different file with same name - ask to overwrite
-                        echo "  File already exists: $newname (different size)"
-                        read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_overwrite
-                        if [[ "$confirm_overwrite" =~ ^[Yy]$ ]]; then
-                            if mv -f "$file" "$newname" 2>/dev/null; then
-                                echo "  File overwritten successfully."
-                            else
-                                echo "  Error: Failed to overwrite file."
-                                continue
+        case "${confirm_rename,,}" in
+            q)
+                log_message "INFO" "File processing aborted by user"
+                echo "Exiting..."
+                break
+                ;;
+            y)
+                # Handle renaming based on location
+                if [[ "$in_subdir" == "true" ]]; then
+                    # Rename in subdirectory
+                    local_newname="$subdir_path/$newname"
+                    if rename_video_file "$file" "$local_newname"; then
+                        file="$local_newname"
+                        
+                        # Ask to flatten to main directory
+                        read -rp "  Move to main directory? [Y/n]: " move_main
+                        if [[ ! "${move_main,,}" == "n" ]]; then
+                            if file_exists_same_size "$file" "$newname"; then
+                                echo "  Already exists in main (same size) - skipping"
+                                log_message "INFO" "Skipped move to main: $newname (duplicate)"
+                            elif rename_video_file "$file" "$newname"; then
+                                # Clean up empty subdirectory
+                                rmdir "$subdir_path" 2>/dev/null && echo "  Removed empty subdirectory"
                             fi
-                        else
-                            echo "  Skipping: keeping original file."
-                            continue
                         fi
                     fi
                 else
-                    # For subdirectory files, rename within the subdirectory
-                    # For main directory files, rename in place
-                    if [[ "$in_subdir" == "true" ]]; then
-                        current_dir=$(dirname "$file")
-                        subdir_newname="$current_dir/$newname"
-                        if mv -n "$file" "$subdir_newname" 2>/dev/null; then
-                            echo "  Renamed successfully."
-                            file="$subdir_newname"
-                        else
-                            echo "  Error: Failed to rename file."
-                            continue
-                        fi
-                    else
-                        if mv -n "$file" "$newname" 2>/dev/null; then
-                            echo "  Renamed successfully."
-                            file="$newname"
-                        else
-                            echo "  Error: Failed to rename file."
-                            continue
-                        fi
-                    fi
-
-                    # If file was in subdirectory, ask about moving it to main directory first
-                    if [[ "$in_subdir" == "true" ]]; then
-                        read -rp "Move renamed file to main directory? [y/N/q=quit]: " move_to_main
-                        
-                        if [[ "${move_to_main,,}" == "q" ]]; then
-                            echo "Exiting file processing..."
-                            break
-                        fi
-                        
-                        if [[ "$move_to_main" =~ ^[Yy]$ ]]; then
-                            if [[ -e "$newname" ]]; then
-                                # Check if it's the same file (same size)
-                                subdir_size=$(stat -c%s "$file" 2>/dev/null)
-                                main_size=$(stat -c%s "$newname" 2>/dev/null)
-                                
-                                if [[ "$subdir_size" == "$main_size" ]]; then
-                                    # Same file already exists in main - skip move
-                                    echo "Note: File with same name and size already exists in main directory"
-                                    echo "Skipping move operation."
-                                else
-                                    # Different file with same name - ask to overwrite
-                                    echo "Note: File with same name exists in main directory (different size)"
-                                    read -rp "Overwrite file in main directory? [y/N]: " overwrite_main
-                                    if [[ "$overwrite_main" =~ ^[Yy]$ ]]; then
-                                        if mv -f "$file" "$newname" 2>/dev/null; then
-                                            file="$newname"
-                                            echo "Moved to main directory (overwritten)"
-                                            # Remove the subdirectory if the move was successful
-                                            subdir_path=$(dirname "$file")
-                                            if [[ -d "$subdir_path" ]]; then
-                                                rm -rf "$subdir_path" 2>/dev/null
-                                                echo "Removed subdirectory: $subdir_path"
-                                            fi
-                                        else
-                                            echo "Error: Failed to move file to main directory"
-                                        fi
-                                    else
-                                        echo "Keeping file in subdirectory"
-                                    fi
-                                fi
-                            else
-                                if mv "$file" "$newname" 2>/dev/null; then
-                                    file="$newname"
-                                    echo "Moved to main directory"
-                                    # Remove the subdirectory if the move was successful
-                                    subdir_path=$(dirname "$file")
-                                    if [[ -d "$subdir_path" ]]; then
-                                        rm -rf "$subdir_path" 2>/dev/null
-                                        echo "Removed subdirectory: $subdir_path"
-                                    fi
-                                else
-                                    echo "Error: Failed to move file to main directory"
-                                fi
-                            fi
-                        else
-                            echo "Keeping file in subdirectory"
-                        fi
-                    else
-                        # File is already in main directory, no need to move
-                        file="$newname"
-                    fi
-
-                    # Only ask about moving to destination folder if it's different from source
-                    if [[ "$TEMP_DEST" != "." && "$TEMP_DEST" != "$SOURCE_DIR" ]]; then
-                        # Check if file exists in destination with same name and size
-                        if [[ -e "$TEMP_DEST/$newname" ]]; then
-                            current_size=$(stat -c%s "$file" 2>/dev/null)
-                            dest_size=$(stat -c%s "$TEMP_DEST/$newname" 2>/dev/null)
-                            
-                            if [[ "$current_size" == "$dest_size" ]]; then
-                                # File with same name and size exists - skip silently
-                                echo "  Skipping move: file with same name and size already exists in destination."
-                            else
-                                # File exists but different size - ask about overwrite
-                                echo "  Warning: File already exists in destination with different size: $TEMP_DEST/$newname"
-                                read -rp "  Do you want to overwrite the existing file? [y/N]: " confirm_move_overwrite
-                                if [[ "$confirm_move_overwrite" =~ ^[Yy]$ ]]; then
-                                    if mv -f "$file" "$TEMP_DEST/" 2>/dev/null; then
-                                        echo "  Moved to destination (overwritten)."
-                                    else
-                                        echo "  Error: Failed to move file to destination."
-                                    fi
-                                else
-                                    echo "  Skipping move: keeping file in current location."
-                                fi
-                            fi
-                        else
-                            read -rp "Move file to destination folder? [y/N]: " confirm_move
-                            if [[ "$confirm_move" =~ ^[Yy]$ ]]; then
-                                if mv -n "$file" "$TEMP_DEST/" 2>/dev/null; then
-                                    echo "  Moved to destination folder."
-                                else
-                                    echo "  Error: Failed to move file to destination."
-                                fi
-                            else
-                                echo "  Keeping file in current location."
-                            fi
-                        fi
-                    fi
+                    # Rename in place
+                    rename_video_file "$file" "$newname"
                 fi
-            else
-                echo "Skipping rename and move operations for this file."
-            fi
+                ;;
+            *)
+                echo "  Skipped"
+                log_message "INFO" "Skipped: $rel_path"
+                ;;
+        esac
         
-        # Ask to continue to next file
-        echo -e "\n----------------------------------------"
-        read -rp "Continue to next file? [Y/n/q=quit]: " continue_processing
-        if [[ "${continue_processing,,}" == "q" ]]; then
-            echo "Exiting file processing..."
-            break
-        elif [[ "${continue_processing,,}" == "n" ]]; then
-            echo "Stopping file processing..."
-            break
-        fi
+        # Continue prompt
+        read -rp "\nContinue? [Y/n/q]: " continue_next
+        case "${continue_next,,}" in
+            q|n)
+                log_message "INFO" "File processing stopped by user"
+                echo "Stopping..."
+                break
+                ;;
+        esac
     done
 
-    # Return to original directory
-    cd - > /dev/null || { echo "Failed to return to original directory"; exit 1; }
-    
+    cd - > /dev/null
+    log_message "INFO" "File processing completed"
     echo -e "\n========================================="
     echo "File processing completed."
-    echo "========================================="
-    echo ""
+    echo "=========================================\n"
     exit 0
 else
     echo -e "\nSkipped renaming and moving files.\n"
+    log_message "INFO" "File processing skipped by user"
 fi
 
 #
