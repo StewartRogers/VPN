@@ -417,6 +417,10 @@ fi
 
 if [[ "${GETOVPN,,}" == "y" ]]; then
   rm -f *.ovpn
+  # Clean out the OpenVPN client directory when downloading a new config
+  log_message "INFO" "Cleaning $XVPNCHOME directory for new OVPN file..."
+  sudo rm -f "$XVPNCHOME"*.ovpn
+  
   if [ -z "$OVPNURL" ]; then
     read -p "Paste in a URL to download OVPN file: " OVPNURL
   fi
@@ -470,20 +474,42 @@ if [[ "${GETOVPN,,}" == "y" ]]; then
   for XFILE in *.ovpn; do
     log_message "INFO" "Moving $XFILE to $XVPNCHOME"
     sudo mv "$XFILE" "$XVPNCHOME"
+    # Set proper permissions: readable/writable by root only (600) for security
+    sudo chmod 600 "$XVPNCHOME$XFILE"
+    sudo chown root:root "$XVPNCHOME$XFILE"
     LAST_OVPN="$XFILE"
   done
   XCONFIGFILE="$XVPNCHOME$LAST_OVPN"
 else
-  # If not downloading, check if any .ovpn file exists in current dir
-  if ! ls *.ovpn 1> /dev/null 2>&1; then
-    log_message "ERROR" "No .ovpn file found in current directory"
+  # If not downloading, check if any .ovpn file exists in /etc/openvpn/client/
+  if ! sudo ls "$XVPNCHOME"*.ovpn 1> /dev/null 2>&1; then
+    log_message "ERROR" "No .ovpn file found in $XVPNCHOME"
+    log_message "INFO" "Checking for .ovpn files in current directory..."
+    if ls *.ovpn 1> /dev/null 2>&1; then
+      log_message "INFO" "Found .ovpn file(s) in current directory, moving to $XVPNCHOME"
+      for XFILE in *.ovpn; do
+        sudo mv "$XFILE" "$XVPNCHOME"
+        # Set proper permissions: readable/writable by root only (600) for security
+        sudo chmod 600 "$XVPNCHOME$XFILE"
+        sudo chown root:root "$XVPNCHOME$XFILE"
+      done
+    else
+      ERROR_HANDLED=true
+      exit 1
+    fi
+  fi
+  # Get the newest OVPN file from the directory (sorted by modification time)
+  XCONFIGFILE=$(sudo ls -t "$XVPNCHOME"*.ovpn 2>/dev/null | head -1)
+  if [ -z "$XCONFIGFILE" ]; then
+    log_message "ERROR" "Failed to locate OVPN file in $XVPNCHOME"
     ERROR_HANDLED=true
     exit 1
   fi
-  for XFILE in *.ovpn; do
-    sudo mv "$XFILE" "$XVPNCHOME"
-  done
-  XCONFIGFILE="$XVPNCHOME$XFILE"
+  # Count available files and log if multiple exist
+  OVPN_COUNT=$(sudo find "$XVPNCHOME" -maxdepth 1 -name "*.ovpn" -type f 2>/dev/null | wc -l)
+  if [ "$OVPN_COUNT" -gt 1 ]; then
+    log_message "INFO" "Multiple OVPN files found in $XVPNCHOME. Using the newest: $(basename "$XCONFIGFILE")"
+  fi
 fi
 
 #
