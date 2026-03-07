@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VPN Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --border: #0f3460;
+      --text: #e0e0e0;
+      --muted: #888;
+      --green: #4caf50;
+      --red: #f44336;
+      --yellow: #ff9800;
+      --blue: #2196f3;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      font-size: 14px;
+      padding: 24px;
+    }
+
+    h1 { font-size: 20px; margin-bottom: 24px; letter-spacing: 1px; }
+    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    }
+
+    .card .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .card .value { font-size: 16px; font-weight: 600; }
+
+    .ok   { color: var(--green); }
+    .fail { color: var(--red); }
+    .warn { color: var(--yellow); }
+    .info { color: var(--blue); }
+    .dim  { color: var(--muted); }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 24px;
+    }
+
+    button {
+      padding: 8px 18px;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: opacity .15s;
+    }
+    button:disabled { opacity: .4; cursor: default; }
+    button:hover:not(:disabled) { opacity: .85; }
+
+    .btn-start     { background: var(--green);  color: #fff; }
+    .btn-stop      { background: var(--red);    color: #fff; }
+    .btn-reconnect { background: var(--blue);   color: #fff; }
+    .btn-save      { background: var(--border); color: var(--text); }
+    .btn-vpn-start    { background: #7b1fa2; color: #fff; }
+    .btn-vpn-stop     { background: #4a148c; color: #fff; }
+    .step-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+
+    .section { margin-bottom: 24px; }
+
+    .config-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: flex-end;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+    .field input {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 7px 10px;
+      font-size: 13px;
+      width: 160px;
+    }
+    .field input:focus { outline: 1px solid var(--blue); }
+
+    #log {
+      background: #0d0d1a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-family: monospace;
+      font-size: 12px;
+      height: 320px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    #log .line { line-height: 1.6; }
+    #log .line.crit { color: var(--red); }
+    #log .line.warn { color: var(--yellow); }
+    #log .line.ok   { color: var(--green); }
+
+    .log-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .log-toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; cursor: pointer; }
+    .log-toolbar input[type=checkbox] { cursor: pointer; }
+  </style>
+</head>
+<body>
+
+<h1>VPN Monitor</h1>
+
+<!-- Status cards -->
+<div class="section">
+  <h2>Status</h2>
+  <div class="grid">
+    <div class="card"><div class="label">Monitor</div><div class="value dim" id="s-running">—</div></div>
+    <div class="card"><div class="label">OpenVPN Process</div><div class="value dim" id="s-proc">—</div></div>
+    <div class="card"><div class="label">VPN Interface (tun0)</div><div class="value dim" id="s-iface">—</div></div>
+    <div class="card"><div class="label">IP Leak</div><div class="value dim" id="s-secure">—</div></div>
+    <div class="card"><div class="label">External IP</div><div class="value dim" id="s-ip">—</div></div>
+    <div class="card"><div class="label">qBittorrent</div><div class="value dim" id="s-qbt">—</div></div>
+    <div class="card"><div class="label">Reconnect Attempts</div><div class="value dim" id="s-reconnect">—</div></div>
+  </div>
+</div>
+
+<!-- Actions -->
+<div class="section">
+  <h2>Actions</h2>
+  <div class="actions" style="align-items:flex-start;gap:24px">
+    <div>
+      <div class="step-label">Step 1 — VPN</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button class="btn-vpn-start" id="btn-vpn-start" onclick="vpnAction('start')">Start VPN</button>
+        <button class="btn-vpn-stop"  id="btn-vpn-stop"  onclick="vpnAction('stop')">Stop VPN</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="text" id="ovpn-url" placeholder="Paste .ovpn URL to download & retry"
+               style="width:320px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:13px">
+        <button class="btn-save" onclick="downloadConfig()">Download</button>
+      </div>
+    </div>
+    <div>
+      <div class="step-label">Step 2 — Monitor</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-start"     id="btn-start"     onclick="action('start')">Start Monitor</button>
+        <button class="btn-stop"      id="btn-stop"      onclick="action('stop')">Stop Monitor</button>
+        <button class="btn-reconnect" id="btn-reconnect" onclick="action('reconnect')">Force Reconnect</button>
+      </div>
+    </div>
+    <div>
+      <div class="step-label">Step 3 — qBittorrent</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-start" id="btn-qbt-start" disabled onclick="post('/api/qbt/start').then(pollStatus)">Start qBittorrent</button>
+        <button class="btn-stop"  onclick="post('/api/qbt/stop').then(pollStatus)">Stop qBittorrent</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Configuration -->
+<div class="section">
+  <h2>Configuration</h2>
+  <div class="config-row">
+    <div class="field">
+      <label>Home IP (pre-VPN)</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="text" id="cfg-home-ip" placeholder="Detecting…" style="width:140px">
+        <button class="btn-save" onclick="detectHomeIP()" style="padding:7px 12px">Detect</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Fast Interval (s)</label>
+      <input type="number" id="cfg-fast" value="2" min="1" max="60">
+    </div>
+    <div class="field">
+      <label>IP Check Interval (s)</label>
+      <input type="number" id="cfg-ip" value="10" min="5" max="300">
+    </div>
+    <div class="field">
+      <label>Max Reconnects</label>
+      <input type="number" id="cfg-reconnects" value="3" min="1" max="10">
+    </div>
+    <button class="btn-save" onclick="saveConfig()">Save & Apply</button>
+  </div>
+</div>
+
+<!-- Logs -->
+<div class="section">
+  <div class="log-toolbar">
+    <h2 style="margin:0">Log</h2>
+    <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
+  </div>
+  <div id="log"></div>
+</div>
+
+<script>
+  const logEl = document.getElementById('log');
+  const autoScroll = document.getElementById('autoscroll');
+
+  function setClass(el, cls) {
+    el.className = 'value ' + cls;
+  }
+
+  function bool(val, trueClass, falseClass) {
+    if (val === null || val === undefined) return ['—', 'dim'];
+    return val ? ['Yes', trueClass] : ['No', falseClass];
+  }
+
+  function updateStatus(s) {
+    const set = (id, text, cls) => {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = 'value ' + (cls || 'dim');
+    };
+
+    set('s-running',   s.running ? 'Running' : 'Stopped',  s.running ? 'ok' : 'fail');
+    set('s-proc',      s.vpn_process ? 'Up' : 'Down',       s.vpn_process ? 'ok' : 'fail');
+    set('s-iface',     s.vpn_interface ? 'Up' : 'Down',     s.vpn_interface ? 'ok' : 'fail');
+    set('s-secure',    s.secure === null ? '—' : s.secure ? 'No Leak' : 'LEAK!',
+                       s.secure === null ? 'dim' : s.secure ? 'ok' : 'fail');
+    set('s-ip',        s.external_ip || '—', s.external_ip ? 'info' : 'dim');
+    set('s-qbt',       s.qbittorrent ? 'Running' : 'Stopped', s.qbittorrent ? 'ok' : 'dim');
+    set('s-reconnect', s.reconnect_count ?? '—', s.reconnect_count > 0 ? 'warn' : 'dim');
+
+    document.getElementById('btn-start').disabled = s.running;
+    document.getElementById('btn-stop').disabled = !s.running;
+    document.getElementById('btn-qbt-start').disabled = !(s.running && s.secure);
+  }
+
+  function appendLog(line) {
+    const div = document.createElement('div');
+    div.className = 'line';
+    if (/CRITICAL|LEAK|ERROR/.test(line)) div.classList.add('crit');
+    else if (/WARNING|WARN/.test(line)) div.classList.add('warn');
+    else if (/secure|success|started/i.test(line)) div.classList.add('ok');
+    div.textContent = line;
+    logEl.appendChild(div);
+    if (autoScroll.checked) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  async function post(url) {
+    try {
+      const r = await fetch(url, { method: 'POST' });
+      let data;
+      try { data = await r.json(); } catch (_) { data = {}; }
+      if (!r.ok) alert(data.error || `Server error (${r.status}) calling ${url}`);
+      return { ok: r.ok, data };
+    } catch (e) {
+      alert(`Network error: ${e.message}`);
+      return { ok: false, data: {} };
+    }
+  }
+
+async function vpnAction(name) {
+    await post(`/api/vpn/${name}`);
+    pollStatus();
+  }
+
+  async function downloadConfig() {
+    const url = document.getElementById('ovpn-url').value.trim();
+    if (!url) return alert('Please paste a .ovpn URL first');
+    try {
+      const r = await fetch('/api/vpn/download-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const data = await r.json();
+      if (!r.ok) alert(data.error || 'Download failed');
+      else document.getElementById('ovpn-url').value = '';
+    } catch (e) {
+      alert(`Network error: ${e.message}`);
+    }
+  }
+
+  async function action(name) {
+    await post(`/api/${name}`);
+    pollStatus();
+  }
+
+  async function saveConfig() {
+    const body = {
+      home_ip:       document.getElementById('cfg-home-ip').value.trim(),
+      fast_interval: parseInt(document.getElementById('cfg-fast').value),
+      ip_interval:   parseInt(document.getElementById('cfg-ip').value),
+      max_reconnects: parseInt(document.getElementById('cfg-reconnects').value),
+    };
+    const r = await fetch('/api/configure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (data.error) alert(data.error);
+    else { logEl.innerHTML = ''; startLogStream(); pollStatus(); }
+  }
+
+  async function pollStatus() {
+    try {
+      const r = await fetch('/api/status');
+      if (r.ok) updateStatus(await r.json());
+    } catch (_) {}
+  }
+
+  // Load recent logs then open SSE stream
+  async function startLogStream() {
+    try {
+      const r = await fetch('/api/logs/recent');
+      if (r.ok) {
+        const lines = await r.json();
+        lines.forEach(appendLog);
+      }
+    } catch (_) {}
+
+    const es = new EventSource('/api/logs/stream');
+    es.onmessage = e => appendLog(JSON.parse(e.data));
+    es.onerror = () => {
+      // Reconnect after 3s on error
+      es.close();
+      setTimeout(startLogStream, 3000);
+    };
+  }
+
+  async function detectHomeIP() {
+    const input = document.getElementById('cfg-home-ip');
+    input.placeholder = 'Detecting…';
+    input.value = '';
+    try {
+      const r = await fetch('/api/detect-ip');
+      const data = await r.json();
+      if (data.ip) {
+        input.value = data.ip;
+        return data.ip;
+      }
+      input.placeholder = 'Detection failed';
+    } catch (_) {
+      input.placeholder = 'Detection failed';
+    }
+    return null;
+  }
+
+  async function init() {
+    const ip = await detectHomeIP();
+    if (ip) await saveConfig();  // also calls startLogStream and pollStatus
+    else startLogStream();       // still stream logs even if detection failed
+  }
+
+  // Poll status every 3 seconds
+  setInterval(pollStatus, 3000);
+  init();
+</script>
+</body>
+</html>
