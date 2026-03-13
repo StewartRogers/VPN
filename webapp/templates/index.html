@@ -19,33 +19,91 @@
       --blue: #2196f3;
     }
 
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+
     body {
       background: var(--bg);
       color: var(--text);
       font-family: system-ui, sans-serif;
-      font-size: 14px;
-      padding: 24px;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      padding: 12px 16px;
+      gap: 10px;
     }
 
-    h1 { font-size: 20px; margin-bottom: 24px; letter-spacing: 1px; }
-    h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 12px; }
+    /* ---- top bar ---- */
+    .app-header {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      flex-shrink: 0;
+    }
 
-    .grid {
+    /* ---- two-column layout ---- */
+    .app-layout {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: 12px;
-      margin-bottom: 24px;
+      grid-template-columns: 390px 1fr;
+      gap: 14px;
+      flex: 1;
+      min-height: 0;
     }
 
-    .card {
+    /* left panel scrolls if content is taller than viewport */
+    .left {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding-right: 2px;
+    }
+
+    /* right panel: log fills all available height */
+    .right {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    /* ---- surface panels ---- */
+    .panel {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 16px;
+      padding: 10px 12px;
+      flex-shrink: 0;
     }
 
-    .card .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
-    .card .value { font-size: 16px; font-weight: 600; }
+    .panel-title {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    /* ---- status grid: label … value  label … value ---- */
+    .status-grid {
+      display: grid;
+      grid-template-columns: auto 1fr auto 1fr;
+      gap: 5px 10px;
+      align-items: center;
+    }
+
+    .s-key {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .s-val {
+      font-size: 12px;
+      font-weight: 700;
+    }
 
     .ok   { color: var(--green); }
     .fail { color: var(--red); }
@@ -53,21 +111,16 @@
     .info { color: var(--blue); }
     .dim  { color: var(--muted); }
 
-    .actions {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      margin-bottom: 24px;
-    }
-
+    /* ---- buttons ---- */
     button {
-      padding: 8px 18px;
+      padding: 5px 11px;
       border: none;
-      border-radius: 6px;
-      font-size: 13px;
+      border-radius: 5px;
+      font-size: 12px;
       cursor: pointer;
       font-weight: 600;
       transition: opacity .15s;
+      white-space: nowrap;
     }
     button:disabled { opacity: .4; cursor: default; }
     button:hover:not(:disabled) { opacity: .85; }
@@ -76,41 +129,97 @@
     .btn-stop      { background: var(--red);    color: #fff; }
     .btn-reconnect { background: var(--blue);   color: #fff; }
     .btn-save      { background: var(--border); color: var(--text); }
-    .btn-vpn-start    { background: #7b1fa2; color: #fff; }
-    .btn-vpn-stop     { background: #4a148c; color: #fff; }
-    .btn-stop-all     { background: var(--red); color: #fff; font-size: 14px; padding: 10px 28px; }
-    .step-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+    .btn-vpn-start { background: #7b1fa2; color: #fff; }
+    .btn-vpn-stop  { background: #4a148c; color: #fff; }
+    .btn-stop-all  { background: var(--red); color: #fff; }
 
-    .section { margin-bottom: 24px; }
+    /* ---- steps (actions panel) ---- */
+    .step { margin-bottom: 9px; }
+    .step:last-child { margin-bottom: 0; }
 
-    .config-row {
+    .step-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      margin-bottom: 4px;
+    }
+
+    .step-btns {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    .step-btns:last-child { margin-bottom: 0; }
+
+    /* ---- inline text input (URL / file inputs inside steps) ---- */
+    .text-input {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      padding: 5px 8px;
+      font-size: 12px;
+      min-width: 0;
+    }
+    .text-input:focus { outline: 1px solid var(--blue); }
+
+    /* ---- config row ---- */
+    .cfg-row {
       display: flex;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 8px;
       align-items: flex-end;
     }
 
-    .field { display: flex; flex-direction: column; gap: 4px; }
-    .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+    .field { display: flex; flex-direction: column; gap: 3px; }
+    .field label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
     .field input {
-      background: var(--surface);
+      background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: 5px;
       color: var(--text);
-      padding: 7px 10px;
-      font-size: 13px;
-      width: 160px;
+      padding: 5px 8px;
+      font-size: 12px;
+      width: 100px;
     }
     .field input:focus { outline: 1px solid var(--blue); }
 
+    /* ---- log panel (right column) ---- */
+    .log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+      flex-shrink: 0;
+    }
+
+    .log-header span {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+    }
+
+    .log-header label {
+      display: flex;
+      gap: 5px;
+      align-items: center;
+      color: var(--muted);
+      font-size: 11px;
+      cursor: pointer;
+    }
+
     #log {
+      flex: 1;
+      min-height: 0;
       background: #0d0d1a;
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 12px;
+      padding: 10px;
       font-family: monospace;
-      font-size: 12px;
-      height: 320px;
+      font-size: 11px;
       overflow-y: auto;
       white-space: pre-wrap;
       word-break: break-all;
@@ -120,18 +229,10 @@
     #log .line.crit { color: var(--red); }
     #log .line.warn { color: var(--yellow); }
     #log .line.ok   { color: var(--green); }
+    #log .line.info { color: var(--blue); }
+    #log .line.dim  { color: var(--muted); }
 
-    .log-toolbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 6px;
-    }
-
-    .log-toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; cursor: pointer; }
-    .log-toolbar input[type=checkbox] { cursor: pointer; }
-
-    /* Token modal */
+    /* ---- token modal ---- */
     #token-modal {
       display: none;
       position: fixed;
@@ -146,43 +247,44 @@
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 10px;
-      padding: 28px 32px;
-      min-width: 320px;
+      padding: 24px 28px;
+      min-width: 300px;
       max-width: 90vw;
     }
-    #token-modal h3 { font-size: 15px; margin-bottom: 12px; }
-    #token-modal p  { font-size: 12px; color: var(--muted); margin-bottom: 16px; line-height: 1.6; }
+    #token-modal h3 { font-size: 14px; margin-bottom: 10px; }
+    #token-modal p  { font-size: 11px; color: var(--muted); margin-bottom: 14px; line-height: 1.6; }
     #token-modal input {
       width: 100%;
       background: var(--bg);
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: 5px;
       color: var(--text);
-      padding: 8px 10px;
+      padding: 7px 10px;
       font-size: 13px;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
     #token-modal input:focus { outline: 1px solid var(--blue); }
     #token-modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
-    /* File organizer table */
+    /* ---- file organizer table ---- */
+    #files-results { overflow-x: auto; }
     #files-results table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      font-size: 11px;
     }
     #files-results th {
       text-align: left;
       color: var(--muted);
-      font-size: 11px;
+      font-size: 10px;
       text-transform: uppercase;
       letter-spacing: .5px;
-      padding: 6px 8px;
+      padding: 5px 6px;
       border-bottom: 1px solid var(--border);
     }
     #files-results td {
-      padding: 6px 8px;
-      border-bottom: 1px solid rgba(255,255,255,.05);
+      padding: 5px 6px;
+      border-bottom: 1px solid rgba(255,255,255,.04);
       vertical-align: middle;
     }
     #files-results tr:hover td { background: rgba(255,255,255,.03); }
@@ -191,14 +293,14 @@
       border: 1px solid var(--border);
       border-radius: 4px;
       color: var(--text);
-      padding: 4px 8px;
-      font-size: 12px;
+      padding: 3px 6px;
+      font-size: 11px;
       width: 100%;
     }
     #files-results input[type=text]:focus { outline: 1px solid var(--blue); }
-    .file-result-ok   { color: var(--green); font-size: 12px; }
-    .file-result-err  { color: var(--red);   font-size: 12px; }
-    .file-result-skip { color: var(--muted); font-size: 12px; }
+    .file-result-ok   { color: var(--green); }
+    .file-result-err  { color: var(--red); }
+    .file-result-skip { color: var(--muted); }
   </style>
 </head>
 <body>
@@ -208,7 +310,7 @@
   <div class="modal-box">
     <h3>API Token Required</h3>
     <p>The server is configured with a token (<code>VPN_API_TOKEN</code>).
-       Enter it below. It will be stored in <code>localStorage</code> for this browser.</p>
+       Enter it below — stored in <code>localStorage</code> for this browser.</p>
     <input type="password" id="token-input" placeholder="Paste token here" autocomplete="off">
     <div class="modal-actions">
       <button class="btn-save" onclick="saveToken()">Save Token</button>
@@ -216,111 +318,125 @@
   </div>
 </div>
 
-<h1>VPN Monitor</h1>
+<div class="app-header">VPN Monitor</div>
 
-<!-- Status cards -->
-<div class="section">
-  <h2>Status</h2>
-  <div class="grid">
-    <div class="card"><div class="label">Monitor</div><div class="value dim" id="s-running">—</div></div>
-    <div class="card"><div class="label">OpenVPN Process</div><div class="value dim" id="s-proc">—</div></div>
-    <div class="card"><div class="label">VPN Interface (tun0)</div><div class="value dim" id="s-iface">—</div></div>
-    <div class="card"><div class="label">Default Route</div><div class="value dim" id="s-route">—</div></div>
-    <div class="card"><div class="label">Kill Switch</div><div class="value dim" id="s-ks">—</div></div>
-    <div class="card"><div class="label">IP Leak</div><div class="value dim" id="s-secure">—</div></div>
-    <div class="card"><div class="label">External IP</div><div class="value dim" id="s-ip">—</div></div>
-    <div class="card"><div class="label">qBittorrent</div><div class="value dim" id="s-qbt">—</div></div>
-  </div>
-</div>
+<div class="app-layout">
 
-<!-- Actions -->
-<div class="section">
-  <h2>Actions</h2>
-  <div class="actions" style="align-items:flex-start;gap:24px">
-    <div>
-      <div class="step-label">Step 1 — VPN</div>
-      <div style="display:flex;gap:8px;margin-bottom:8px">
-        <button class="btn-vpn-start" id="btn-vpn-start" onclick="vpnAction('start')">Start VPN</button>
-        <button class="btn-vpn-stop"  id="btn-vpn-stop"  onclick="vpnAction('stop')">Stop VPN</button>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-        <input type="text" id="ovpn-url" placeholder="Paste .ovpn URL to download"
-               style="width:290px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:13px">
-        <button class="btn-save" onclick="downloadConfig()">Download</button>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <input type="file" id="ovpn-file" accept=".ovpn"
-               style="background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;font-size:13px;width:290px">
-        <button class="btn-save" onclick="uploadConfig()">Upload</button>
-      </div>
-    </div>
-    <div>
-      <div class="step-label">Step 2 — Monitor</div>
-      <div style="display:flex;gap:8px">
-        <button class="btn-start"     id="btn-start"     onclick="action('start')">Start Monitor</button>
-        <button class="btn-stop"      id="btn-stop"      onclick="action('stop')">Stop Monitor</button>
-        <button class="btn-reconnect" id="btn-reconnect" onclick="action('reconnect')">Force Reconnect</button>
-      </div>
-    </div>
-    <div>
-      <div class="step-label">Step 3 — qBittorrent</div>
-      <div style="display:flex;gap:8px">
-        <button class="btn-start" id="btn-qbt-start" disabled onclick="post('/api/qbt/start').then(({ok})=>ok&&pollStatus())">Start qBittorrent</button>
-        <button class="btn-stop"  onclick="post('/api/qbt/stop').then(({ok})=>ok&&pollStatus())">Stop qBittorrent</button>
-      </div>
-    </div>
-  </div>
-  <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
-    <button class="btn-stop-all" id="btn-stop-all" onclick="stopAll()">Stop All</button>
-    <span style="font-size:12px;color:var(--muted);margin-left:12px">Stops qBittorrent, monitor, and VPN in order</span>
-  </div>
-</div>
+  <!-- ======== LEFT COLUMN ======== -->
+  <div class="left">
 
-<!-- Configuration -->
-<div class="section">
-  <h2>Configuration</h2>
-  <div class="config-row">
-    <div class="field">
-      <label>Home IP (pre-VPN)</label>
-      <div style="display:flex;gap:6px;align-items:center">
-        <input type="text" id="cfg-home-ip" value="{{ home_ip }}" placeholder="Detecting…" style="width:140px">
-        <button class="btn-save" onclick="detectHomeIP()" style="padding:7px 12px">Detect</button>
+    <!-- Status -->
+    <div class="panel">
+      <div class="panel-title">Status</div>
+      <div class="status-grid">
+        <span class="s-key">Monitor</span>       <span class="s-val dim" id="s-running">—</span>
+        <span class="s-key">Kill Switch</span>   <span class="s-val dim" id="s-ks">—</span>
+        <span class="s-key">VPN Process</span>   <span class="s-val dim" id="s-proc">—</span>
+        <span class="s-key">IP Leak</span>       <span class="s-val dim" id="s-secure">—</span>
+        <span class="s-key">VPN Interface</span> <span class="s-val dim" id="s-iface">—</span>
+        <span class="s-key">External IP</span>   <span class="s-val dim" id="s-ip">—</span>
+        <span class="s-key">Default Route</span> <span class="s-val dim" id="s-route">—</span>
+        <span class="s-key">qBittorrent</span>   <span class="s-val dim" id="s-qbt">—</span>
       </div>
     </div>
-    <div class="field">
-      <label>Fast Interval (s)</label>
-      <input type="number" id="cfg-fast" value="2" min="1" max="60">
-    </div>
-    <div class="field">
-      <label>IP Check Interval (s)</label>
-      <input type="number" id="cfg-ip" value="5" min="5" max="300">
-    </div>
-    <button class="btn-save" onclick="saveConfig()">Save & Apply</button>
-    <button class="btn-save" onclick="showTokenModal()" style="margin-left:8px">Change Token</button>
-  </div>
-</div>
 
-<!-- File Organizer -->
-<div class="section">
-  <h2>File Organizer</h2>
-  <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
-    <input type="text" id="files-dir" placeholder="/home/pi/Downloads"
-           style="flex:1;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:13px">
-    <button class="btn-save" onclick="scanFiles()">Scan</button>
-    <button class="btn-start" id="btn-apply-files" disabled onclick="applyFiles()">Apply Selected</button>
-    <button class="btn-save" id="btn-select-all" style="display:none" onclick="toggleSelectAll()">Select All</button>
-  </div>
-  <div id="files-results"></div>
-</div>
+    <!-- Actions -->
+    <div class="panel">
+      <div class="panel-title">Actions</div>
 
-<!-- Logs -->
-<div class="section">
-  <div class="log-toolbar">
-    <h2 style="margin:0">Log</h2>
-    <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
+      <div class="step">
+        <div class="step-label">Step 1 — VPN Config</div>
+        <div class="step-btns">
+          <input type="text" id="ovpn-url" class="text-input" placeholder="Paste .ovpn URL" style="flex:1;min-width:0">
+          <button class="btn-save" onclick="downloadConfig()">Download</button>
+        </div>
+        <div class="step-btns">
+          <input type="file" id="ovpn-file" accept=".ovpn" class="text-input" style="flex:1;min-width:0">
+          <button class="btn-save" onclick="uploadConfig()">Upload</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-label">Step 2 — VPN</div>
+        <div class="step-btns">
+          <button class="btn-vpn-start" id="btn-vpn-start" onclick="vpnAction('start')">Start VPN</button>
+          <button class="btn-vpn-stop"  id="btn-vpn-stop"  onclick="vpnAction('stop')">Stop VPN</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-label">Step 3 — Monitor</div>
+        <div class="step-btns">
+          <button class="btn-start"     id="btn-start"     onclick="action('start')">Start</button>
+          <button class="btn-stop"      id="btn-stop"      onclick="action('stop')">Stop</button>
+          <button class="btn-reconnect" id="btn-reconnect" onclick="action('reconnect')">Force Reconnect</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-label">Step 4 — qBittorrent</div>
+        <div class="step-btns">
+          <button class="btn-start" id="btn-qbt-start" disabled onclick="post('/api/qbt/start').then(({ok})=>ok&&pollStatus())">Start</button>
+          <button class="btn-stop"  onclick="post('/api/qbt/stop').then(({ok})=>ok&&pollStatus())">Stop</button>
+        </div>
+      </div>
+
+      <div style="padding-top:8px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px">
+        <button class="btn-stop-all" id="btn-stop-all" onclick="stopAll()">Stop All</button>
+        <span style="font-size:11px;color:var(--muted)">Stops qBittorrent, monitor &amp; VPN in order</span>
+      </div>
+    </div>
+
+    <!-- Configuration -->
+    <div class="panel">
+      <div class="panel-title">Configuration</div>
+      <div class="cfg-row">
+        <div class="field">
+          <label>Home IP (pre-VPN)</label>
+          <div style="display:flex;gap:5px;align-items:center">
+            <input type="text" id="cfg-home-ip" value="{{ home_ip }}" placeholder="Detecting…" style="width:130px">
+            <button class="btn-save" onclick="detectHomeIP()">Detect</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Fast Interval (s)</label>
+          <input type="number" id="cfg-fast" value="2" min="1" max="60">
+        </div>
+        <div class="field">
+          <label>IP Check (s)</label>
+          <input type="number" id="cfg-ip" value="5" min="5" max="300">
+        </div>
+        <div style="display:flex;gap:5px;align-items:flex-end">
+          <button class="btn-save" onclick="saveConfig()">Save &amp; Apply</button>
+          <button class="btn-save" onclick="showTokenModal()">Token</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- File Organizer -->
+    <div class="panel">
+      <div class="panel-title">File Organizer</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
+        <input type="text" id="files-dir" class="text-input" placeholder="/home/pi/Downloads" style="flex:1;min-width:0">
+        <button class="btn-save" onclick="scanFiles()">Scan</button>
+        <button class="btn-start" id="btn-apply-files" disabled onclick="applyFiles()">Apply</button>
+        <button class="btn-save" id="btn-select-all" style="display:none" onclick="toggleSelectAll()">All</button>
+      </div>
+      <div id="files-results"></div>
+    </div>
+
+  </div><!-- /left -->
+
+  <!-- ======== RIGHT COLUMN — LOG ======== -->
+  <div class="right">
+    <div class="log-header">
+      <span>Log</span>
+      <label><input type="checkbox" id="autoscroll" checked> Auto-scroll</label>
+    </div>
+    <div id="log"></div>
   </div>
-  <div id="log"></div>
-</div>
+
+</div><!-- /app-layout -->
 
 <script>
   const logEl = document.getElementById('log');
@@ -357,28 +473,18 @@
     init();
   }
 
-  // Show token modal on Enter key in the token input
   document.getElementById('token-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') saveToken();
   });
-
-  function setClass(el, cls) {
-    el.className = 'value ' + cls;
-  }
-
-  function bool(val, trueClass, falseClass) {
-    if (val === null || val === undefined) return ['—', 'dim'];
-    return val ? ['Yes', trueClass] : ['No', falseClass];
-  }
 
   function updateStatus(s) {
     const set = (id, text, cls) => {
       const el = document.getElementById(id);
       el.textContent = text;
-      el.className = 'value ' + (cls || 'dim');
+      el.className = 's-val ' + (cls || 'dim');
     };
 
-    set('s-running',   s.running ? 'Running' : 'Stopped',  s.running ? 'ok' : 'fail');
+    set('s-running', s.running ? 'Running' : 'Stopped', s.running ? 'ok' : 'fail');
 
     if (s.vpn_starting) {
       set('s-proc',  'Starting…', 'warn');
@@ -397,21 +503,18 @@
         s.kill_switch_active ? 'Active' : 'Inactive',
         s.kill_switch_active ? 'ok' : (s.running ? 'fail' : 'warn'));
 
-    set('s-secure',    s.secure === null ? '—' : s.secure ? 'No Leak' : 'LEAK!',
-                       s.secure === null ? 'dim' : s.secure ? 'ok' : 'fail');
-    set('s-ip',        s.external_ip || '—', s.external_ip ? 'info' : 'dim');
-    set('s-qbt',       s.qbittorrent ? 'Running' : 'Stopped', s.qbittorrent ? 'ok' : 'dim');
+    set('s-secure', s.secure === null ? '—' : s.secure ? 'No Leak' : 'LEAK!',
+                    s.secure === null ? 'dim' : s.secure ? 'ok' : 'fail');
+    set('s-ip',  s.external_ip || '—', s.external_ip ? 'info' : 'dim');
+    set('s-qbt', s.qbittorrent ? 'Running' : 'Stopped', s.qbittorrent ? 'ok' : 'dim');
 
-    // Step 1: VPN — disable Start while starting; disable Stop while monitor is running
     document.getElementById('btn-vpn-start').disabled = s.vpn_starting;
     document.getElementById('btn-vpn-stop').disabled  = s.running || s.vpn_starting;
 
-    // Step 2: Monitor — requires VPN up and not starting; disable Start if already running
     const vpnReady = !s.vpn_starting && s.vpn_process && s.vpn_interface;
     document.getElementById('btn-start').disabled = s.running || !vpnReady;
     document.getElementById('btn-stop').disabled  = !s.running;
 
-    // Step 3: qBittorrent — requires monitor running and no leak confirmed
     document.getElementById('btn-qbt-start').disabled = !(s.running && s.secure);
   }
 
@@ -444,7 +547,7 @@
     }
   }
 
-async function vpnAction(name) {
+  async function vpnAction(name) {
     await post(`/api/vpn/${name}`);
     pollStatus();
   }
@@ -487,7 +590,6 @@ async function vpnAction(name) {
     btn.disabled = true;
     btn.textContent = 'Stopping…';
     await post('/api/stop-all');
-    // Poll a few times to let shutdown complete, then re-enable
     let n = 0;
     const t = setInterval(async () => {
       await pollStatus();
@@ -518,7 +620,6 @@ async function vpnAction(name) {
     } catch (_) {}
   }
 
-  // Load recent logs then open SSE stream
   async function startLogStream() {
     try {
       const r = await fetch('/api/logs/recent', { headers: authHeaders({}) });
@@ -529,7 +630,6 @@ async function vpnAction(name) {
       }
     } catch (_) {}
 
-    // EventSource cannot send custom headers — pass token as query param
     const tokenParam = getToken() ? '?token=' + encodeURIComponent(getToken()) : '';
     const es = new EventSource('/api/logs/stream' + tokenParam);
     es.onmessage = e => appendLog(JSON.parse(e.data));
@@ -547,10 +647,7 @@ async function vpnAction(name) {
       const r = await fetch('/api/detect-ip', { headers: authHeaders({}) });
       if (r.status === 401) { showTokenModal(); return null; }
       const data = await r.json();
-      if (data.ip) {
-        input.value = data.ip;
-        return data.ip;
-      }
+      if (data.ip) { input.value = data.ip; return data.ip; }
       input.placeholder = 'Detection failed';
     } catch (_) {
       input.placeholder = 'Detection failed';
@@ -559,20 +656,12 @@ async function vpnAction(name) {
   }
 
   async function init() {
-    // If monitor is already configured (e.g. after a page refresh), don't re-configure
-    // as that would stop a running monitor.
     try {
       const r = await fetch('/api/status', { headers: authHeaders({}) });
       if (r.status === 401) { showTokenModal(); return; }
-      if (r.ok) {
-        updateStatus(await r.json());
-        startLogStream();
-        return;
-      }
+      if (r.ok) { updateStatus(await r.json()); startLogStream(); return; }
     } catch (_) {}
 
-    // Monitor not yet configured — only auto-detect home IP when VPN is NOT running,
-    // otherwise detection returns the VPN IP instead of the real ISP IP.
     let vpnAlreadyRunning = false;
     try {
       const vr = await fetch('/api/vpn/running', { headers: authHeaders({}) });
@@ -586,12 +675,11 @@ async function vpnAction(name) {
       appendLog('[WARNING] VPN is already active. Auto-detection would return the VPN IP, not your home IP. Enter your real ISP IP in Configuration and click Save & Apply.');
     } else {
       const ip = await detectHomeIP();
-      if (ip) await saveConfig();  // also calls startLogStream and pollStatus
+      if (ip) await saveConfig();
       else startLogStream();
     }
   }
 
-  // Poll status every 3 seconds
   setInterval(pollStatus, 3000);
   init();
 
@@ -603,7 +691,7 @@ async function vpnAction(name) {
     const dir = document.getElementById('files-dir').value.trim();
     if (!dir) return alert('Enter a directory path to scan');
     const resultsEl = document.getElementById('files-results');
-    resultsEl.innerHTML = '<span style="color:var(--muted);font-size:13px">Scanning…</span>';
+    resultsEl.innerHTML = '<span style="color:var(--muted)">Scanning…</span>';
     document.getElementById('btn-apply-files').disabled = true;
     document.getElementById('btn-select-all').style.display = 'none';
 
@@ -617,31 +705,28 @@ async function vpnAction(name) {
       const files = data.files;
 
       if (!files.length) {
-        resultsEl.innerHTML = '<span style="color:var(--muted);font-size:13px">No video files found.</span>';
+        resultsEl.innerHTML = '<span style="color:var(--muted)">No video files found.</span>';
         return;
       }
 
       let html = `<table>
         <thead><tr>
-          <th style="width:32px"><input type="checkbox" id="chk-all" onclick="toggleSelectAll()" checked></th>
+          <th style="width:24px"><input type="checkbox" id="chk-all" onclick="toggleSelectAll()" checked></th>
           <th>Original</th>
           <th>Rename to</th>
-          <th style="width:80px;text-align:center">Flatten</th>
-          <th style="width:70px;text-align:right">Size</th>
-          <th style="width:120px">Result</th>
+          <th style="width:60px;text-align:center">Flatten</th>
+          <th style="width:60px;text-align:right">Size</th>
+          <th style="width:80px">Result</th>
         </tr></thead><tbody>`;
 
       files.forEach((f, i) => {
-        const nameChanged = f.original !== f.proposed && f.proposed !== f.original.split('/').pop();
-        const sameBasename = f.proposed === f.original.split('/').pop();
-        const proposed = sameBasename ? f.proposed : f.proposed;
-        const kb = (f.size / 1048576).toFixed(1);
+        const mb = (f.size / 1048576).toFixed(1);
         html += `<tr data-i="${i}">
           <td><input type="checkbox" class="file-chk" checked></td>
-          <td style="color:var(--muted);word-break:break-all;max-width:220px">${escHtml(f.original)}</td>
+          <td style="color:var(--muted);word-break:break-all;max-width:160px">${escHtml(f.original)}</td>
           <td><input type="text" class="file-rename" value="${escHtml(f.proposed)}" placeholder="keep original"></td>
           <td style="text-align:center"><input type="checkbox" class="file-flatten" ${f.in_subdir ? 'checked' : ''}></td>
-          <td style="text-align:right;color:var(--muted)">${kb} MB</td>
+          <td style="text-align:right;color:var(--muted)">${mb} MB</td>
           <td class="file-result-cell"></td>
         </tr>`;
       });
@@ -650,8 +735,6 @@ async function vpnAction(name) {
       resultsEl.innerHTML = html;
       document.getElementById('btn-apply-files').disabled = false;
       document.getElementById('btn-select-all').style.display = '';
-
-      // Store file list for apply step
       resultsEl.dataset.files = JSON.stringify(files);
     } catch (e) {
       resultsEl.innerHTML = `<span class="file-result-err">Error: ${escHtml(e.message)}</span>`;
@@ -674,8 +757,7 @@ async function vpnAction(name) {
     const files = JSON.parse(resultsEl.dataset.files || '[]');
     const ops = [];
     rows.forEach((row, i) => {
-      const checked = row.querySelector('.file-chk').checked;
-      if (!checked) return;
+      if (!row.querySelector('.file-chk').checked) return;
       ops.push({
         original:  files[i].original,
         rename_to: row.querySelector('.file-rename').value.trim(),
@@ -699,14 +781,12 @@ async function vpnAction(name) {
       const data = await r.json();
       if (!r.ok) { alert(data.error || 'Organize failed'); return; }
 
-      // Map results back to rows by original path
       const resultMap = {};
       data.results.forEach(res => { resultMap[res.original] = res; });
 
       rows.forEach((row, i) => {
         if (!row.querySelector('.file-chk').checked) return;
-        const original = files[i].original;
-        const res = resultMap[original];
+        const res = resultMap[files[i].original];
         const cell = row.querySelector('.file-result-cell');
         if (!res) return;
         if (res.status === 'ok') {
@@ -722,7 +802,7 @@ async function vpnAction(name) {
       });
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Apply Selected';
+      btn.textContent = 'Apply';
     }
   }
 
