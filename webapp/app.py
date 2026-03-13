@@ -244,7 +244,6 @@ def configure():
         home_ip=home_ip,
         fast_interval=int(data.get("fast_interval", 2)),
         ip_interval=int(data.get("ip_interval", 5)),
-        max_reconnects=int(data.get("max_reconnects", 3)),
     )
     return jsonify({"configured": True, "home_ip": home_ip})
 

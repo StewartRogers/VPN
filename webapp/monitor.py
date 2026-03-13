@@ -56,11 +56,10 @@ def detect_external_ip():
 
 
 class VPNMonitor:
-    def __init__(self, home_ip, fast_interval=2, ip_interval=10, max_reconnects=3):
+    def __init__(self, home_ip, fast_interval=2, ip_interval=10):
         self.home_ip = home_ip
         self.fast_interval = fast_interval
         self.ip_interval = ip_interval
-        self.max_reconnects = max_reconnects
 
         self.status = {
             "running": False,
@@ -72,7 +71,6 @@ class VPNMonitor:
             "external_ip": None,
             "secure": None,
             "qbittorrent": False,
-            "reconnect_count": 0,
         }
 
         self._logs = []
@@ -783,7 +781,6 @@ class VPNMonitor:
         self.log(f"Fast checks every {self.fast_interval}s, IP checks every {self.ip_interval}s")
 
         last_ip_check = 0
-        reconnect_count = 0
 
         while not self._stop_event.is_set():
             vpn_proc = self.check_openvpn_process()
@@ -800,23 +797,11 @@ class VPNMonitor:
                     else "interface" if not vpn_iface
                     else "default route (traffic bypassing tunnel)"
                 )
-                self.log(f"VPN {what} down!", level="CRITICAL")
+                self.log(f"VPN {what} down — stopping everything", level="CRITICAL")
+                self.status["secure"] = False
                 if self.is_qbittorrent_running():
                     self.stop_qbittorrent()
-
-                if reconnect_count < self.max_reconnects:
-                    reconnect_count += 1
-                    self.status["reconnect_count"] = reconnect_count
-                    self.log(f"Reconnect attempt {reconnect_count}/{self.max_reconnects}", level="WARNING")
-                    if self.attempt_reconnect():
-                        reconnect_count = 0
-                        last_ip_check = time.time()
-                        self.status["reconnect_count"] = 0
-                        continue
-                else:
-                    self.log("Max reconnection attempts reached — stopping monitor", level="CRITICAL")
-                    self.status["secure"] = False
-                    break
+                break
 
             now_ts = time.time()
             if now_ts - last_ip_check >= self.ip_interval:
@@ -824,44 +809,20 @@ class VPNMonitor:
                 self.status["external_ip"] = ip
 
                 if ip is None:
-                    self.log("Cannot determine external IP — treating as potential leak", level="WARNING")
+                    self.log("Cannot determine external IP — stopping everything", level="CRITICAL")
                     self.status["secure"] = False
                     if self.is_qbittorrent_running():
                         self.stop_qbittorrent()
-                    if reconnect_count < self.max_reconnects:
-                        reconnect_count += 1
-                        self.status["reconnect_count"] = reconnect_count
-                        self.log(f"Reconnect attempt {reconnect_count}/{self.max_reconnects}", level="WARNING")
-                        if self.attempt_reconnect():
-                            reconnect_count = 0
-                            last_ip_check = time.time()
-                            self.status["reconnect_count"] = 0
-                            continue
-                    else:
-                        self.log("Max reconnection attempts reached — stopping monitor", level="CRITICAL")
-                        break
+                    break
                 elif ip.strip() == self.home_ip.strip():
-                    self.log(f"IP LEAK DETECTED: external IP {ip} matches home IP", level="CRITICAL")
+                    self.log(f"IP LEAK DETECTED: external IP {ip} matches home IP — stopping everything", level="CRITICAL")
                     self.status["secure"] = False
                     if self.is_qbittorrent_running():
                         self.stop_qbittorrent()
-                    if reconnect_count < self.max_reconnects:
-                        reconnect_count += 1
-                        self.status["reconnect_count"] = reconnect_count
-                        self.log(f"Reconnect attempt {reconnect_count}/{self.max_reconnects}", level="WARNING")
-                        if self.attempt_reconnect():
-                            reconnect_count = 0
-                            last_ip_check = time.time()
-                            self.status["reconnect_count"] = 0
-                            continue
-                    else:
-                        self.log("Max reconnection attempts reached — stopping monitor", level="CRITICAL")
-                        break
+                    break
                 else:
                     self.status["secure"] = True
                     self.log(f"VPN secure — external IP: {ip}")
-                    reconnect_count = 0
-                    self.status["reconnect_count"] = 0
 
                 last_ip_check = now_ts
 
@@ -870,8 +831,8 @@ class VPNMonitor:
 
         self.status["running"] = False
         if not self._stop_event.is_set():
-            # Internal exit (max reconnects / failure) — shut everything down
-            self.log("Monitoring stopped due to failures — shutting down qBittorrent and OpenVPN", level="WARNING")
+            # Internal exit (VPN failure / leak) — shut everything down
+            self.log("Monitoring stopped due to failure — shutting down qBittorrent and OpenVPN", level="WARNING")
             self.stop_qbittorrent()
             self.stop_vpn()
         else:
