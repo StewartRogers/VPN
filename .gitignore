@@ -7,9 +7,11 @@ __pycache__/
 # VPN runtime logs and state
 vpn_logs/
 
-# Backup and temporary files
-/tmp/vpn_backups/
-/tmp/vpn_pids/
+# qBittorrent runtime state (not a template — regenerated at runtime)
+qBittorrent-data.conf
+
+# Backup and temporary files (outside repo, listed for reference only)
+# ~/.vpn_backups/ — iptables/DNS backups, never in the repo
 
 # IDE and system files
 .vscode/

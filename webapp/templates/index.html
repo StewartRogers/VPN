@@ -78,6 +78,7 @@
     .btn-save      { background: var(--border); color: var(--text); }
     .btn-vpn-start    { background: #7b1fa2; color: #fff; }
     .btn-vpn-stop     { background: #4a148c; color: #fff; }
+    .btn-stop-all     { background: var(--red); color: #fff; font-size: 14px; padding: 10px 28px; }
     .step-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
 
     .section { margin-bottom: 24px; }
@@ -129,9 +130,91 @@
 
     .log-toolbar label { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; cursor: pointer; }
     .log-toolbar input[type=checkbox] { cursor: pointer; }
+
+    /* Token modal */
+    #token-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.7);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #token-modal.open { display: flex; }
+    #token-modal .modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 28px 32px;
+      min-width: 320px;
+      max-width: 90vw;
+    }
+    #token-modal h3 { font-size: 15px; margin-bottom: 12px; }
+    #token-modal p  { font-size: 12px; color: var(--muted); margin-bottom: 16px; line-height: 1.6; }
+    #token-modal input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    #token-modal input:focus { outline: 1px solid var(--blue); }
+    #token-modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+    /* File organizer table */
+    #files-results table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    #files-results th {
+      text-align: left;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    #files-results td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(255,255,255,.05);
+      vertical-align: middle;
+    }
+    #files-results tr:hover td { background: rgba(255,255,255,.03); }
+    #files-results input[type=text] {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 4px 8px;
+      font-size: 12px;
+      width: 100%;
+    }
+    #files-results input[type=text]:focus { outline: 1px solid var(--blue); }
+    .file-result-ok   { color: var(--green); font-size: 12px; }
+    .file-result-err  { color: var(--red);   font-size: 12px; }
+    .file-result-skip { color: var(--muted); font-size: 12px; }
   </style>
 </head>
 <body>
+
+<!-- Token modal -->
+<div id="token-modal">
+  <div class="modal-box">
+    <h3>API Token Required</h3>
+    <p>The server is configured with a token (<code>VPN_API_TOKEN</code>).
+       Enter it below. It will be stored in <code>localStorage</code> for this browser.</p>
+    <input type="password" id="token-input" placeholder="Paste token here" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn-save" onclick="saveToken()">Save Token</button>
+    </div>
+  </div>
+</div>
 
 <h1>VPN Monitor</h1>
 
@@ -142,6 +225,8 @@
     <div class="card"><div class="label">Monitor</div><div class="value dim" id="s-running">—</div></div>
     <div class="card"><div class="label">OpenVPN Process</div><div class="value dim" id="s-proc">—</div></div>
     <div class="card"><div class="label">VPN Interface (tun0)</div><div class="value dim" id="s-iface">—</div></div>
+    <div class="card"><div class="label">Default Route</div><div class="value dim" id="s-route">—</div></div>
+    <div class="card"><div class="label">Kill Switch</div><div class="value dim" id="s-ks">—</div></div>
     <div class="card"><div class="label">IP Leak</div><div class="value dim" id="s-secure">—</div></div>
     <div class="card"><div class="label">External IP</div><div class="value dim" id="s-ip">—</div></div>
     <div class="card"><div class="label">qBittorrent</div><div class="value dim" id="s-qbt">—</div></div>
@@ -159,10 +244,15 @@
         <button class="btn-vpn-start" id="btn-vpn-start" onclick="vpnAction('start')">Start VPN</button>
         <button class="btn-vpn-stop"  id="btn-vpn-stop"  onclick="vpnAction('stop')">Stop VPN</button>
       </div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <input type="text" id="ovpn-url" placeholder="Paste .ovpn URL to download & retry"
-               style="width:320px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:13px">
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+        <input type="text" id="ovpn-url" placeholder="Paste .ovpn URL to download"
+               style="width:290px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:13px">
         <button class="btn-save" onclick="downloadConfig()">Download</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="file" id="ovpn-file" accept=".ovpn"
+               style="background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:6px 10px;font-size:13px;width:290px">
+        <button class="btn-save" onclick="uploadConfig()">Upload</button>
       </div>
     </div>
     <div>
@@ -176,10 +266,14 @@
     <div>
       <div class="step-label">Step 3 — qBittorrent</div>
       <div style="display:flex;gap:8px">
-        <button class="btn-start" id="btn-qbt-start" disabled onclick="post('/api/qbt/start').then(pollStatus)">Start qBittorrent</button>
-        <button class="btn-stop"  onclick="post('/api/qbt/stop').then(pollStatus)">Stop qBittorrent</button>
+        <button class="btn-start" id="btn-qbt-start" disabled onclick="post('/api/qbt/start').then(({ok})=>ok&&pollStatus())">Start qBittorrent</button>
+        <button class="btn-stop"  onclick="post('/api/qbt/stop').then(({ok})=>ok&&pollStatus())">Stop qBittorrent</button>
       </div>
     </div>
+  </div>
+  <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border)">
+    <button class="btn-stop-all" id="btn-stop-all" onclick="stopAll()">Stop All</button>
+    <span style="font-size:12px;color:var(--muted);margin-left:12px">Stops qBittorrent, monitor, and VPN in order</span>
   </div>
 </div>
 
@@ -190,7 +284,7 @@
     <div class="field">
       <label>Home IP (pre-VPN)</label>
       <div style="display:flex;gap:6px;align-items:center">
-        <input type="text" id="cfg-home-ip" placeholder="Detecting…" style="width:140px">
+        <input type="text" id="cfg-home-ip" value="{{ home_ip }}" placeholder="Detecting…" style="width:140px">
         <button class="btn-save" onclick="detectHomeIP()" style="padding:7px 12px">Detect</button>
       </div>
     </div>
@@ -200,14 +294,28 @@
     </div>
     <div class="field">
       <label>IP Check Interval (s)</label>
-      <input type="number" id="cfg-ip" value="10" min="5" max="300">
+      <input type="number" id="cfg-ip" value="5" min="5" max="300">
     </div>
     <div class="field">
       <label>Max Reconnects</label>
       <input type="number" id="cfg-reconnects" value="3" min="1" max="10">
     </div>
     <button class="btn-save" onclick="saveConfig()">Save & Apply</button>
+    <button class="btn-save" onclick="showTokenModal()" style="margin-left:8px">Change Token</button>
   </div>
+</div>
+
+<!-- File Organizer -->
+<div class="section">
+  <h2>File Organizer</h2>
+  <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+    <input type="text" id="files-dir" placeholder="/home/pi/Downloads"
+           style="flex:1;max-width:400px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:7px 10px;font-size:13px">
+    <button class="btn-save" onclick="scanFiles()">Scan</button>
+    <button class="btn-start" id="btn-apply-files" disabled onclick="applyFiles()">Apply Selected</button>
+    <button class="btn-save" id="btn-select-all" style="display:none" onclick="toggleSelectAll()">Select All</button>
+  </div>
+  <div id="files-results"></div>
 </div>
 
 <!-- Logs -->
@@ -222,6 +330,42 @@
 <script>
   const logEl = document.getElementById('log');
   const autoScroll = document.getElementById('autoscroll');
+
+  // ---- Token management ----
+
+  function getToken() {
+    return localStorage.getItem('vpn_api_token') || '';
+  }
+
+  function authHeaders(extra) {
+    const h = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+    const t = getToken();
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    return h;
+  }
+
+  function showTokenModal() {
+    document.getElementById('token-input').value = getToken();
+    document.getElementById('token-modal').classList.add('open');
+    document.getElementById('token-input').focus();
+  }
+
+  function hideTokenModal() {
+    document.getElementById('token-modal').classList.remove('open');
+  }
+
+  function saveToken() {
+    const val = document.getElementById('token-input').value.trim();
+    if (val) localStorage.setItem('vpn_api_token', val);
+    else localStorage.removeItem('vpn_api_token');
+    hideTokenModal();
+    init();
+  }
+
+  // Show token modal on Enter key in the token input
+  document.getElementById('token-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveToken();
+  });
 
   function setClass(el, cls) {
     el.className = 'value ' + cls;
@@ -240,35 +384,64 @@
     };
 
     set('s-running',   s.running ? 'Running' : 'Stopped',  s.running ? 'ok' : 'fail');
-    set('s-proc',      s.vpn_process ? 'Up' : 'Down',       s.vpn_process ? 'ok' : 'fail');
-    set('s-iface',     s.vpn_interface ? 'Up' : 'Down',     s.vpn_interface ? 'ok' : 'fail');
+
+    if (s.vpn_starting) {
+      set('s-proc',  'Starting…', 'warn');
+      set('s-iface', 'Waiting…',  'warn');
+      set('s-route', '—',         'dim');
+    } else {
+      set('s-proc',  s.vpn_process   ? 'Up'   : 'Down', s.vpn_process   ? 'ok' : 'fail');
+      set('s-iface', s.vpn_interface ? 'Up'   : 'Down', s.vpn_interface ? 'ok' : 'fail');
+      set('s-route', s.vpn_interface
+            ? (s.vpn_route ? 'Via tun0' : 'BYPASSED!')
+            : '—',
+          s.vpn_interface ? (s.vpn_route ? 'ok' : 'fail') : 'dim');
+    }
+
+    set('s-ks',
+        s.kill_switch_active ? 'Active' : 'Inactive',
+        s.kill_switch_active ? 'ok' : (s.running ? 'fail' : 'warn'));
+
     set('s-secure',    s.secure === null ? '—' : s.secure ? 'No Leak' : 'LEAK!',
                        s.secure === null ? 'dim' : s.secure ? 'ok' : 'fail');
     set('s-ip',        s.external_ip || '—', s.external_ip ? 'info' : 'dim');
     set('s-qbt',       s.qbittorrent ? 'Running' : 'Stopped', s.qbittorrent ? 'ok' : 'dim');
     set('s-reconnect', s.reconnect_count ?? '—', s.reconnect_count > 0 ? 'warn' : 'dim');
 
-    document.getElementById('btn-start').disabled = s.running;
-    document.getElementById('btn-stop').disabled = !s.running;
+    // Step 1: VPN — disable Start while starting; disable Stop while monitor is running
+    document.getElementById('btn-vpn-start').disabled = s.vpn_starting;
+    document.getElementById('btn-vpn-stop').disabled  = s.running || s.vpn_starting;
+
+    // Step 2: Monitor — requires VPN up and not starting; disable Start if already running
+    const vpnReady = !s.vpn_starting && s.vpn_process && s.vpn_interface;
+    document.getElementById('btn-start').disabled = s.running || !vpnReady;
+    document.getElementById('btn-stop').disabled  = !s.running;
+
+    // Step 3: qBittorrent — requires monitor running and no leak confirmed
     document.getElementById('btn-qbt-start').disabled = !(s.running && s.secure);
   }
 
   function appendLog(line) {
     const div = document.createElement('div');
     div.className = 'line';
-    if (/CRITICAL|LEAK|ERROR/.test(line)) div.classList.add('crit');
-    else if (/WARNING|WARN/.test(line)) div.classList.add('warn');
-    else if (/secure|success|started/i.test(line)) div.classList.add('ok');
+    if (/\[CRITICAL\]|\[ERROR\]|LEAK/.test(line)) div.classList.add('crit');
+    else if (/\[WARNING\]/.test(line)) div.classList.add('warn');
+    else if (/\[QBIT\]/.test(line)) div.classList.add('info');
+    else if (/\[OPENVPN\]/.test(line)) div.classList.add('dim');
+    else if (/secure|successful|started/i.test(line)) div.classList.add('ok');
     div.textContent = line;
     logEl.appendChild(div);
     if (autoScroll.checked) logEl.scrollTop = logEl.scrollHeight;
   }
 
-  async function post(url) {
+  async function post(url, body) {
     try {
-      const r = await fetch(url, { method: 'POST' });
+      const opts = { method: 'POST', headers: authHeaders() };
+      if (body !== undefined) opts.body = JSON.stringify(body);
+      const r = await fetch(url, opts);
       let data;
       try { data = await r.json(); } catch (_) { data = {}; }
+      if (r.status === 401) { showTokenModal(); return { ok: false, data }; }
       if (!r.ok) alert(data.error || `Server error (${r.status}) calling ${url}`);
       return { ok: r.ok, data };
     } catch (e) {
@@ -285,15 +458,26 @@ async function vpnAction(name) {
   async function downloadConfig() {
     const url = document.getElementById('ovpn-url').value.trim();
     if (!url) return alert('Please paste a .ovpn URL first');
+    const { ok } = await post('/api/vpn/download-config', { url });
+    if (ok) document.getElementById('ovpn-url').value = '';
+  }
+
+  async function uploadConfig() {
+    const input = document.getElementById('ovpn-file');
+    const file = input.files[0];
+    if (!file) return alert('Please select a .ovpn file first');
+    if (!file.name.endsWith('.ovpn')) return alert('File must have a .ovpn extension');
+    const form = new FormData();
+    form.append('file', file);
     try {
-      const r = await fetch('/api/vpn/download-config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url }),
-      });
+      const headers = {};
+      const t = getToken();
+      if (t) headers['Authorization'] = 'Bearer ' + t;
+      const r = await fetch('/api/vpn/upload-config', { method: 'POST', headers, body: form });
       const data = await r.json();
-      if (!r.ok) alert(data.error || 'Download failed');
-      else document.getElementById('ovpn-url').value = '';
+      if (r.status === 401) { showTokenModal(); return; }
+      if (!r.ok) alert(data.error || 'Upload failed');
+      else input.value = '';
     } catch (e) {
       alert(`Network error: ${e.message}`);
     }
@@ -304,6 +488,23 @@ async function vpnAction(name) {
     pollStatus();
   }
 
+  async function stopAll() {
+    const btn = document.getElementById('btn-stop-all');
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    await post('/api/stop-all');
+    // Poll a few times to let shutdown complete, then re-enable
+    let n = 0;
+    const t = setInterval(async () => {
+      await pollStatus();
+      if (++n >= 5) {
+        clearInterval(t);
+        btn.disabled = false;
+        btn.textContent = 'Stop All';
+      }
+    }, 2000);
+  }
+
   async function saveConfig() {
     const body = {
       home_ip:       document.getElementById('cfg-home-ip').value.trim(),
@@ -311,19 +512,15 @@ async function vpnAction(name) {
       ip_interval:   parseInt(document.getElementById('cfg-ip').value),
       max_reconnects: parseInt(document.getElementById('cfg-reconnects').value),
     };
-    const r = await fetch('/api/configure', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await r.json();
-    if (data.error) alert(data.error);
+    const { ok, data } = await post('/api/configure', body);
+    if (!ok) { if (data.error) alert(data.error); }
     else { logEl.innerHTML = ''; startLogStream(); pollStatus(); }
   }
 
   async function pollStatus() {
     try {
-      const r = await fetch('/api/status');
+      const r = await fetch('/api/status', { headers: authHeaders({}) });
+      if (r.status === 401) { showTokenModal(); return; }
       if (r.ok) updateStatus(await r.json());
     } catch (_) {}
   }
@@ -331,17 +528,19 @@ async function vpnAction(name) {
   // Load recent logs then open SSE stream
   async function startLogStream() {
     try {
-      const r = await fetch('/api/logs/recent');
+      const r = await fetch('/api/logs/recent', { headers: authHeaders({}) });
+      if (r.status === 401) { showTokenModal(); return; }
       if (r.ok) {
         const lines = await r.json();
         lines.forEach(appendLog);
       }
     } catch (_) {}
 
-    const es = new EventSource('/api/logs/stream');
+    // EventSource cannot send custom headers — pass token as query param
+    const tokenParam = getToken() ? '?token=' + encodeURIComponent(getToken()) : '';
+    const es = new EventSource('/api/logs/stream' + tokenParam);
     es.onmessage = e => appendLog(JSON.parse(e.data));
     es.onerror = () => {
-      // Reconnect after 3s on error
       es.close();
       setTimeout(startLogStream, 3000);
     };
@@ -352,7 +551,8 @@ async function vpnAction(name) {
     input.placeholder = 'Detecting…';
     input.value = '';
     try {
-      const r = await fetch('/api/detect-ip');
+      const r = await fetch('/api/detect-ip', { headers: authHeaders({}) });
+      if (r.status === 401) { showTokenModal(); return null; }
       const data = await r.json();
       if (data.ip) {
         input.value = data.ip;
@@ -366,14 +566,176 @@ async function vpnAction(name) {
   }
 
   async function init() {
-    const ip = await detectHomeIP();
-    if (ip) await saveConfig();  // also calls startLogStream and pollStatus
-    else startLogStream();       // still stream logs even if detection failed
+    // If monitor is already configured (e.g. after a page refresh), don't re-configure
+    // as that would stop a running monitor.
+    try {
+      const r = await fetch('/api/status', { headers: authHeaders({}) });
+      if (r.status === 401) { showTokenModal(); return; }
+      if (r.ok) {
+        updateStatus(await r.json());
+        startLogStream();
+        return;
+      }
+    } catch (_) {}
+
+    // Monitor not yet configured — only auto-detect home IP when VPN is NOT running,
+    // otherwise detection returns the VPN IP instead of the real ISP IP.
+    let vpnAlreadyRunning = false;
+    try {
+      const vr = await fetch('/api/vpn/running', { headers: authHeaders({}) });
+      if (vr.status === 401) { showTokenModal(); return; }
+      if (vr.ok) vpnAlreadyRunning = (await vr.json()).running;
+    } catch (_) {}
+
+    if (vpnAlreadyRunning) {
+      document.getElementById('cfg-home-ip').placeholder = 'Enter ISP IP manually';
+      startLogStream();
+      appendLog('[WARNING] VPN is already active. Auto-detection would return the VPN IP, not your home IP. Enter your real ISP IP in Configuration and click Save & Apply.');
+    } else {
+      const ip = await detectHomeIP();
+      if (ip) await saveConfig();  // also calls startLogStream and pollStatus
+      else startLogStream();
+    }
   }
 
   // Poll status every 3 seconds
   setInterval(pollStatus, 3000);
   init();
+
+  // ---- File Organizer ----
+
+  let _scannedSourceDir = '';
+
+  async function scanFiles() {
+    const dir = document.getElementById('files-dir').value.trim();
+    if (!dir) return alert('Enter a directory path to scan');
+    const resultsEl = document.getElementById('files-results');
+    resultsEl.innerHTML = '<span style="color:var(--muted);font-size:13px">Scanning…</span>';
+    document.getElementById('btn-apply-files').disabled = true;
+    document.getElementById('btn-select-all').style.display = 'none';
+
+    try {
+      const r = await fetch('/api/files/scan?dir=' + encodeURIComponent(dir), { headers: authHeaders({}) });
+      if (r.status === 401) { showTokenModal(); return; }
+      const data = await r.json();
+      if (!r.ok) { resultsEl.innerHTML = `<span class="file-result-err">${data.error || 'Scan failed'}</span>`; return; }
+
+      _scannedSourceDir = data.source_dir;
+      const files = data.files;
+
+      if (!files.length) {
+        resultsEl.innerHTML = '<span style="color:var(--muted);font-size:13px">No video files found.</span>';
+        return;
+      }
+
+      let html = `<table>
+        <thead><tr>
+          <th style="width:32px"><input type="checkbox" id="chk-all" onclick="toggleSelectAll()" checked></th>
+          <th>Original</th>
+          <th>Rename to</th>
+          <th style="width:80px;text-align:center">Flatten</th>
+          <th style="width:70px;text-align:right">Size</th>
+          <th style="width:120px">Result</th>
+        </tr></thead><tbody>`;
+
+      files.forEach((f, i) => {
+        const nameChanged = f.original !== f.proposed && f.proposed !== f.original.split('/').pop();
+        const sameBasename = f.proposed === f.original.split('/').pop();
+        const proposed = sameBasename ? f.proposed : f.proposed;
+        const kb = (f.size / 1048576).toFixed(1);
+        html += `<tr data-i="${i}">
+          <td><input type="checkbox" class="file-chk" checked></td>
+          <td style="color:var(--muted);word-break:break-all;max-width:220px">${escHtml(f.original)}</td>
+          <td><input type="text" class="file-rename" value="${escHtml(f.proposed)}" placeholder="keep original"></td>
+          <td style="text-align:center"><input type="checkbox" class="file-flatten" ${f.in_subdir ? 'checked' : ''}></td>
+          <td style="text-align:right;color:var(--muted)">${kb} MB</td>
+          <td class="file-result-cell"></td>
+        </tr>`;
+      });
+
+      html += '</tbody></table>';
+      resultsEl.innerHTML = html;
+      document.getElementById('btn-apply-files').disabled = false;
+      document.getElementById('btn-select-all').style.display = '';
+
+      // Store file list for apply step
+      resultsEl.dataset.files = JSON.stringify(files);
+    } catch (e) {
+      resultsEl.innerHTML = `<span class="file-result-err">Error: ${escHtml(e.message)}</span>`;
+    }
+  }
+
+  function toggleSelectAll() {
+    const chkAll = document.getElementById('chk-all');
+    const checks = document.querySelectorAll('.file-chk');
+    const target = chkAll ? chkAll.checked : !document.querySelector('.file-chk')?.checked;
+    checks.forEach(c => c.checked = target);
+    if (chkAll) chkAll.checked = target;
+  }
+
+  async function applyFiles() {
+    const resultsEl = document.getElementById('files-results');
+    const rows = resultsEl.querySelectorAll('tbody tr');
+    if (!rows.length) return;
+
+    const files = JSON.parse(resultsEl.dataset.files || '[]');
+    const ops = [];
+    rows.forEach((row, i) => {
+      const checked = row.querySelector('.file-chk').checked;
+      if (!checked) return;
+      ops.push({
+        original:  files[i].original,
+        rename_to: row.querySelector('.file-rename').value.trim(),
+        flatten:   row.querySelector('.file-flatten').checked,
+      });
+    });
+
+    if (!ops.length) return alert('No files selected');
+
+    const btn = document.getElementById('btn-apply-files');
+    btn.disabled = true;
+    btn.textContent = 'Applying…';
+
+    try {
+      const r = await fetch('/api/files/organize', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ source_dir: _scannedSourceDir, files: ops }),
+      });
+      if (r.status === 401) { showTokenModal(); return; }
+      const data = await r.json();
+      if (!r.ok) { alert(data.error || 'Organize failed'); return; }
+
+      // Map results back to rows by original path
+      const resultMap = {};
+      data.results.forEach(res => { resultMap[res.original] = res; });
+
+      rows.forEach((row, i) => {
+        if (!row.querySelector('.file-chk').checked) return;
+        const original = files[i].original;
+        const res = resultMap[original];
+        const cell = row.querySelector('.file-result-cell');
+        if (!res) return;
+        if (res.status === 'ok') {
+          cell.className = 'file-result-ok';
+          cell.textContent = res.renamed_to ? `→ ${res.renamed_to}` : 'Done';
+        } else if (res.status === 'skipped') {
+          cell.className = 'file-result-skip';
+          cell.textContent = res.message || 'Skipped';
+        } else {
+          cell.className = 'file-result-err';
+          cell.textContent = res.message || 'Error';
+        }
+      });
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Apply Selected';
+    }
+  }
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
 </script>
 </body>
 </html>

@@ -68,3 +68,30 @@ PID_DIR=/tmp/vpn_pids       # where qBittorrent PID file is stored
 - `python3` with `requests` library
 - `openvpn`, `qbittorrent-nox` (or `deluged`)
 - Standard tools: `pgrep`, `ip`, `curl`, `ss`, `iptables`, `sudo`
+
+## sudo Requirements (web app)
+
+The pi user needs passwordless sudo for all of the following. Create `/etc/sudoers.d/vpn-webapp`:
+
+```
+# Original requirements
+pi ALL=(ALL) NOPASSWD: /usr/sbin/openvpn
+pi ALL=(ALL) NOPASSWD: /usr/bin/pkill
+pi ALL=(ALL) NOPASSWD: /bin/mv
+pi ALL=(ALL) NOPASSWD: /bin/rm
+pi ALL=(ALL) NOPASSWD: /bin/cat /var/log/openvpn.log
+pi ALL=(ALL) NOPASSWD: /bin/cat /etc/openvpn/client/*.ovpn
+
+# Kill switch
+pi ALL=(ALL) NOPASSWD: /sbin/iptables
+pi ALL=(ALL) NOPASSWD: /sbin/iptables-save
+pi ALL=(ALL) NOPASSWD: /sbin/iptables-restore
+
+# IPv6 disable/restore
+pi ALL=(ALL) NOPASSWD: /sbin/sysctl
+
+# DNS leak prevention
+pi ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/resolv.conf
+pi ALL=(ALL) NOPASSWD: /usr/bin/chattr
+pi ALL=(ALL) NOPASSWD: /bin/cp /etc/resolv.conf *
+```
