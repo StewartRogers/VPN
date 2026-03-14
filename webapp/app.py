@@ -51,6 +51,11 @@ def index():
     return render_template("index.html", home_ip=monitor.home_ip if monitor else "")
 
 
+@app.route("/organizer")
+def organizer():
+    return render_template("organizer.html")
+
+
 # ------------------------------------------------------------------ API
 
 @app.route("/api/detect-ip")

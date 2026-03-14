@@ -284,41 +284,6 @@
     #token-modal input:focus { outline: 1px solid var(--blue); }
     #token-modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
-    /* ---- file organizer table ---- */
-    #files-results { overflow-x: auto; }
-    #files-results table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 11px;
-    }
-    #files-results th {
-      text-align: left;
-      color: var(--muted);
-      font-size: 10px;
-      text-transform: uppercase;
-      letter-spacing: .5px;
-      padding: 5px 6px;
-      border-bottom: 1px solid var(--border);
-    }
-    #files-results td {
-      padding: 5px 6px;
-      border-bottom: 1px solid rgba(255,255,255,.04);
-      vertical-align: middle;
-    }
-    #files-results tr:hover td { background: rgba(255,255,255,.03); }
-    #files-results input[type=text] {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      color: var(--text);
-      padding: 3px 6px;
-      font-size: 11px;
-      width: 100%;
-    }
-    #files-results input[type=text]:focus { outline: 1px solid var(--blue); }
-    .file-result-ok   { color: var(--green); }
-    .file-result-err  { color: var(--red); }
-    .file-result-skip { color: var(--muted); }
   </style>
 </head>
 <body>
@@ -432,15 +397,11 @@
     </div>
 
     <!-- File Organizer -->
-    <div class="panel">
-      <div class="panel-title">File Organizer</div>
-      <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px">
-        <input type="text" id="files-dir" class="text-input" placeholder="/home/pi/Downloads" style="flex:1;min-width:0">
-        <button class="btn-save" onclick="scanFiles()">Scan</button>
-        <button class="btn-start" id="btn-apply-files" disabled onclick="applyFiles()">Apply</button>
-        <button class="btn-save" id="btn-select-all" style="display:none" onclick="toggleSelectAll()">All</button>
-      </div>
-      <div id="files-results"></div>
+    <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:11px;color:var(--muted)">Rename &amp; flatten downloaded video files</span>
+      <a href="/organizer" target="_blank">
+        <button class="btn-save">Open File Organizer ↗</button>
+      </a>
     </div>
 
   </div><!-- /left -->
@@ -703,129 +664,6 @@
 
   setInterval(pollStatus, 3000);
   init();
-
-  // ---- File Organizer ----
-
-  let _scannedSourceDir = '';
-
-  async function scanFiles() {
-    const dir = document.getElementById('files-dir').value.trim();
-    if (!dir) return alert('Enter a directory path to scan');
-    const resultsEl = document.getElementById('files-results');
-    resultsEl.innerHTML = '<span style="color:var(--muted)">Scanning…</span>';
-    document.getElementById('btn-apply-files').disabled = true;
-    document.getElementById('btn-select-all').style.display = 'none';
-
-    try {
-      const r = await fetch('/api/files/scan?dir=' + encodeURIComponent(dir), { headers: authHeaders({}) });
-      if (r.status === 401) { showTokenModal(); return; }
-      const data = await r.json();
-      if (!r.ok) { resultsEl.innerHTML = `<span class="file-result-err">${data.error || 'Scan failed'}</span>`; return; }
-
-      _scannedSourceDir = data.source_dir;
-      const files = data.files;
-
-      if (!files.length) {
-        resultsEl.innerHTML = '<span style="color:var(--muted)">No video files found.</span>';
-        return;
-      }
-
-      let html = `<table>
-        <thead><tr>
-          <th style="width:24px"><input type="checkbox" id="chk-all" onclick="toggleSelectAll()" checked></th>
-          <th>Original</th>
-          <th>Rename to</th>
-          <th style="width:60px;text-align:center">Flatten</th>
-          <th style="width:60px;text-align:right">Size</th>
-          <th style="width:80px">Result</th>
-        </tr></thead><tbody>`;
-
-      files.forEach((f, i) => {
-        const mb = (f.size / 1048576).toFixed(1);
-        html += `<tr data-i="${i}">
-          <td><input type="checkbox" class="file-chk" checked></td>
-          <td style="color:var(--muted);word-break:break-all;max-width:160px">${escHtml(f.original)}</td>
-          <td><input type="text" class="file-rename" value="${escHtml(f.proposed)}" placeholder="keep original"></td>
-          <td style="text-align:center"><input type="checkbox" class="file-flatten" ${f.in_subdir ? 'checked' : ''}></td>
-          <td style="text-align:right;color:var(--muted)">${mb} MB</td>
-          <td class="file-result-cell"></td>
-        </tr>`;
-      });
-
-      html += '</tbody></table>';
-      resultsEl.innerHTML = html;
-      document.getElementById('btn-apply-files').disabled = false;
-      document.getElementById('btn-select-all').style.display = '';
-      resultsEl.dataset.files = JSON.stringify(files);
-    } catch (e) {
-      resultsEl.innerHTML = `<span class="file-result-err">Error: ${escHtml(e.message)}</span>`;
-    }
-  }
-
-  function toggleSelectAll() {
-    const chkAll = document.getElementById('chk-all');
-    const checks = document.querySelectorAll('.file-chk');
-    const target = chkAll ? chkAll.checked : !document.querySelector('.file-chk')?.checked;
-    checks.forEach(c => c.checked = target);
-    if (chkAll) chkAll.checked = target;
-  }
-
-  async function applyFiles() {
-    const resultsEl = document.getElementById('files-results');
-    const rows = resultsEl.querySelectorAll('tbody tr');
-    if (!rows.length) return;
-
-    const files = JSON.parse(resultsEl.dataset.files || '[]');
-    const ops = [];
-    rows.forEach((row, i) => {
-      if (!row.querySelector('.file-chk').checked) return;
-      ops.push({
-        original:  files[i].original,
-        rename_to: row.querySelector('.file-rename').value.trim(),
-        flatten:   row.querySelector('.file-flatten').checked,
-      });
-    });
-
-    if (!ops.length) return alert('No files selected');
-
-    const btn = document.getElementById('btn-apply-files');
-    btn.disabled = true;
-    btn.textContent = 'Applying…';
-
-    try {
-      const r = await fetch('/api/files/organize', {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({ source_dir: _scannedSourceDir, files: ops }),
-      });
-      if (r.status === 401) { showTokenModal(); return; }
-      const data = await r.json();
-      if (!r.ok) { alert(data.error || 'Organize failed'); return; }
-
-      const resultMap = {};
-      data.results.forEach(res => { resultMap[res.original] = res; });
-
-      rows.forEach((row, i) => {
-        if (!row.querySelector('.file-chk').checked) return;
-        const res = resultMap[files[i].original];
-        const cell = row.querySelector('.file-result-cell');
-        if (!res) return;
-        if (res.status === 'ok') {
-          cell.className = 'file-result-ok';
-          cell.textContent = res.renamed_to ? `→ ${res.renamed_to}` : 'Done';
-        } else if (res.status === 'skipped') {
-          cell.className = 'file-result-skip';
-          cell.textContent = res.message || 'Skipped';
-        } else {
-          cell.className = 'file-result-err';
-          cell.textContent = res.message || 'Error';
-        }
-      });
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Apply';
-    }
-  }
 
   function escHtml(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>File Organizer — VPN Monitor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #1a1a2e;
+      --surface: #16213e;
+      --border: #0f3460;
+      --text: #e0e0e0;
+      --muted: #888;
+      --green: #4caf50;
+      --red: #f44336;
+      --yellow: #ff9800;
+      --blue: #2196f3;
+    }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      padding: 16px 20px;
+      gap: 12px;
+    }
+
+    /* ---- header bar ---- */
+    .page-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+
+    .page-header h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+
+    .page-header a {
+      font-size: 12px;
+      color: var(--muted);
+      text-decoration: none;
+    }
+    .page-header a:hover { color: var(--text); }
+
+    /* ---- toolbar ---- */
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+
+    .toolbar input[type=text] {
+      flex: 1;
+      min-width: 260px;
+      max-width: 520px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+    .toolbar input[type=text]:focus { outline: 1px solid var(--blue); }
+
+    .toolbar span {
+      font-size: 12px;
+      color: var(--muted);
+      margin-left: 4px;
+    }
+
+    button {
+      padding: 7px 14px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s;
+      white-space: nowrap;
+    }
+    button:disabled { opacity: .4; cursor: default; }
+    button:hover:not(:disabled) { opacity: .85; }
+
+    .btn-primary { background: var(--blue);   color: #fff; }
+    .btn-success { background: var(--green);  color: #fff; }
+    .btn-save    { background: var(--border); color: var(--text); }
+
+    /* ---- results table (fills remaining height) ---- */
+    .table-wrap {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    thead {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: var(--surface);
+    }
+
+    th {
+      text-align: left;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: .5px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+
+    td {
+      padding: 6px 10px;
+      border-bottom: 1px solid rgba(255,255,255,.04);
+      vertical-align: middle;
+    }
+
+    tbody tr:hover td { background: rgba(255,255,255,.03); }
+
+    /* column widths */
+    .col-chk    { width: 32px; }
+    .col-orig   { width: 35%; }
+    .col-rename { width: 35%; }
+    .col-flat   { width: 70px; text-align: center; }
+    .col-size   { width: 80px; text-align: right; white-space: nowrap; }
+    .col-result { width: 140px; }
+
+    td.col-orig {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+
+    td.col-result { font-family: monospace; font-size: 11px; word-break: break-all; }
+
+    input[type=text].rename-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 4px 8px;
+      font-size: 12px;
+      font-family: monospace;
+    }
+    input[type=text].rename-input:focus { outline: 1px solid var(--blue); }
+
+    .ok   { color: var(--green); }
+    .err  { color: var(--red); }
+    .skip { color: var(--muted); }
+
+    /* ---- empty / loading states ---- */
+    .state-row td {
+      text-align: center;
+      padding: 40px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    /* ---- token modal ---- */
+    #token-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.7);
+      z-index: 100;
+      align-items: center;
+      justify-content: center;
+    }
+    #token-modal.open { display: flex; }
+    #token-modal .modal-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 24px 28px;
+      min-width: 300px;
+      max-width: 90vw;
+    }
+    #token-modal h3 { font-size: 14px; margin-bottom: 10px; }
+    #token-modal p  { font-size: 11px; color: var(--muted); margin-bottom: 14px; line-height: 1.6; }
+    #token-modal input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      padding: 7px 10px;
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    #token-modal input:focus { outline: 1px solid var(--blue); }
+    #token-modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  </style>
+</head>
+<body>
+
+<!-- Token modal -->
+<div id="token-modal">
+  <div class="modal-box">
+    <h3>API Token Required</h3>
+    <p>Enter the <code>VPN_API_TOKEN</code> for this server.</p>
+    <input type="password" id="token-input" placeholder="Paste token here" autocomplete="off">
+    <div class="modal-actions">
+      <button class="btn-save" onclick="saveToken()">Save Token</button>
+    </div>
+  </div>
+</div>
+
+<!-- Header -->
+<div class="page-header">
+  <h1>File Organizer</h1>
+  <a href="/" >← Back to Monitor</a>
+</div>
+
+<!-- Toolbar -->
+<div class="toolbar">
+  <input type="text" id="dir-input" placeholder="Directory path, e.g. /home/pi/Downloads">
+  <button class="btn-primary" onclick="scanFiles()">Scan</button>
+  <button class="btn-success" id="btn-apply" disabled onclick="applyFiles()">Apply Selected</button>
+  <button class="btn-save"   id="btn-all"   style="display:none" onclick="toggleSelectAll()">Select All</button>
+  <span id="file-count"></span>
+</div>
+
+<!-- Results table -->
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th class="col-chk"><input type="checkbox" id="chk-all" onclick="toggleSelectAll()"></th>
+        <th class="col-orig">Original path</th>
+        <th class="col-rename">Rename to</th>
+        <th class="col-flat">Flatten</th>
+        <th class="col-size">Size</th>
+        <th class="col-result">Result</th>
+      </tr>
+    </thead>
+    <tbody id="file-tbody">
+      <tr class="state-row"><td colspan="6">Enter a directory path and click Scan.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+  // ---- token ----
+
+  function getToken() { return localStorage.getItem('vpn_api_token') || ''; }
+
+  function authHeaders(extra) {
+    const h = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
+    const t = getToken();
+    if (t) h['Authorization'] = 'Bearer ' + t;
+    return h;
+  }
+
+  function showTokenModal() {
+    document.getElementById('token-input').value = getToken();
+    document.getElementById('token-modal').classList.add('open');
+    document.getElementById('token-input').focus();
+  }
+
+  function saveToken() {
+    const val = document.getElementById('token-input').value.trim();
+    if (val) localStorage.setItem('vpn_api_token', val);
+    else localStorage.removeItem('vpn_api_token');
+    document.getElementById('token-modal').classList.remove('open');
+  }
+
+  document.getElementById('token-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') saveToken();
+  });
+
+  // ---- state ----
+
+  let _sourceDir = '';
+  let _files = [];
+
+  function escHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function setState(html) {
+    document.getElementById('file-tbody').innerHTML =
+      `<tr class="state-row"><td colspan="6">${html}</td></tr>`;
+  }
+
+  // ---- scan ----
+
+  async function scanFiles() {
+    const dir = document.getElementById('dir-input').value.trim();
+    if (!dir) return alert('Enter a directory path first.');
+
+    setState('Scanning…');
+    document.getElementById('btn-apply').disabled = true;
+    document.getElementById('btn-all').style.display = 'none';
+    document.getElementById('file-count').textContent = '';
+    document.getElementById('chk-all').checked = true;
+
+    try {
+      const r = await fetch('/api/files/scan?dir=' + encodeURIComponent(dir), { headers: authHeaders({}) });
+      if (r.status === 401) { showTokenModal(); setState('Authentication required.'); return; }
+      const data = await r.json();
+      if (!r.ok) { setState(`<span style="color:var(--red)">${escHtml(data.error || 'Scan failed')}</span>`); return; }
+
+      _sourceDir = data.source_dir;
+      _files = data.files;
+
+      if (!_files.length) { setState('No .mp4 or .mkv files found in that directory.'); return; }
+
+      renderTable();
+      document.getElementById('btn-apply').disabled = false;
+      document.getElementById('btn-all').style.display = '';
+      document.getElementById('file-count').textContent = `${_files.length} file${_files.length !== 1 ? 's' : ''} found`;
+    } catch (e) {
+      setState(`<span style="color:var(--red)">Error: ${escHtml(e.message)}</span>`);
+    }
+  }
+
+  function renderTable() {
+    const tbody = document.getElementById('file-tbody');
+    const rows = _files.map((f, i) => {
+      const mb = (f.size / 1048576).toFixed(1);
+      const changed = f.proposed !== f.original.split('/').pop();
+      return `<tr data-i="${i}">
+        <td class="col-chk"><input type="checkbox" class="file-chk" checked></td>
+        <td class="col-orig">${escHtml(f.original)}</td>
+        <td class="col-rename">
+          <input type="text" class="rename-input file-rename"
+                 value="${escHtml(f.proposed)}"
+                 title="${escHtml(f.proposed)}"
+                 placeholder="keep original name">
+        </td>
+        <td class="col-flat" style="text-align:center">
+          <input type="checkbox" class="file-flatten" ${f.in_subdir ? 'checked' : ''}>
+        </td>
+        <td class="col-size" style="color:var(--muted)">${mb} MB</td>
+        <td class="col-result file-result-cell"></td>
+      </tr>`;
+    });
+    tbody.innerHTML = rows.join('');
+  }
+
+  // Allow Enter key in dir input to trigger scan
+  document.getElementById('dir-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') scanFiles();
+  });
+
+  // ---- select all toggle ----
+
+  function toggleSelectAll() {
+    const chkAll = document.getElementById('chk-all');
+    const checks = document.querySelectorAll('.file-chk');
+    checks.forEach(c => c.checked = chkAll.checked);
+  }
+
+  // Keep header checkbox in sync when individual rows change
+  document.getElementById('file-tbody').addEventListener('change', e => {
+    if (!e.target.classList.contains('file-chk')) return;
+    const all = [...document.querySelectorAll('.file-chk')];
+    document.getElementById('chk-all').checked = all.every(c => c.checked);
+  });
+
+  // ---- apply ----
+
+  async function applyFiles() {
+    const rows = document.querySelectorAll('#file-tbody tr[data-i]');
+    if (!rows.length) return;
+
+    const ops = [];
+    rows.forEach(row => {
+      if (!row.querySelector('.file-chk').checked) return;
+      const i = parseInt(row.dataset.i);
+      ops.push({
+        original:  _files[i].original,
+        rename_to: row.querySelector('.file-rename').value.trim(),
+        flatten:   row.querySelector('.file-flatten').checked,
+      });
+    });
+
+    if (!ops.length) return alert('No files selected.');
+
+    const btn = document.getElementById('btn-apply');
+    btn.disabled = true;
+    btn.textContent = 'Applying…';
+
+    try {
+      const r = await fetch('/api/files/organize', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ source_dir: _sourceDir, files: ops }),
+      });
+      if (r.status === 401) { showTokenModal(); return; }
+      const data = await r.json();
+      if (!r.ok) { alert(data.error || 'Organize failed'); return; }
+
+      const resultMap = {};
+      data.results.forEach(res => { resultMap[res.original] = res; });
+
+      rows.forEach(row => {
+        const i = parseInt(row.dataset.i);
+        const res = resultMap[_files[i].original];
+        const cell = row.querySelector('.file-result-cell');
+        if (!res) return;
+        if (res.status === 'ok') {
+          cell.className = 'col-result file-result-cell ok';
+          cell.textContent = res.renamed_to ? '→ ' + res.renamed_to : 'Done';
+        } else if (res.status === 'skipped') {
+          cell.className = 'col-result file-result-cell skip';
+          cell.textContent = res.message || 'Skipped';
+        } else {
+          cell.className = 'col-result file-result-cell err';
+          cell.textContent = res.message || 'Error';
+        }
+      });
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Apply Selected';
+    }
+  }
+</script>
+</body>
+</html>
