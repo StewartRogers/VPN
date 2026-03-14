@@ -43,13 +43,12 @@
       flex-shrink: 0;
     }
 
-    /* ---- two-column layout ---- */
+    /* ---- two-column resizable layout ---- */
     .app-layout {
-      display: grid;
-      grid-template-columns: 390px 1fr;
-      gap: 14px;
+      display: flex;
       flex: 1;
       min-height: 0;
+      gap: 0;
     }
 
     /* left panel scrolls if content is taller than viewport */
@@ -60,13 +59,32 @@
       overflow-y: auto;
       overflow-x: hidden;
       padding-right: 2px;
+      min-width: 240px;
+      /* width set by JS; default 50% */
+      width: 50%;
+      flex-shrink: 0;
     }
+
+    /* drag handle */
+    .divider {
+      width: 6px;
+      flex-shrink: 0;
+      cursor: col-resize;
+      background: transparent;
+      border-left: 2px solid var(--border);
+      margin: 0 6px;
+      border-radius: 2px;
+      transition: border-color .15s;
+    }
+    .divider:hover, .divider.dragging { border-color: var(--blue); }
 
     /* right panel: log fills all available height */
     .right {
       display: flex;
       flex-direction: column;
       min-height: 0;
+      flex: 1;
+      min-width: 200px;
     }
 
     /* ---- surface panels ---- */
@@ -426,6 +444,9 @@
     </div>
 
   </div><!-- /left -->
+
+  <!-- ======== DRAG HANDLE ======== -->
+  <div class="divider" id="divider"></div>
 
   <!-- ======== RIGHT COLUMN — LOG ======== -->
   <div class="right">
@@ -809,6 +830,46 @@
   function escHtml(s) {
     return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+
+  // ---- Resizable split ----
+  (function () {
+    const divider = document.getElementById('divider');
+    const left    = document.querySelector('.left');
+    const layout  = document.querySelector('.app-layout');
+
+    // Restore saved width
+    const saved = localStorage.getItem('split_pct');
+    if (saved) left.style.width = saved + '%';
+
+    divider.addEventListener('mousedown', e => {
+      e.preventDefault();
+      divider.classList.add('dragging');
+      document.body.style.cursor = 'col-resize';
+      // Prevent text selection while dragging
+      document.body.style.userSelect = 'none';
+
+      const onMove = e => {
+        const rect = layout.getBoundingClientRect();
+        let pct = (e.clientX - rect.left) / rect.width * 100;
+        pct = Math.min(Math.max(pct, 20), 80);
+        left.style.width = pct + '%';
+      };
+
+      const onUp = () => {
+        divider.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        // Save position
+        const pct = parseFloat(left.style.width);
+        if (!isNaN(pct)) localStorage.setItem('split_pct', pct.toFixed(1));
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  })();
 </script>
 </body>
 </html>
