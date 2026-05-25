@@ -113,19 +113,19 @@ validate_ip() {
 # Pre-flight: IPv6 must be disabled before proceeding
 ##
 check_ipv6_disabled() {
-    local all default
-    all=$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)
-    default=$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null)
-    if [ "$all" != "1" ] || [ "$default" != "1" ]; then
+    # Check for global-scope IPv6 addresses - these can route to the internet and cause leaks.
+    # Handles all disable methods: kernel param (ipv6.disable=1), sysctl, or simply no addresses.
+    # Link-local (fe80::) addresses are not a concern as they cannot route beyond the LAN.
+    if ip -6 addr show 2>/dev/null | grep "inet6" | grep -q "scope global"; then
         echo ""
-        echo "ERROR: IPv6 is not disabled - this is a leak risk."
+        echo "ERROR: Active global IPv6 addresses detected - this is a leak risk."
         echo ""
-        echo "  Add the following to /etc/sysctl.conf:"
-        echo "    net.ipv6.conf.all.disable_ipv6 = 1"
-        echo "    net.ipv6.conf.default.disable_ipv6 = 1"
-        echo ""
-        echo "  Then apply with:  sudo sysctl -p"
-        echo "  Verify with:      cat /proc/sys/net/ipv6/conf/all/disable_ipv6  (should be 1)"
+        echo "  IPv6 traffic can bypass the VPN tunnel."
+        echo "  Disable IPv6 using one of:"
+        echo "    /boot/cmdline.txt  - add: ipv6.disable=1  (requires reboot)"
+        echo "    /etc/sysctl.conf   - add: net.ipv6.conf.all.disable_ipv6 = 1"
+        echo "                             net.ipv6.conf.default.disable_ipv6 = 1"
+        echo "                        then: sudo sysctl -p"
         echo ""
         return 1
     fi
