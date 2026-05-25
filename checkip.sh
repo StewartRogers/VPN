@@ -238,6 +238,7 @@ while true; do
     if [ $((current_time - LAST_IP_CHECK)) -ge "$IP_CHECK_INTERVAL" ]; then
         perform_ip_check
         ip_rc=$?
+        post_check_time=$(date +%s)
 
         if [ $ip_rc -eq 1 ]; then
             log "CRITICAL" "IP leak confirmed - shutting down"
@@ -249,11 +250,11 @@ while true; do
                 log "CRITICAL" "3 consecutive IP check failures - shutting down as precaution"
                 exit 1
             fi
-            # Retry sooner than normal
-            LAST_IP_CHECK=$((current_time - IP_CHECK_INTERVAL + 5))
+            # Retry sooner than normal (stamp from post-check time)
+            LAST_IP_CHECK=$((post_check_time - IP_CHECK_INTERVAL + 5))
         else
             consecutive_ip_errors=0
-            LAST_IP_CHECK=$current_time
+            LAST_IP_CHECK=$post_check_time
         fi
     fi
 done

@@ -74,7 +74,7 @@ done
 log_message() {
     local level=$1
     local message=$2
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_DIR/vpn.log"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" >> "$LOG_DIR/vpn.log"
 }
 
 rotate_logs() {
