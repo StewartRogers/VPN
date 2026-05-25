@@ -324,7 +324,11 @@ fi
 #
 if [ "$SKIP_KILLSWITCH" != true ]; then
     log_message "INFO" "Applying UFW kill switch..."
-    if sudo bash "$SCRIPT_DIR/ufw_killswitch.sh" 2>&1 | tee -a "$LOG_DIR/vpn.log"; then
+    echo ""
+    sudo bash "$SCRIPT_DIR/ufw_killswitch.sh"
+    KS_RC=$?
+    echo ""
+    if [ $KS_RC -eq 0 ]; then
         KILLSWITCH_APPLIED=true
         log_message "INFO" "UFW kill switch active - outgoing locked to VPN tunnel"
     else
@@ -377,12 +381,12 @@ if [ "$NON_INTERACTIVE" = true ]; then
 else
     while true; do
         read -p "Has VPN started? [Y/N/F - F=failed]: " iStart
-        case "${iStart,,}" in
+        iStart=$(echo "$iStart" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+        case "$iStart" in
             y)
                 break
                 ;;
             f)
-                log_message "ERROR" "VPN startup failed"
                 break
                 ;;
             n)
@@ -405,7 +409,7 @@ fi
 #
 # Launch monitoring if VPN confirmed
 #
-if [[ "${iStart,,}" == "y" ]]; then
+if [ "$iStart" = "y" ]; then
     if [ -z "$YHOMEIP" ]; then
         log_message "ERROR" "Home IP was not captured at startup - cannot start monitor"
         log_message "INFO" "Start monitoring manually: ./checkip.sh <your_home_ip>"
@@ -424,7 +428,7 @@ if [[ "${iStart,,}" == "y" ]]; then
         echo "  To stop:     ./stopvpn.sh"
         echo ""
     fi
-elif [[ "${iStart,,}" == "f" ]]; then
+elif [ "$iStart" = "f" ]; then
     log_message "ERROR" "VPN startup failed"
     if [ "$KILLSWITCH_APPLIED" = true ]; then
         log_message "INFO" "Resetting UFW to base state..."

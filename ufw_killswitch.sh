@@ -25,20 +25,29 @@ if [ -z "$OVPN" ]; then
 fi
 echo "Using config: $OVPN"
 
-REMOTE_LINE=$(grep "^remote " "$OVPN" | head -1)
-VPN_HOST=$(echo "$REMOTE_LINE" | awk '{print $2}')
-VPN_PORT=$(echo "$REMOTE_LINE" | awk '{print $3}')
+# Strip carriage returns - .ovpn files are often created on Windows
+REMOTE_LINE=$(grep "^remote " "$OVPN" | head -1 | tr -d '\r')
+
+VPN_HOST=$(echo "$REMOTE_LINE" | awk '{print $2}' | tr -d '\r')
+VPN_PORT=$(echo "$REMOTE_LINE" | awk '{print $3}' | tr -d '\r')
 
 # Protocol: check remote line first, fall back to proto directive
-VPN_PROTO=$(echo "$REMOTE_LINE" | awk '{print $4}')
+VPN_PROTO=$(echo "$REMOTE_LINE" | awk '{print $4}' | tr -d '\r')
 if [ -z "$VPN_PROTO" ]; then
-    VPN_PROTO=$(grep "^proto " "$OVPN" | head -1 | awk '{print $2}')
+    VPN_PROTO=$(grep "^proto " "$OVPN" | head -1 | awk '{print $2}' | tr -d '\r')
 fi
 VPN_PROTO="${VPN_PROTO:-udp}"
 
 if [ -z "$VPN_HOST" ] || [ -z "$VPN_PORT" ]; then
     echo "ERROR: Could not parse 'remote' line from $OVPN"
     echo "       Expected format: remote <host> <port> [proto]"
+    exit 1
+fi
+
+# Validate port is numeric
+if ! [[ "$VPN_PORT" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: Parsed port is not numeric: '$VPN_PORT'"
+    echo "       The .ovpn file may have unexpected formatting."
     exit 1
 fi
 
@@ -71,16 +80,15 @@ ufw allow out to "$VPN_IP" port "$VPN_PORT" proto "$VPN_PROTO" comment 'VPN serv
 # Allow all traffic through the VPN tunnel
 ufw allow out on tun0 comment 'VPN tunnel'
 
+# Allow DNS on both interfaces so OpenVPN can resolve hostnames
+ufw allow out on eth0  port 53 comment 'DNS'
+ufw allow out on wlan0 port 53 comment 'DNS'
+
 # Allow outgoing to LAN on both interfaces (Plex, SSH responses, web UI)
 ufw allow out on eth0  to 10.0.0.0/24 comment 'LAN'
 ufw allow out on wlan0 to 10.0.0.0/24 comment 'LAN'
 
 echo ""
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Kill switch active."
-echo "  Allowed outgoing: tun0 (all), $VPN_IP:$VPN_PORT/$VPN_PROTO (VPN server), 10.0.0.0/24 (LAN)"
+echo "  Allowed: tun0 (all), $VPN_IP:$VPN_PORT/$VPN_PROTO (VPN server), port 53 (DNS), 10.0.0.0/24 (LAN)"
 echo "  Everything else: BLOCKED"
-echo ""
-echo "  Next steps:"
-echo "    1. Start OpenVPN:   sudo openvpn --config $OVPN --daemon"
-echo "    2. Start monitor:   ./checkip.sh <your_home_ip>"
-echo "    3. To recover:      sudo bash $SCRIPT_DIR/ufw_base.sh"
