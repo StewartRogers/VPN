@@ -23,7 +23,6 @@ if [ -z "$OVPN" ]; then
     echo "ERROR: No .ovpn file found in /etc/openvpn/client/"
     exit 1
 fi
-echo "Using config: $OVPN"
 
 # Strip carriage returns - .ovpn files are often created on Windows
 REMOTE_LINE=$(grep "^remote " "$OVPN" | head -1 | tr -d '\r')
@@ -44,7 +43,6 @@ if [ -z "$VPN_HOST" ] || [ -z "$VPN_PORT" ]; then
     exit 1
 fi
 
-# Validate port is numeric
 if ! [[ "$VPN_PORT" =~ ^[0-9]+$ ]]; then
     echo "ERROR: Parsed port is not numeric: '$VPN_PORT'"
     echo "       The .ovpn file may have unexpected formatting."
@@ -61,34 +59,22 @@ else
         echo "       Check DNS is working before applying the kill switch."
         exit 1
     fi
-    echo "Resolved $VPN_HOST -> $VPN_IP"
 fi
 
-echo "VPN server: $VPN_IP  port: $VPN_PORT  proto: $VPN_PROTO"
+echo "  Config:     $(basename "$OVPN")"
+echo "  VPN server: $VPN_IP ($VPN_HOST)"
+echo "  Port/Proto: $VPN_PORT/$VPN_PROTO"
 
 # --- Apply base state first (clean slate) ---
-bash "$SCRIPT_DIR/ufw_base.sh"
+bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1
 
 # --- Add kill switch rules on top ---
+ufw default deny outgoing                                                          > /dev/null 2>&1
+ufw allow out to "$VPN_IP" port "$VPN_PORT" proto "$VPN_PROTO" comment 'VPN server' > /dev/null 2>&1
+ufw allow out on tun0 comment 'VPN tunnel'                                         > /dev/null 2>&1
+ufw allow out on eth0  to any port 53 comment 'DNS'                                > /dev/null 2>&1
+ufw allow out on wlan0 to any port 53 comment 'DNS'                                > /dev/null 2>&1
+ufw allow out on eth0  to 10.0.0.0/24 comment 'LAN'                               > /dev/null 2>&1
+ufw allow out on wlan0 to 10.0.0.0/24 comment 'LAN'                               > /dev/null 2>&1
 
-# Block all outgoing by default
-ufw default deny outgoing
-
-# Allow OpenVPN to reach the VPN server
-ufw allow out to "$VPN_IP" port "$VPN_PORT" proto "$VPN_PROTO" comment 'VPN server'
-
-# Allow all traffic through the VPN tunnel
-ufw allow out on tun0 comment 'VPN tunnel'
-
-# Allow DNS on both interfaces so OpenVPN can resolve hostnames
-ufw allow out on eth0  port 53 comment 'DNS'
-ufw allow out on wlan0 port 53 comment 'DNS'
-
-# Allow outgoing to LAN on both interfaces (Plex, SSH responses, web UI)
-ufw allow out on eth0  to 10.0.0.0/24 comment 'LAN'
-ufw allow out on wlan0 to 10.0.0.0/24 comment 'LAN'
-
-echo ""
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Kill switch active."
-echo "  Allowed: tun0 (all), $VPN_IP:$VPN_PORT/$VPN_PROTO (VPN server), port 53 (DNS), 10.0.0.0/24 (LAN)"
-echo "  Everything else: BLOCKED"
+echo "  Status:     ACTIVE - all outgoing blocked except VPN tunnel and LAN"

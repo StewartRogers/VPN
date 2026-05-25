@@ -157,9 +157,13 @@ trap 'log_message "WARN" "Script interrupted by user"; exit 130' INT TERM
 
 rotate_logs
 
+divider() { echo "------------------------------------------------------------"; }
+
+clear
 echo ""
-echo "VPN Start Script"
+echo "  VPN Start Script"
 echo ""
+divider
 
 #
 # Capture home IP before VPN starts
@@ -169,7 +173,8 @@ if ! validate_ip "$YHOMEIP"; then
     log_message "WARN" "Could not retrieve valid external IP address"
     YHOMEIP=""
 fi
-log_message "INFO" "Current external IP (pre-VPN): ${YHOMEIP:-unknown}"
+echo "  Home IP (pre-VPN): ${YHOMEIP:-unknown}"
+log_message "INFO" "Home IP (pre-VPN): ${YHOMEIP:-unknown}"
 echo ""
 
 #
@@ -178,18 +183,13 @@ echo ""
 if [ "$NON_INTERACTIVE" = true ]; then
     SWCHECK="n"
 else
-    while true; do
-        read -p "Do you want to check if all software is installed? [y/n]: " SWCHECK
-        case "${SWCHECK,,}" in
-            y|n) break ;;
-            *) echo "Please enter 'y' or 'n'." ;;
-        esac
-    done
+    read -p "  Check software installation? [y/n]: " SWCHECK
+    SWCHECK=$(echo "$SWCHECK" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 fi
 
-if [[ "${SWCHECK,,}" == "y" ]]; then
-    log_message "INFO" "Checking required software..."
+if [ "$SWCHECK" = "y" ]; then
     echo ""
+    log_message "INFO" "Checking required software..."
 
     sudo apt-get -qq update 2>/dev/null || true
 
@@ -234,22 +234,19 @@ fi
 #
 # OVPN Configuration: download or select existing
 #
+divider
+echo ""
 if [ -n "$CUSTOM_OVPN_URL" ]; then
     GETOVPN="y"
     OVPNURL="$CUSTOM_OVPN_URL"
 elif [ "$NON_INTERACTIVE" = true ]; then
     GETOVPN="n"
 else
-    while true; do
-        read -p "Do you want to download a new OVPN file? [y/n]: " GETOVPN
-        case "${GETOVPN,,}" in
-            y|n) break ;;
-            *) echo "Please enter 'y' or 'n'." ;;
-        esac
-    done
+    read -p "  Download a new OVPN file? [y/n]: " GETOVPN
+    GETOVPN=$(echo "$GETOVPN" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 fi
 
-if [[ "${GETOVPN,,}" == "y" ]]; then
+if [ "$GETOVPN" = "y" ]; then
     # Clean out old configs
     log_message "INFO" "Cleaning $XVPNCHOME for new OVPN file..."
     sudo rm -f "$XVPNCHOME"*.ovpn
@@ -314,35 +311,55 @@ fi
 
 OVPN_COUNT=$(sudo find "$XVPNCHOME" -maxdepth 1 -name "*.ovpn" -type f 2>/dev/null | wc -l)
 if [ "$OVPN_COUNT" -gt 1 ]; then
-    log_message "INFO" "Multiple OVPN files found - using newest: $(basename "$XCONFIGFILE")"
+    echo "  Config (newest of $OVPN_COUNT): $(basename "$XCONFIGFILE")"
+    log_message "INFO" "Multiple OVPN files - using newest: $(basename "$XCONFIGFILE")"
 else
-    log_message "INFO" "Using OVPN config: $(basename "$XCONFIGFILE")"
+    echo "  Config: $(basename "$XCONFIGFILE")"
+    log_message "INFO" "OVPN config: $(basename "$XCONFIGFILE")"
 fi
+echo ""
 
 #
 # Apply UFW kill switch before starting OpenVPN
 #
+divider
+echo ""
 if [ "$SKIP_KILLSWITCH" != true ]; then
-    log_message "INFO" "Applying UFW kill switch..."
+    echo "  Applying UFW kill switch..."
     echo ""
     sudo bash "$SCRIPT_DIR/ufw_killswitch.sh"
     KS_RC=$?
     echo ""
     if [ $KS_RC -eq 0 ]; then
         KILLSWITCH_APPLIED=true
-        log_message "INFO" "UFW kill switch active - outgoing locked to VPN tunnel"
+        log_message "INFO" "UFW kill switch active"
     else
+        echo "  ERROR: Failed to apply UFW kill switch"
         log_message "ERROR" "Failed to apply UFW kill switch - aborting"
         ERROR_HANDLED=true
         exit 1
     fi
 else
-    log_message "WARN" "Kill switch skipped (--no-killswitch)"
+    echo "  Kill switch skipped (--no-killswitch)"
+    log_message "WARN" "Kill switch skipped"
+fi
+echo ""
+
+#
+# Kill any existing OpenVPN (ensures tun0 is used, not tun1/tun2)
+#
+if pgrep -x openvpn > /dev/null; then
+    echo "  Stopping existing OpenVPN process..."
+    sudo pkill -x openvpn
+    sleep 2
 fi
 
 #
 # Start OpenVPN
 #
+divider
+echo ""
+echo "  Starting OpenVPN..."
 log_message "INFO" "Starting OpenVPN: $(basename "$XCONFIGFILE")"
 sudo rm -f "$XVPNLOGFILE"
 sudo openvpn \
@@ -359,14 +376,23 @@ sudo openvpn \
 
 sleep 7
 echo ""
-echo "OpenVPN log:"
-echo ""
-sudo tail "$XVPNLOGFILE"
-echo ""
+
+# Check for success indicator in log
+if sudo grep -q "Initialization Sequence Completed" "$XVPNLOGFILE" 2>/dev/null; then
+    echo "  ** VPN connected - Initialization Sequence Completed **"
+    echo ""
+else
+    echo "  OpenVPN log (last 5 lines):"
+    echo ""
+    sudo tail -5 "$XVPNLOGFILE" 2>/dev/null | sed 's/^/    /'
+    echo ""
+fi
 
 #
 # Wait for VPN confirmation
 #
+divider
+echo ""
 iStart=""
 if [ "$NON_INTERACTIVE" = true ]; then
     log_message "INFO" "Waiting for VPN connection (non-interactive)..."
@@ -376,32 +402,29 @@ if [ "$NON_INTERACTIVE" = true ]; then
         log_message "INFO" "VPN interface detected (tun0)"
     else
         iStart="f"
-        log_message "ERROR" "VPN interface not detected - startup failed"
+        log_message "ERROR" "VPN interface not detected"
     fi
 else
     while true; do
-        read -p "Has VPN started? [Y/N/F - F=failed]: " iStart
+        read -p "  Has VPN started? [Y/N/F - F=failed]: " iStart
         iStart=$(echo "$iStart" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
         case "$iStart" in
-            y)
-                break
-                ;;
-            f)
-                break
-                ;;
+            y) break ;;
+            f) break ;;
             n)
                 for i in $(seq 10 -1 0); do
-                    echo -ne "  Checking again in $i seconds...\r"
+                    echo -ne "  Rechecking in $i seconds...\r"
                     sleep 1
                 done
                 echo ""
-                echo "OpenVPN log:"
-                sudo tail "$XVPNLOGFILE"
+                if sudo grep -q "Initialization Sequence Completed" "$XVPNLOGFILE" 2>/dev/null; then
+                    echo "  ** VPN connected - Initialization Sequence Completed **"
+                else
+                    sudo tail -5 "$XVPNLOGFILE" 2>/dev/null | sed 's/^/    /'
+                fi
                 echo ""
                 ;;
-            *)
-                echo "Please enter Y, N, or F"
-                ;;
+            *) echo "  Please enter Y, N, or F" ;;
         esac
     done
 fi
@@ -409,30 +432,35 @@ fi
 #
 # Launch monitoring if VPN confirmed
 #
+echo ""
+divider
+echo ""
 if [ "$iStart" = "y" ]; then
     if [ -z "$YHOMEIP" ]; then
-        log_message "ERROR" "Home IP was not captured at startup - cannot start monitor"
-        log_message "INFO" "Start monitoring manually: ./checkip.sh <your_home_ip>"
+        echo "  ERROR: Home IP not captured - cannot start monitor"
+        echo "  Run manually: ./checkip.sh <your_home_ip>"
+        log_message "ERROR" "Home IP not captured - monitor not started"
     elif [ "$SKIP_KILLSWITCH" = true ]; then
-        log_message "WARN" "Kill switch was skipped - not starting monitor (would be refused)"
-        log_message "INFO" "Apply kill switch first: sudo bash $SCRIPT_DIR/ufw_killswitch.sh"
+        echo "  WARNING: Kill switch was skipped - monitor not started"
+        echo "  Run: sudo bash $SCRIPT_DIR/ufw_killswitch.sh  then  ./checkip.sh $YHOMEIP"
+        log_message "WARN" "Kill switch skipped - monitor not started"
     else
-        log_message "INFO" "Starting VPN monitor (will verify VPN and start qBittorrent)..."
         "$SCRIPT_DIR/checkip.sh" "$YHOMEIP" &
         CHECKIP_PID=$!
         echo "$CHECKIP_PID" > "$PID_DIR/checkip.pid"
         log_message "INFO" "VPN monitor started (PID: $CHECKIP_PID)"
+        echo "  VPN is running.  Monitor and qBittorrent starting..."
         echo ""
-        echo "VPN started successfully."
-        echo "  Monitor log: tail -f $LOG_DIR/latest.log"
-        echo "  To stop:     ./stopvpn.sh"
-        echo ""
+        echo "  Monitor log:  tail -f $LOG_DIR/latest.log"
+        echo "  To stop:      ./stopvpn.sh"
     fi
 elif [ "$iStart" = "f" ]; then
     log_message "ERROR" "VPN startup failed"
+    echo "  Resetting UFW..."
     if [ "$KILLSWITCH_APPLIED" = true ]; then
-        log_message "INFO" "Resetting UFW to base state..."
-        sudo bash "$SCRIPT_DIR/ufw_base.sh" >> "$LOG_DIR/vpn.log" 2>&1 || true
+        sudo bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1 || true
         KILLSWITCH_APPLIED=false
     fi
+    echo "  UFW reset to base state."
 fi
+echo ""
