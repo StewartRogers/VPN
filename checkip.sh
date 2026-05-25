@@ -25,6 +25,48 @@ if [ -z "$YIP_HOMEIP" ]; then
     exit 1
 fi
 
+# --- Pre-flight checks (run before log redirect so errors appear in terminal) ---
+check_ipv6_disabled() {
+    local all default
+    all=$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)
+    default=$(cat /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null)
+    if [ "$all" != "1" ] || [ "$default" != "1" ]; then
+        echo ""
+        echo "ERROR: IPv6 is not disabled - this is a leak risk."
+        echo ""
+        echo "  Add the following to /etc/sysctl.conf:"
+        echo "    net.ipv6.conf.all.disable_ipv6 = 1"
+        echo "    net.ipv6.conf.default.disable_ipv6 = 1"
+        echo ""
+        echo "  Then apply with:  sudo sysctl -p"
+        echo "  Verify with:      cat /proc/sys/net/ipv6/conf/all/disable_ipv6  (should be 1)"
+        echo ""
+        return 1
+    fi
+    return 0
+}
+
+if ! check_ipv6_disabled; then
+    exit 1
+fi
+
+check_killswitch_active() {
+    if ! sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
+        echo ""
+        echo "ERROR: UFW kill switch is not active - outgoing traffic is unrestricted."
+        echo ""
+        echo "  Apply the kill switch first:"
+        echo "    sudo bash \"$SCRIPT_DIR/ufw_killswitch.sh\""
+        echo ""
+        return 1
+    fi
+    return 0
+}
+
+if ! check_killswitch_active; then
+    exit 1
+fi
+
 # --- Session logging setup ---
 mkdir -p "$LOG_DIR"
 SESSION_LOG="$LOG_DIR/session_$(date '+%Y%m%d_%H%M%S').log"
@@ -42,9 +84,12 @@ log() {
 }
 
 # --- Cleanup on exit (Ctrl+C, kill, or natural exit) ---
+# UFW kill switch is left active intentionally — stopvpn.sh removes it.
+# This ensures outgoing stays blocked if checkip exits unexpectedly.
 _exit_handler() {
     log "INFO" "Stopping qBittorrent before exit..."
     stop_qbittorrent
+    log "INFO" "Kill switch remains active - run stopvpn.sh to restore base state"
     log "INFO" "=== Session ended ==="
 }
 trap _exit_handler EXIT
@@ -61,6 +106,16 @@ check_openvpn_process() {
 check_vpn_interface() {
     if ! ip link show tun0 &>/dev/null; then
         log "CRITICAL" "VPN interface (tun0) is down"
+        return 1
+    fi
+    return 0
+}
+
+check_routing() {
+    local route
+    route=$(ip route get 8.8.8.8 2>/dev/null)
+    if ! echo "$route" | grep -q "dev tun0"; then
+        log "CRITICAL" "Traffic is not routing through tun0 - possible leak"
         return 1
     fi
     return 0
@@ -148,8 +203,8 @@ log "INFO" "Session log: $SESSION_LOG"
 
 # Verify VPN is up before starting qBittorrent
 log "INFO" "Initial VPN verification..."
-if ! check_openvpn_process || ! check_vpn_interface; then
-    log "CRITICAL" "VPN not running at startup - aborting"
+if ! check_openvpn_process || ! check_vpn_interface || ! check_routing; then
+    log "CRITICAL" "VPN not ready at startup - aborting"
     exit 1
 fi
 
@@ -172,10 +227,10 @@ while true; do
     sleep "$FAST_CHECK_INTERVAL"
     current_time=$(date +%s)
 
-    # Fast check: process + interface
-    if ! check_openvpn_process || ! check_vpn_interface; then
+    # Fast check: process + interface + routing
+    if ! check_openvpn_process || ! check_vpn_interface || ! check_routing; then
         log "CRITICAL" "VPN failure detected - shutting down"
-        # trap handles stop_qbittorrent
+        # trap handles stop_qbittorrent and UFW reset
         exit 1
     fi
 

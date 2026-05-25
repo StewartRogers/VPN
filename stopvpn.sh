@@ -54,92 +54,12 @@ rotate_logs() {
 SSERVICE="q"
 TEMP_DEST=""  # Will be set to SOURCE_DIR during file processing
 
-#
-# Cleanup security measures
-#
-cleanup_killswitch() {
-    if [ -f "$BACKUP_DIR/iptables.backup" ]; then
-        log_message "INFO" "Restoring original iptables rules"
-        sudo iptables-restore < "$BACKUP_DIR/iptables.backup"
-        rm "$BACKUP_DIR/iptables.backup"
-    fi
-}
-
-cleanup_dns() {
-    if [ -f "$BACKUP_DIR/resolv.conf.backup" ]; then
-        log_message "INFO" "Restoring original DNS configuration"
-        sudo chattr -i /etc/resolv.conf 2>/dev/null || true
-        sudo mv "$BACKUP_DIR/resolv.conf.backup" /etc/resolv.conf
-    fi
-}
-
-restore_ipv6() {
-    if [ -f "$BACKUP_DIR/ipv6_all.backup" ] && [ -f "$BACKUP_DIR/ipv6_default.backup" ]; then
-        echo "... Restoring IPv6 settings"
-        log_message "INFO" "Restoring IPv6 settings"
-        ORIGINAL_ALL=$(cat "$BACKUP_DIR/ipv6_all.backup")
-        ORIGINAL_DEFAULT=$(cat "$BACKUP_DIR/ipv6_default.backup")
-        
-        # Validate values are 0 or 1
-        if [[ "$ORIGINAL_ALL" =~ ^[01]$ ]] && [[ "$ORIGINAL_DEFAULT" =~ ^[01]$ ]]; then
-            sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL_ALL > /dev/null
-            sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL_DEFAULT > /dev/null
-            rm "$BACKUP_DIR/ipv6_all.backup" "$BACKUP_DIR/ipv6_default.backup"
-            echo "... IPv6 settings restored"
-        else
-            echo "... Warning: Invalid IPv6 backup values, skipping restoration"
-            log_message "WARN" "Invalid IPv6 backup values: all=$ORIGINAL_ALL, default=$ORIGINAL_DEFAULT"
-        fi
-    elif [ -f "$BACKUP_DIR/ipv6.backup" ]; then
-        # Fallback for old backup format
-        echo "... Restoring IPv6 settings (legacy format)"
-        log_message "INFO" "Restoring IPv6 settings (legacy format)"
-        ORIGINAL=$(cat "$BACKUP_DIR/ipv6.backup")
-        
-        # Validate value is 0 or 1
-        if [[ "$ORIGINAL" =~ ^[01]$ ]]; then
-            sudo sysctl -w net.ipv6.conf.all.disable_ipv6=$ORIGINAL > /dev/null
-            sudo sysctl -w net.ipv6.conf.default.disable_ipv6=$ORIGINAL > /dev/null
-            rm "$BACKUP_DIR/ipv6.backup"
-            echo "... IPv6 settings restored"
-        else
-            echo "... Warning: Invalid IPv6 backup value, skipping restoration"
-            log_message "WARN" "Invalid IPv6 backup value: $ORIGINAL"
-        fi
-    fi
-}
-
-restore_qbittorrent_config() {
-    local CONFIG_FILE="$HOME/.config/qBittorrent/qBittorrent.conf"
-    if [ -f "$BACKUP_DIR/qBittorrent.conf.backup" ]; then
-        echo "... Restoring qBittorrent configuration"
-        log_message "INFO" "Restoring qBittorrent configuration"
-        mv "$BACKUP_DIR/qBittorrent.conf.backup" "$CONFIG_FILE"
-        echo "... qBittorrent configuration restored"
-    fi
-}
-
-cleanup_ufw_rule() {
-    if [ -f "$BACKUP_DIR/ufw_rule.backup" ]; then
-        echo "... Removing UFW rule added by VPN startup"
-        log_message "INFO" "Removing UFW rule"
-        UFW_RULE=$(cat "$BACKUP_DIR/ufw_rule.backup")
-        
-        # Validate the rule format (port/protocol) and port range
-        if [[ "$UFW_RULE" =~ ^([0-9]+)/(tcp|udp)$ ]]; then
-            local PORT="${BASH_REMATCH[1]}"
-            if [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ]; then
-                sudo ufw delete allow "$UFW_RULE" > /dev/null 2>&1
-                echo "... UFW rule removed"
-            else
-                echo "... Warning: Invalid UFW port number in backup, skipping removal"
-                log_message "WARN" "Invalid UFW port number: $UFW_RULE"
-            fi
-        else
-            echo "... Warning: Invalid UFW rule format in backup, skipping removal"
-            log_message "WARN" "Invalid UFW rule format: $UFW_RULE"
-        fi
-        rm "$BACKUP_DIR/ufw_rule.backup"
+reset_ufw() {
+    log_message "INFO" "Resetting UFW to base state..."
+    if sudo bash "$SCRIPT_DIR/ufw_base.sh" 2>&1 | tee -a "$LOG_DIR/vpn.log"; then
+        log_message "INFO" "UFW base state restored - outgoing unrestricted"
+    else
+        log_message "WARN" "UFW reset failed - run manually: sudo bash $SCRIPT_DIR/ufw_base.sh"
     fi
 }
 
@@ -212,19 +132,12 @@ shutdown_services() {
     screen -S "checkip" -p 0 -X quit > /dev/null 2>&1
 
     log_message "INFO" "Stopping OpenVPN"
-    if pgrep -f "openvpn" >/dev/null; then
-        sudo pkill -f "openvpn"
+    if pgrep -x "openvpn" >/dev/null; then
+        sudo pkill -x "openvpn"
         sleep 2
     fi
 
-    # Clean up all security measures
-    log_message "INFO" "Cleaning up security measures"
-    cleanup_killswitch
-    cleanup_dns
-    restore_ipv6
-    restore_qbittorrent_config
-    cleanup_ufw_rule
-    log_message "INFO" "All security measures reversed - system restored to normal"
+    reset_ufw
     echo ""
 }
 
