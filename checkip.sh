@@ -1,282 +1,204 @@
 #!/bin/bash
 # Copyright (c) 2022-2025 Stewart Rogers
 # SPDX-License-Identifier: MIT
-#
-# Original Author: Stewart Rogers
-# Enhanced for faster VPN disconnect detection and auto-reconnect
-# This licensed under the MIT License
-# A short and simple permissive license with conditions only requiring
-# preservation of copyright and license notices. Licensed works, modifications,
-# and larger works may be distributed under different terms and without source code.
-#
 
-#
-# Load configuration file if exists
-#
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Load config
 if [ -f "$HOME/.vpn_config.conf" ]; then
     source "$HOME/.vpn_config.conf"
 elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
     source "$SCRIPT_DIR/vpn_config.conf"
 fi
 
-#
-# VARIABLES
-#
-XIP_HOME=$PWD"/"
-XIP_PYFILE=$XIP_HOME"vpn_active.py"
-XIP_LOGFILE=$XIP_HOME"checkvpn.log"
-XIP_STOPFILE=$XIP_HOME"stopvpn.sh --shutdown-only"
+# Settings
+FAST_CHECK_INTERVAL="${FAST_CHECK_INTERVAL:-2}"
+IP_CHECK_INTERVAL="${IP_CHECK_INTERVAL:-10}"
 PID_DIR="${PID_DIR:-/tmp/vpn_pids}"
-YIP_HOMEIP=$1
-#
-# New variables for enhanced monitoring
-#
-FAST_CHECK_INTERVAL=${FAST_CHECK_INTERVAL:-2}
-IP_CHECK_INTERVAL=${IP_CHECK_INTERVAL:-10}
-MAX_RECONNECT_ATTEMPTS=${MAX_RECONNECT_ATTEMPTS:-3}
-LAST_IP_CHECK=0
-reconnect_count=0
-#
-# redirect stdout/stderr to a file
-#
-rm -rf $XIP_LOGFILE
-exec >$XIP_LOGFILE 2>&1
+LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/vpn_logs}"
+MAX_SESSIONS="${MAX_SESSIONS:-20}"
 
-#
-# Enhanced monitoring functions
-#
+YIP_HOMEIP="$1"
+
+if [ -z "$YIP_HOMEIP" ]; then
+    echo "Usage: $0 <home_ip>"
+    exit 1
+fi
+
+# --- Session logging setup ---
+mkdir -p "$LOG_DIR"
+SESSION_LOG="$LOG_DIR/session_$(date '+%Y%m%d_%H%M%S').log"
+exec > "$SESSION_LOG" 2>&1
+ln -sf "$SESSION_LOG" "$LOG_DIR/latest.log"
+
+# Prune old sessions, keep last MAX_SESSIONS
+ls -t "$LOG_DIR"/session_*.log 2>/dev/null | tail -n +"$((MAX_SESSIONS + 1))" | xargs rm -f 2>/dev/null || true
+
+# --- Logging ---
+log() {
+    local level="$1"
+    local msg="$2"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $msg"
+}
+
+# --- Cleanup on exit (Ctrl+C, kill, or natural exit) ---
+_exit_handler() {
+    log "INFO" "Stopping qBittorrent before exit..."
+    stop_qbittorrent
+    log "INFO" "=== Session ended ==="
+}
+trap _exit_handler EXIT
+
+# --- VPN checks ---
 check_openvpn_process() {
-    if ! pgrep -f openvpn > /dev/null; then
-        echo "$(date): CRITICAL - OpenVPN process not running!"
+    if ! pgrep -x openvpn > /dev/null; then
+        log "CRITICAL" "OpenVPN process not running"
         return 1
     fi
     return 0
 }
 
 check_vpn_interface() {
-    if ! ip link show tun0 &>/dev/null 2>&1; then
-        echo "$(date): CRITICAL - VPN interface (tun0) is down!"
+    if ! ip link show tun0 &>/dev/null; then
+        log "CRITICAL" "VPN interface (tun0) is down"
         return 1
     fi
     return 0
 }
 
-# qBittorrent control helpers
+# Returns 0=secure, 1=confirmed leak, 2=could not determine
+perform_ip_check() {
+    local result
+    result=$(python3 "$SCRIPT_DIR/vpn_active.py" "$YIP_HOMEIP" 2>/dev/null)
+    case "$result" in
+        secure)
+            log "INFO" "IP check: secure"
+            return 0
+            ;;
+        leak)
+            log "CRITICAL" "IP check: HOME IP DETECTED - confirmed leak"
+            return 1
+            ;;
+        error)
+            log "WARN" "IP check: could not reach IP services"
+            return 2
+            ;;
+        *)
+            log "ERROR" "IP check: unexpected response: '$result'"
+            return 2
+            ;;
+    esac
+}
+
+# --- qBittorrent control ---
 is_qbittorrent_running() {
-    # Prefer PID file if present
     local pid_file="$PID_DIR/qbittorrent.pid"
     if [ -f "$pid_file" ]; then
-        local pid=$(cat "$pid_file" 2>/dev/null)
+        local pid
+        pid=$(cat "$pid_file" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            echo "$(date): qBittorrent running (PID: $pid)"
             return 0
         fi
     fi
-    # Fallback to process check
-    if pgrep -f "qbittorrent-nox" >/dev/null; then
-        echo "$(date): qBittorrent running (detected by process)"
-        return 0
-    fi
-    return 1
+    pgrep -f "qbittorrent-nox" >/dev/null
 }
 
 stop_qbittorrent() {
     local pid_file="$PID_DIR/qbittorrent.pid"
     if [ -f "$pid_file" ]; then
-        local pid=$(cat "$pid_file" 2>/dev/null)
+        local pid
+        pid=$(cat "$pid_file" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            echo "$(date): Stopping qBittorrent (PID: $pid)"
+            log "INFO" "Stopping qBittorrent (PID: $pid)"
             kill "$pid" 2>/dev/null || true
             sleep 1
-            if kill -0 "$pid" 2>/dev/null; then
-                kill -9 "$pid" 2>/dev/null || true
-            fi
+            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
         fi
         rm -f "$pid_file"
     fi
-    # Ensure stopped even without PID file
     if pgrep -f "qbittorrent-nox" >/dev/null; then
-        echo "$(date): Stopping qBittorrent (pkill fallback)"
+        log "INFO" "Stopping qBittorrent (pkill fallback)"
         sudo pkill -f "qbittorrent-nox" 2>/dev/null || true
     fi
 }
 
 start_qbittorrent() {
-    # Avoid duplicate starts
     if is_qbittorrent_running; then
-        echo "$(date): qBittorrent already running; skip start"
+        log "INFO" "qBittorrent already running"
         return 0
     fi
-    echo "$(date): Starting qBittorrent"
-    nohup qbittorrent-nox > "$XIP_HOME/qbit.log" 2>&1 &
+    log "INFO" "Starting qBittorrent"
+    nohup qbittorrent-nox > "$SCRIPT_DIR/qbit.log" 2>&1 &
     local qpid=$!
     mkdir -p "$PID_DIR"
     echo "$qpid" > "$PID_DIR/qbittorrent.pid"
-    # Verify
     sleep 1
     if kill -0 "$qpid" 2>/dev/null; then
-        echo "$(date): qBittorrent started (PID: $qpid)"
-        return 0
+        log "INFO" "qBittorrent started (PID: $qpid)"
     else
-        echo "$(date): WARNING - qBittorrent may have failed to start"
-        return 1
+        log "WARN" "qBittorrent may have failed to start"
     fi
 }
 
-perform_ip_check() {
-    echo "$(date): Performing full IP check..."
-    local result=$(python3 $XIP_PYFILE $YIP_HOMEIP)
-    echo "$(date): IP test result: $result"
-    if [ "$result" != "secure" ]; then
-        echo "$(date): CRITICAL - IP leak detected!"
-        return 1
-    fi
-    return 0
-}
+# --- Main ---
+log "INFO" "=== VPN monitoring session started ==="
+log "INFO" "Monitoring home IP: $YIP_HOMEIP"
+log "INFO" "Fast check: ${FAST_CHECK_INTERVAL}s  |  IP check: ${IP_CHECK_INTERVAL}s"
+log "INFO" "Session log: $SESSION_LOG"
 
-#
-# Auto-reconnect function
-#
-attempt_reconnect() {
-    echo "$(date): Attempting VPN reconnection (attempt $((reconnect_count + 1))/$MAX_RECONNECT_ATTEMPTS)..."
-    
-    # Stop existing VPN
-    sudo pkill -f openvpn
-    sleep 2
-    
-    # Find the most recent .ovpn file
-    XCONFIGFILE=$(ls /etc/openvpn/client/*.ovpn 2>/dev/null | head -1)
-    
-    if [ -z "$XCONFIGFILE" ]; then
-        echo "$(date): ERROR - No .ovpn config file found"
-        return 1
-    fi
-    
-    echo "$(date): Restarting VPN with config: $XCONFIGFILE"
-    
-    # Restart VPN
-    sudo openvpn --config $XCONFIGFILE --log /var/log/openvpn.log --daemon --ping 10 --ping-exit 60 --auth-nocache --mute-replay-warnings --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC --data-ciphers-fallback AES-128-CBC --verb 3
-    
-    # Wait for connection
-    sleep 10
-    
-    # Check if successful
-    if check_openvpn_process && check_vpn_interface; then
-        # Give it a moment more to stabilize
-        sleep 5
-        if perform_ip_check; then
-            echo "$(date): Reconnection successful!"
-            # Safe to restart torrent
-            start_qbittorrent
-            return 0
-        fi
-    fi
-    
-    echo "$(date): Reconnection failed"
-    return 1
-}
-
-#
-# Main
-#
-echo ""
-echo "$(date): Starting enhanced VPN monitoring with auto-reconnect..."
-echo "$(date): Fast checks every $FAST_CHECK_INTERVAL seconds"
-echo "$(date): Full IP checks every $IP_CHECK_INTERVAL seconds"
-echo "$(date): Max reconnect attempts: $MAX_RECONNECT_ATTEMPTS"
-echo ""
-
-active="secure"
-firstrun="y"
-echo ""
-
-while [[ "$active" == "secure" ]]; do
-    current_time=$(date +%s)
-    
-    # Always do fast checks (process and interface)
-    if ! check_openvpn_process || ! check_vpn_interface; then
-        # VPN failure detected - attempt reconnection
-        # Immediately stop torrent to prevent leaks
-        if is_qbittorrent_running; then
-            echo "$(date): Immediate action: Stopping qBittorrent due to VPN failure"
-            stop_qbittorrent
-        fi
-        if [ $reconnect_count -lt $MAX_RECONNECT_ATTEMPTS ]; then
-            reconnect_count=$((reconnect_count + 1))
-            echo "$(date): VPN failure detected - initiating reconnect attempt $reconnect_count/$MAX_RECONNECT_ATTEMPTS"
-            
-            if attempt_reconnect; then
-                reconnect_count=0  # Reset counter on success
-                LAST_IP_CHECK=$current_time  # Reset IP check timer
-                echo "$(date): VPN reconnected successfully, resuming monitoring"
-                continue
-            fi
-        else
-            echo "$(date): Max reconnection attempts ($MAX_RECONNECT_ATTEMPTS) reached"
-            active="notsecure"
-            break
-        fi
-    fi
-    
-    # Do full IP check based on interval
-    if [ $((current_time - LAST_IP_CHECK)) -ge $IP_CHECK_INTERVAL ]; then
-        if [[ "$firstrun" == "n" ]]; then
-            echo ""
-            echo "$(date): Running scheduled IP verification..."
-        else
-            echo "$(date): Initial VPN verification..."
-        fi
-        
-        if ! perform_ip_check; then
-            # IP leak detected - attempt reconnection
-            # Immediately stop torrent to prevent leaks
-            if is_qbittorrent_running; then
-                echo "$(date): Immediate action: Stopping qBittorrent due to IP leak"
-                stop_qbittorrent
-            fi
-            if [ $reconnect_count -lt $MAX_RECONNECT_ATTEMPTS ]; then
-                reconnect_count=$((reconnect_count + 1))
-                echo "$(date): IP leak detected - initiating reconnect attempt $reconnect_count/$MAX_RECONNECT_ATTEMPTS"
-                
-                if attempt_reconnect; then
-                    reconnect_count=0  # Reset counter on success
-                    LAST_IP_CHECK=$current_time  # Reset IP check timer
-                    echo "$(date): VPN reconnected successfully, resuming monitoring"
-                    firstrun="n"
-                    continue
-                fi
-            else
-                echo "$(date): Max reconnection attempts ($MAX_RECONNECT_ATTEMPTS) reached"
-                active="notsecure"
-                break
-            fi
-        fi
-        
-        LAST_IP_CHECK=$current_time
-        firstrun="n"
-        echo "$(date): VPN status confirmed secure"
-        reconnect_count=0  # Reset counter after successful check
-    else
-        # Just show we're monitoring
-        if [ $((current_time % 10)) -eq 0 ]; then
-            echo "$(date): VPN monitoring active (process: OK, interface: OK)"
-        fi
-    fi
-    
-    sleep $FAST_CHECK_INTERVAL
-done
-
-echo ""
-if [ "$active" != "secure" ]; then
-    echo "$(date): VPN COMPROMISED - All reconnection attempts failed"
-    echo "$(date): Initiating emergency shutdown..."
-    echo "$(date): Stopping Torrent Server and VPN..."
-    $XIP_STOPFILE
-    echo "$(date): Emergency shutdown complete"
-else
-    echo "$(date): Monitoring stopped normally"
+# Verify VPN is up before starting qBittorrent
+log "INFO" "Initial VPN verification..."
+if ! check_openvpn_process || ! check_vpn_interface; then
+    log "CRITICAL" "VPN not running at startup - aborting"
+    exit 1
 fi
-echo ""
-echo "$(date): FINISHED"
-echo ""
+
+perform_ip_check
+ip_rc=$?
+if [ $ip_rc -eq 1 ]; then
+    log "CRITICAL" "IP leak detected at startup - aborting"
+    exit 1
+elif [ $ip_rc -eq 2 ]; then
+    log "WARN" "Could not verify IP at startup - continuing, will recheck"
+fi
+
+start_qbittorrent
+
+LAST_IP_CHECK=$(date +%s)
+consecutive_ip_errors=0
+log "INFO" "Monitoring active"
+
+while true; do
+    sleep "$FAST_CHECK_INTERVAL"
+    current_time=$(date +%s)
+
+    # Fast check: process + interface
+    if ! check_openvpn_process || ! check_vpn_interface; then
+        log "CRITICAL" "VPN failure detected - shutting down"
+        # trap handles stop_qbittorrent
+        exit 1
+    fi
+
+    # Periodic full IP check
+    if [ $((current_time - LAST_IP_CHECK)) -ge "$IP_CHECK_INTERVAL" ]; then
+        perform_ip_check
+        ip_rc=$?
+
+        if [ $ip_rc -eq 1 ]; then
+            log "CRITICAL" "IP leak confirmed - shutting down"
+            exit 1
+        elif [ $ip_rc -eq 2 ]; then
+            consecutive_ip_errors=$((consecutive_ip_errors + 1))
+            log "WARN" "IP check error ($consecutive_ip_errors consecutive)"
+            if [ $consecutive_ip_errors -ge 3 ]; then
+                log "CRITICAL" "3 consecutive IP check failures - shutting down as precaution"
+                exit 1
+            fi
+            # Retry sooner than normal
+            LAST_IP_CHECK=$((current_time - IP_CHECK_INTERVAL + 5))
+        else
+            consecutive_ip_errors=0
+            LAST_IP_CHECK=$current_time
+        fi
+    fi
+done
