@@ -106,11 +106,11 @@ def organize_files(source_dir: str, operations: list) -> list:
             continue
 
         dst_dir = source_dir if flatten else os.path.dirname(src)
-        dst_name = rename_to if rename_to else os.path.basename(src)
+        dst_name = os.path.basename(rename_to) if rename_to else os.path.basename(src)
         dst = os.path.realpath(os.path.join(dst_dir, dst_name))
 
         # Security: destination must stay inside source_dir
-        if not dst.startswith(source_dir):
+        if not dst.startswith(source_dir + os.sep):
             results.append({"original": original_rel, "status": "error",
                              "message": "Destination outside source directory"})
             continue
