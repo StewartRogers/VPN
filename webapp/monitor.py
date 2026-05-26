@@ -605,10 +605,13 @@ class VPNMonitor:
 
         self.status["running"] = False
         if not self._stop_event.is_set():
-            # Internal exit (VPN failure / leak) — shut everything down
-            self.log("Monitoring stopped due to failure — shutting down qBittorrent and OpenVPN", level="WARNING")
+            # Internal exit (VPN failure / leak) — stop qBittorrent and OpenVPN,
+            # but leave the kill switch active so no traffic leaks out.
+            # User must click Stop VPN to restore network access.
+            self.log("Monitoring stopped due to VPN failure — kill switch remains active", level="WARNING")
             self.stop_qbittorrent()
-            self.stop_vpn()
+            subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
+            self.log("OpenVPN stopped — use Stop VPN to restore network access", source="OPENVPN")
         else:
             # External exit (Stop Monitor or Stop All) — caller handles teardown
             self.log("Monitoring stopped")
