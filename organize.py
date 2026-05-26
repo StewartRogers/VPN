@@ -121,7 +121,7 @@ def _remove_empty_parents(start_dir: str, stop_at: str) -> None:
             if not _yn(f"  Remove empty '{rel}'?", default=True):
                 break
             os.rmdir(current)
-            print(f"  ✓ Removed '{rel}'")
+            print(f"  Done. Removed '{rel}'")
             current = os.path.dirname(current)
         except OSError as exc:
             print(f"  Warning: {exc}")
@@ -160,7 +160,7 @@ def process_file(
         return "skipped"
 
     final = os.path.join(dest_dir, proposed)
-    print(f"  → {final}")
+    print(f"  -> {final}")
 
     # Collision
     if os.path.exists(final):
@@ -188,14 +188,14 @@ def process_file(
     try:
         os.makedirs(dest_dir, exist_ok=True)
         shutil.move(f["path"], final)
-        print("  ✓ Moved.")
+        print("  Done. Moved.")
         src_parent = os.path.dirname(f["path"])
         if os.path.realpath(src_parent) != os.path.realpath(source_dir):
             _remove_empty_parents(src_parent, source_dir)
         print()
         return "moved"
     except Exception as exc:
-        print(f"  ✗ Error: {exc}")
+        print(f"  ERROR: {exc}")
         print()
         return "error"
 
@@ -203,7 +203,7 @@ def process_file(
 def main() -> None:
     print()
     print("  Video File Organizer")
-    print("  " + "─" * 40)
+    print("  " + "-" * 40)
     print()
 
     raw = _prompt("Source directory")
@@ -237,10 +237,10 @@ def main() -> None:
     for rel_dir, files in subdir_map.items():
         n = len(files)
         label = f"'{rel_dir}'" + (f"  ({n} file)" if n == 1 else f"  ({n} files)")
-        print(f"  ┌─ Subdirectory: {label}")
+        print(f"  Subdirectory: {label}")
         if not _yn("  Process?", default=True):
             skipped += n
-            print(f"  └─ Skipped.\n")
+            print("  Skipped.\n")
             continue
         print()
         for f in files:
@@ -253,7 +253,7 @@ def main() -> None:
     # Root-level files (no directory prompt — already in the download root)
     if root_files:
         if subdir_map:
-            print("  ─── Root directory ───────────────────────\n")
+            print("  --- Root directory ---\n")
         for f in root_files:
             counter += 1
             result = process_file(f, source_dir, movies_dir, tv_dir, f"[{counter}/{total}]")
@@ -261,7 +261,7 @@ def main() -> None:
             skipped += result == "skipped"
             errors += result == "error"
 
-    print("  " + "─" * 40)
+    print("  " + "-" * 40)
     print(f"  Moved: {moved}   Skipped: {skipped}   Errors: {errors}")
     print()
 
