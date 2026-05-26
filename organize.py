@@ -111,23 +111,6 @@ def scan_grouped(source_dir: str, recursive: bool) -> tuple[list[dict], dict[str
     return root_files, dict(subdir_map)
 
 
-def _remove_empty_parents(start_dir: str, stop_at: str) -> None:
-    current = start_dir
-    while os.path.realpath(current) != os.path.realpath(stop_at):
-        try:
-            if os.listdir(current):
-                break
-            rel = os.path.relpath(current, stop_at)
-            if not _yn(f"  Remove empty '{rel}'?", default=True):
-                break
-            os.rmdir(current)
-            print(f"  Done. Removed '{rel}'")
-            current = os.path.dirname(current)
-        except OSError as exc:
-            print(f"  Warning: {exc}")
-            break
-
-
 def process_file(
     f: dict,
     source_dir: str,
@@ -189,9 +172,6 @@ def process_file(
         os.makedirs(dest_dir, exist_ok=True)
         shutil.move(f["path"], final)
         print("  Done. Moved.")
-        src_parent = os.path.dirname(f["path"])
-        if os.path.realpath(src_parent) != os.path.realpath(source_dir):
-            _remove_empty_parents(src_parent, source_dir)
         print()
         return "moved"
     except Exception as exc:
@@ -243,12 +223,25 @@ def main() -> None:
             print("  Skipped.\n")
             continue
         print()
+        subdir_moved = 0
         for f in files:
             counter += 1
             result = process_file(f, source_dir, movies_dir, tv_dir, f"[{counter}/{total}]")
             moved += result == "moved"
             skipped += result == "skipped"
             errors += result == "error"
+            subdir_moved += result == "moved"
+
+        if subdir_moved:
+            full_subdir = os.path.join(source_dir, rel_dir)
+            if os.path.exists(full_subdir):
+                if _yn(f"  Delete '{rel_dir}' and all remaining files?", default=True):
+                    try:
+                        shutil.rmtree(full_subdir)
+                        print(f"  Done. Deleted '{rel_dir}'.")
+                    except Exception as exc:
+                        print(f"  ERROR deleting '{rel_dir}': {exc}")
+        print()
 
     # Root-level files (no directory prompt — already in the download root)
     if root_files:
