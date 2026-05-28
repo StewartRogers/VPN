@@ -119,7 +119,7 @@ def vpn_running():
     if err:
         return err
     try:
-        result = subprocess.run(["pgrep", "-f", "openvpn"], capture_output=True, timeout=2)
+        result = subprocess.run(["pgrep", "-x", "openvpn"], capture_output=True, timeout=2)
         return jsonify({"running": result.returncode == 0})
     except Exception:
         return jsonify({"running": False})
