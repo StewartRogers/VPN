@@ -1,11 +1,14 @@
 import glob
+import ipaddress
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 
 # Strips the leading timestamp OpenVPN writes into its own log lines
 # e.g. "2026-03-13 11:56:05 OpenVPN 2.6.3..." → "OpenVPN 2.6.3..."
@@ -385,6 +388,7 @@ class VPNMonitor:
                 "--config", config,
                 "--log", "/var/log/openvpn.log",
                 "--daemon",
+                "--script-security", "0",
                 "--ping", "10",
                 "--ping-exit", "60",
                 "--auth-nocache",
@@ -453,9 +457,33 @@ class VPNMonitor:
         self.log(f"Installed: {dest} — ready to Start VPN")
         return True
 
+    @staticmethod
+    def _check_ovpn_url(url):
+        """Return an error string if url is not a safe HTTPS URL to a public host, else None."""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return "Invalid URL"
+        if parsed.scheme != "https":
+            return "Only HTTPS URLs are allowed"
+        host = parsed.hostname
+        if not host:
+            return "No host in URL"
+        try:
+            ip = ipaddress.ip_address(socket.gethostbyname(host))
+        except Exception:
+            return f"Could not resolve host: {host}"
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            return f"Private/internal addresses not allowed"
+        return None
+
     def download_ovpn(self, url):
         """Download a .ovpn file from url and install it. Runs in background."""
         def _run():
+            err = self._check_ovpn_url(url)
+            if err:
+                self.log(f"Download rejected — {err}", level="ERROR")
+                return
             self.log(f"Downloading OVPN config from: {url}")
             try:
                 r = requests.get(url, timeout=15)
@@ -464,7 +492,7 @@ class VPNMonitor:
                 self.log(f"Download failed — {e}", level="ERROR")
                 return
 
-            filename = url.split("/")[-1].split("?")[0]
+            filename = os.path.basename(url.split("/")[-1].split("?")[0])
             if not filename.endswith(".ovpn"):
                 filename += ".ovpn"
             tmp = f"/tmp/{filename}"

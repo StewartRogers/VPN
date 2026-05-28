@@ -1,3 +1,4 @@
+import ipaddress
 import json
 import os
 import secrets
@@ -242,13 +243,26 @@ def configure():
     if not home_ip:
         return jsonify({"error": "Could not detect home IP"}), 503
 
+    try:
+        addr = ipaddress.ip_address(home_ip)
+        if not isinstance(addr, ipaddress.IPv4Address) or addr.is_unspecified or addr.is_reserved:
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": "Invalid home IP address"}), 400
+
+    try:
+        fast_interval = max(1, min(int(data.get("fast_interval", 2)), 60))
+        ip_interval = max(5, min(int(data.get("ip_interval", 5)), 300))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid interval value"}), 400
+
     if monitor and monitor.status["running"]:
         monitor.stop()
 
     monitor = VPNMonitor(
         home_ip=home_ip,
-        fast_interval=int(data.get("fast_interval", 2)),
-        ip_interval=int(data.get("ip_interval", 5)),
+        fast_interval=fast_interval,
+        ip_interval=ip_interval,
     )
     return jsonify({"configured": True, "home_ip": home_ip})
 
