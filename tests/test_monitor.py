@@ -1,7 +1,6 @@
 """Tests for webapp/monitor.py — VPNMonitor state machine, reconnect logic, and kill switch."""
 import sys
-import time
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -282,8 +281,6 @@ class TestMonitorLoopIpErrors:
         m.stop_qbittorrent = MagicMock()
 
         call_count = 0
-        original_wait = m._stop_event.wait
-
         def stop_after_success(*a, **kw):
             nonlocal call_count
             call_count += 1

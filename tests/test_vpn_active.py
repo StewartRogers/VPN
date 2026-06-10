@@ -1,9 +1,6 @@
 """Tests for vpn_active.py — process/interface checks and IP leak detection."""
 import sys
-import types
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # vpn_active.py lives in the repo root, not in a package — add it to the path.
 sys.path.insert(0, ".")

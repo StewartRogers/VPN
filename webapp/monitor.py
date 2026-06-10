@@ -474,7 +474,7 @@ class VPNMonitor:
         except Exception:
             return f"Could not resolve host: {host}"
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
-            return f"Private/internal addresses not allowed"
+            return "Private/internal addresses not allowed"
         return None
 
     def download_ovpn(self, url):
