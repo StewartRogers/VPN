@@ -31,4 +31,4 @@ jobs:
             tests/
 
       - name: Test
-        run: python -m pytest tests/ -v
+        run: python -m pytest -v

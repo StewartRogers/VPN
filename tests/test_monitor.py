@@ -1,10 +1,8 @@
 """Tests for webapp/monitor.py — VPNMonitor state machine, reconnect logic, and kill switch."""
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, "webapp")
 import monitor as mon
 from monitor import VPNMonitor
 

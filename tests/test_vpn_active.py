@@ -1,9 +1,6 @@
 """Tests for vpn_active.py — process/interface checks and IP leak detection."""
-import sys
 from unittest.mock import MagicMock, patch
 
-# vpn_active.py lives in the repo root, not in a package — add it to the path.
-sys.path.insert(0, ".")
 import vpn_active
 
 
@@ -72,6 +69,25 @@ class TestGetExternalIp:
     def test_returns_none_when_all_services_fail(self):
         with patch("requests.get", side_effect=Exception("timeout")):
             assert vpn_active.get_external_ip() is None
+
+    def test_skips_service_returning_empty_ip_key(self):
+        # A service that responds 200 but with the wrong JSON shape should not
+        # return "" — it must fall through so the next service is tried.
+        empty_resp = _response({"wrong_key": "ignored"})
+        good_resp = _response({"ip": "5.6.7.8"})
+        with patch("requests.get", side_effect=[empty_resp, good_resp]):
+            assert vpn_active.get_external_ip() == "5.6.7.8"
+
+    def test_empty_ip_does_not_report_secure(self):
+        # Regression: "" must not slip past the None check in main() and
+        # falsely report the VPN as secure.
+        empty_resp = _response({"wrong_key": "ignored"})
+        with patch("requests.get", return_value=empty_resp):
+            with (
+                patch("vpn_active.check_openvpn_running", return_value=True),
+                patch("vpn_active.check_vpn_interface", return_value=True),
+            ):
+                assert vpn_active.main("1.2.3.4") == 2  # error, not secure
 
     def test_strips_proxy_comma_from_httpbin(self):
         # First two services (ipify, icanhazip) fail; httpbin returns comma-separated IPs
