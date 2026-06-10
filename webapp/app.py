@@ -16,6 +16,10 @@ monitor: VPNMonitor | None = None
 
 _API_TOKEN = os.environ.get("VPN_API_TOKEN", "").strip()
 
+if not _API_TOKEN:
+    print("WARNING: VPN_API_TOKEN is not set — the API is unauthenticated. "
+          "Set VPN_API_TOKEN=<secret> to require a bearer token.", flush=True)
+
 
 def _auth():
     """Return a 401 response if the token is wrong, else None."""
