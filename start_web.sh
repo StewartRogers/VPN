@@ -56,7 +56,7 @@ if [ ${#missing[@]} -gt 0 ]; then
     echo "ERROR: Missing Python package(s): ${missing[*]}"
     echo ""
     echo "Install with:"
-    echo "  pip3 install -r $SCRIPT_DIR/webapp/requirements.txt --break-system-packages"
+    echo "  pip3 install -r $SCRIPT_DIR/webapp/requirements.txt"
     echo ""
     exit 1
 fi
