@@ -45,6 +45,22 @@ if [ -n "$HOME_IP" ]; then
 fi
 echo ""
 
+# Check required Python packages are installed
+missing=()
+for pkg in flask requests; do
+    if ! python3 -c "import $pkg" 2>/dev/null; then
+        missing+=("$pkg")
+    fi
+done
+if [ ${#missing[@]} -gt 0 ]; then
+    echo "ERROR: Missing Python package(s): ${missing[*]}"
+    echo ""
+    echo "Install with:"
+    echo "  pip install -r $SCRIPT_DIR/webapp/requirements.txt --break-system-packages"
+    echo ""
+    exit 1
+fi
+
 exec env \
     BIND_HOST="$BIND_HOST" \
     VPN_API_TOKEN="${VPN_API_TOKEN:-}" \
