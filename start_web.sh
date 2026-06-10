@@ -45,6 +45,20 @@ if [ -n "$HOME_IP" ]; then
 fi
 echo ""
 
+# Check Python version is 3.8+
+py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+py_major=$(python3 -c "import sys; print(sys.version_info.major)" 2>/dev/null)
+py_minor=$(python3 -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
+if [ -z "$py_version" ] || [ "$py_major" -lt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -lt 8 ]; }; then
+    echo "ERROR: Python 3.8 or higher is required (found: ${py_version:-none})"
+    echo ""
+    echo "Install with:"
+    echo "  sudo apt install python3"
+    echo ""
+    exit 1
+fi
+echo "  Python: $py_version"
+
 # Check required Python packages are installed
 missing=()
 for pkg in flask requests; do

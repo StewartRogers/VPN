@@ -4,6 +4,7 @@ import os
 import secrets
 import subprocess
 import threading
+from typing import Optional
 
 from flask import Flask, Response, jsonify, render_template, request
 
@@ -12,7 +13,7 @@ from organizer import scan_directory, organize_files
 
 app = Flask(__name__)
 
-monitor: VPNMonitor | None = None
+monitor: Optional[VPNMonitor] = None
 
 _API_TOKEN = os.environ.get("VPN_API_TOKEN", "").strip()
 
