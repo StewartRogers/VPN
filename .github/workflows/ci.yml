@@ -24,7 +24,6 @@ jobs:
         run: |
           flake8 --select=E9,F \
             vpn_active.py \
-            vpn_active_debug.py \
             webapp/app.py \
             webapp/monitor.py \
             webapp/organizer.py \

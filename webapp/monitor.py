@@ -5,10 +5,11 @@ import re
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 # Strips the leading timestamp OpenVPN writes into its own log lines
 # e.g. "2026-03-13 11:56:05 OpenVPN 2.6.3..." → "OpenVPN 2.6.3..."
@@ -457,6 +458,10 @@ class VPNMonitor:
         self.log(f"Installed: {dest} — ready to Start VPN")
         return True
 
+    # Serializes the socket.getaddrinfo monkeypatch in _fetch_pinned so concurrent
+    # downloads can't clobber each other's pinned hostname/IP.
+    _dns_pin_lock = threading.Lock()
+
     @staticmethod
     def _check_ovpn_url(url):
         """Return an error string if url is not a safe HTTPS URL to a public host, else None."""
@@ -477,28 +482,76 @@ class VPNMonitor:
             return "Private/internal addresses not allowed"
         return None
 
+    @staticmethod
+    def _resolve_public_ip(host):
+        """Resolve host and return its IP as a string, raising ValueError if it's
+        not a public address (blocks loopback/private/link-local/etc. targets)."""
+        try:
+            ip = ipaddress.ip_address(socket.gethostbyname(host))
+        except Exception:
+            raise ValueError(f"Could not resolve host: {host}")
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            raise ValueError("Private/internal addresses not allowed")
+        return str(ip)
+
+    @classmethod
+    def _fetch_pinned(cls, url, timeout=15, max_redirects=5):
+        """GET url, pinning the TCP connection for each hop to the IP that was just
+        validated as public for that hop's hostname. Plain "resolve once, then let
+        requests resolve again to connect" has a DNS-rebinding gap: the second
+        resolution can return a different (internal) address. Redirects are
+        followed manually and re-validated so a malicious redirect can't reach
+        an internal host either."""
+        for _ in range(max_redirects + 1):
+            err = cls._check_ovpn_url(url)
+            if err:
+                raise ValueError(err)
+            host = urlparse(url).hostname
+            ip = cls._resolve_public_ip(host)
+
+            real_getaddrinfo = socket.getaddrinfo
+
+            def _pinned_getaddrinfo(node, *args, **kwargs):
+                if node == host:
+                    node = ip
+                return real_getaddrinfo(node, *args, **kwargs)
+
+            with cls._dns_pin_lock:
+                socket.getaddrinfo = _pinned_getaddrinfo
+                try:
+                    r = requests.get(url, timeout=timeout, allow_redirects=False)
+                finally:
+                    socket.getaddrinfo = real_getaddrinfo
+
+            if r.is_redirect or r.is_permanent_redirect:
+                location = r.headers.get("Location")
+                if not location:
+                    raise ValueError("Redirect with no Location header")
+                url = urljoin(url, location)
+                continue
+
+            r.raise_for_status()
+            return r
+
+        raise ValueError("Too many redirects")
+
     def download_ovpn(self, url):
         """Download a .ovpn file from url and install it. Runs in background."""
         def _run():
-            err = self._check_ovpn_url(url)
-            if err:
-                self.log(f"Download rejected — {err}", level="ERROR")
-                return
             self.log(f"Downloading OVPN config from: {url}")
             try:
-                r = requests.get(url, timeout=15)
-                r.raise_for_status()
+                r = self._fetch_pinned(url)
             except Exception as e:
-                self.log(f"Download failed — {e}", level="ERROR")
+                self.log(f"Download rejected — {e}", level="ERROR")
                 return
 
             filename = os.path.basename(url.split("/")[-1].split("?")[0])
             if not filename.endswith(".ovpn"):
                 filename += ".ovpn"
-            tmp = f"/tmp/{filename}"
 
+            fd, tmp = tempfile.mkstemp(suffix=".ovpn", prefix="vpnconf_")
             try:
-                with open(tmp, "wb") as f:
+                with os.fdopen(fd, "wb") as f:
                     f.write(r.content)
                 self.log(f"Downloaded {len(r.content)} bytes")
             except Exception as e:
@@ -513,9 +566,9 @@ class VPNMonitor:
         """Install an uploaded .ovpn file (data is bytes). Runs in background."""
         def _run():
             self.log(f"Installing uploaded OVPN config: {filename} ({len(data)} bytes)")
-            tmp = f"/tmp/{filename}"
+            fd, tmp = tempfile.mkstemp(suffix=".ovpn", prefix="vpnconf_")
             try:
-                with open(tmp, "wb") as f:
+                with os.fdopen(fd, "wb") as f:
                     f.write(data)
             except Exception as e:
                 self.log(f"Could not write temp file — {e}", level="ERROR")
