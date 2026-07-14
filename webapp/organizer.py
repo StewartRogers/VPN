@@ -48,13 +48,18 @@ def clean_filename(filename: str) -> str:
     return f"{name}.{ext}"
 
 
-def scan_directory(source_dir: str) -> list:
-    """Walk source_dir and return metadata for every video file found."""
+def scan_directory(source_dir: str, exclude_dirs: set = None) -> list:
+    """Walk source_dir and return metadata for every video file found.
+
+    exclude_dirs: directory basenames to skip, matched case-insensitively
+    at any depth (e.g. {"Samples", ".stfolder"}).
+    """
     source_dir = os.path.realpath(source_dir)
+    exclude_lower = {d.lower() for d in (exclude_dirs or ())}
     results = []
 
     for root, dirs, files in os.walk(source_dir):
-        dirs.sort()
+        dirs[:] = sorted(d for d in dirs if d.lower() not in exclude_lower)
         for fname in sorted(files):
             _, ext = os.path.splitext(fname)
             if ext.lower() not in _VIDEO_EXTS:

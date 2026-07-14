@@ -292,8 +292,9 @@ def files_scan():
     source_dir = os.path.realpath(source_dir)
     if not os.path.isdir(source_dir):
         return jsonify({"error": "Directory not found"}), 404
+    exclude_dirs = {d.strip() for d in request.args.get("exclude", "").split(",") if d.strip()}
     try:
-        files = scan_directory(source_dir)
+        files = scan_directory(source_dir, exclude_dirs)
         return jsonify({"source_dir": source_dir, "files": files})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500

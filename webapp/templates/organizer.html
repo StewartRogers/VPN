@@ -241,6 +241,7 @@
 <!-- Toolbar -->
 <div class="toolbar">
   <input type="text" id="dir-input" placeholder="Directory path, e.g. /home/pi/Downloads">
+  <input type="text" id="exclude-input" placeholder="Exclude subdirs, e.g. Samples,.stfolder">
   <button class="btn-primary" onclick="scanFiles()">Scan</button>
   <button class="btn-success" id="btn-apply" disabled onclick="applyFiles()">Apply Selected</button>
   <button class="btn-save"   id="btn-all"   style="display:none" onclick="toggleSelectAll()">Select All</button>
@@ -314,6 +315,8 @@
   async function scanFiles() {
     const dir = document.getElementById('dir-input').value.trim();
     if (!dir) return alert('Enter a directory path first.');
+    const exclude = document.getElementById('exclude-input').value.trim();
+    localStorage.setItem('vpn_organizer_exclude', exclude);
 
     setState('Scanning…');
     document.getElementById('btn-apply').disabled = true;
@@ -322,7 +325,9 @@
     document.getElementById('chk-all').checked = true;
 
     try {
-      const r = await fetch('/api/files/scan?dir=' + encodeURIComponent(dir), { headers: authHeaders({}) });
+      const url = '/api/files/scan?dir=' + encodeURIComponent(dir) +
+        (exclude ? '&exclude=' + encodeURIComponent(exclude) : '');
+      const r = await fetch(url, { headers: authHeaders({}) });
       if (r.status === 401) { showTokenModal(); setState('Authentication required.'); return; }
       const data = await r.json();
       if (!r.ok) { setState(`<span style="color:var(--red)">${escHtml(data.error || 'Scan failed')}</span>`); return; }
@@ -369,6 +374,12 @@
   document.getElementById('dir-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') scanFiles();
   });
+  document.getElementById('exclude-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') scanFiles();
+  });
+
+  // Restore remembered exclude list
+  document.getElementById('exclude-input').value = localStorage.getItem('vpn_organizer_exclude') || '';
 
   // ---- select all toggle ----
 
