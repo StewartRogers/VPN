@@ -23,6 +23,7 @@ ufw allow 22/tcp    comment 'SSH'              > /dev/null 2>&1
 ufw allow 443/tcp   comment 'HTTPS'            > /dev/null 2>&1
 ufw allow 32400/tcp comment 'Plex'             > /dev/null 2>&1
 ufw allow 8080/tcp  comment 'Web UI'           > /dev/null 2>&1
+ufw allow 5000/tcp  comment 'VPN Web UI'       > /dev/null 2>&1
 ufw allow 19806/tcp comment 'qBittorrent peer' > /dev/null 2>&1
 ufw allow 19806/udp comment 'qBittorrent peer' > /dev/null 2>&1
 ufw allow in on tun0 comment 'VPN interface'   > /dev/null 2>&1
