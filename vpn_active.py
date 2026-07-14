@@ -30,9 +30,9 @@ def get_external_ip():
         try:
             response = requests.get(url, timeout=3)
             response.raise_for_status()
-            ip = response.json().get(key, "")
-            # httpbin returns comma-separated IPs when behind a proxy
-            return ip.split(",")[0].strip()
+            ip = response.json().get(key, "").split(",")[0].strip()
+            if ip:
+                return ip
         except Exception:
             continue
     return None

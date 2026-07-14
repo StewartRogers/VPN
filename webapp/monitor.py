@@ -1,12 +1,15 @@
 import glob
+import ipaddress
 import os
 import re
 import shutil
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 from datetime import datetime
+from urllib.parse import urljoin, urlparse
 
 # Strips the leading timestamp OpenVPN writes into its own log lines
 # e.g. "2026-03-13 11:56:05 OpenVPN 2.6.3..." → "OpenVPN 2.6.3..."
@@ -131,7 +134,7 @@ class VPNMonitor:
 
     def check_openvpn_process(self):
         try:
-            r = subprocess.run(["pgrep", "-f", "openvpn"], capture_output=True, timeout=2)
+            r = subprocess.run(["pgrep", "-x", "openvpn"], capture_output=True, timeout=2)
             return r.returncode == 0
         except Exception:
             return False
@@ -162,13 +165,13 @@ class VPNMonitor:
             return False
 
     def check_killswitch_active(self):
-        """Returns True if the iptables OUTPUT chain has a DROP default policy."""
+        """Returns True if UFW is in kill-switch mode (outgoing deny default)."""
         try:
             r = subprocess.run(
-                ["sudo", "iptables", "-L", "OUTPUT"],
+                ["sudo", "ufw", "status", "verbose"],
                 capture_output=True, text=True, timeout=3,
             )
-            return "policy DROP" in r.stdout
+            return "deny (outgoing)" in r.stdout
         except Exception:
             return False
 
@@ -269,261 +272,32 @@ class VPNMonitor:
 
     # ------------------------------------------------------- security measures
 
-    def _parse_ovpn_servers(self, config_path):
-        """Parse all VPN server entries from .ovpn. Returns list of (ip, port, proto)."""
-        results = []
-        file_proto = "udp"
-        content = None
-
-        # Try direct read first (works if file is world-readable, e.g. installed by web app)
-        try:
-            with open(config_path, "r") as f:
-                content = f.read()
-        except PermissionError:
-            # File is root-only (installed by startvpn.sh with chmod 600) — try sudo cat
-            try:
-                r = subprocess.run(
-                    ["sudo", "cat", config_path],
-                    capture_output=True, text=True, timeout=3,
-                )
-                if r.returncode == 0:
-                    content = r.stdout
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        if content is None:
-            self.log(f"Cannot read {config_path} — kill switch will use port fallback", level="WARNING")
-            return []
-
-        for line in content.splitlines():
-            line = line.strip()
-            if line.startswith("proto "):
-                parts = line.split()
-                if len(parts) >= 2:
-                    file_proto = parts[1]
-            elif line.startswith("remote "):
-                parts = line.split()
-                if len(parts) >= 2:
-                    host = parts[1]
-                    port = parts[2] if len(parts) >= 3 else "1194"
-                    line_proto = parts[3] if len(parts) >= 4 else file_proto
-                    try:
-                        ip = socket.gethostbyname(host)
-                        results.append((ip, port, line_proto))
-                        self.log(f"Resolved VPN server: {host} → {ip}:{port}/{line_proto}")
-                    except Exception:
-                        self.log(f"Could not resolve VPN server hostname: {host}", level="WARNING")
-        return results
-
-    def setup_killswitch(self, config_path):
-        """Apply iptables kill switch — drops all non-VPN output traffic.
-
-        Called BEFORE stopping existing OpenVPN so there is no traffic gap:
-        the new server IP is allowed through before the old tunnel comes down.
-        Safe to call on reconnects — it flushes and re-applies with the new
-        server IP each time without losing the original-state backup.
-        """
-        os.makedirs(_BACKUP_DIR, exist_ok=True)
-        self.log("Applying iptables kill switch...")
-
-        # Resolve VPN server IPs BEFORE touching iptables
-        servers = self._parse_ovpn_servers(config_path)
-
-        # Save original iptables/ip6tables rules on first application only.
-        # On reconnects the backup already exists — we don't overwrite it so
-        # teardown always restores to the true pre-VPN state.
-        backup = os.path.join(_BACKUP_DIR, "iptables.backup")
-        ip6backup = os.path.join(_BACKUP_DIR, "ip6tables.backup")
-        if not os.path.exists(backup):
-            try:
-                result = subprocess.run(
-                    ["sudo", "iptables-save"],
-                    capture_output=True, text=True, check=True,
-                )
-                with open(backup, "w") as f:
-                    f.write(result.stdout)
-                self.log(f"Saved original iptables rules to {backup}")
-            except Exception as e:
-                self.log(f"Could not save iptables backup — {e}", level="ERROR")
-                self.log("Aborting kill switch setup to avoid locking you out", level="ERROR")
-                raise RuntimeError(f"iptables backup failed: {e}") from e
-        if not os.path.exists(ip6backup):
-            try:
-                result = subprocess.run(
-                    ["sudo", "ip6tables-save"],
-                    capture_output=True, text=True, check=True,
-                )
-                with open(ip6backup, "w") as f:
-                    f.write(result.stdout)
-                self.log(f"Saved original ip6tables rules to {ip6backup}")
-            except Exception as e:
-                self.log(f"Could not save ip6tables backup — {e} (continuing without IPv6 kill switch)", level="WARNING")
-
-        # Temporarily set ACCEPT so we don't hard-drop traffic while rebuilding rules
-        subprocess.run(["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"], capture_output=True)
-        subprocess.run(["sudo", "iptables", "-F", "OUTPUT"], capture_output=True)
-
-        # Loopback — always allow
-        subprocess.run(
-            ["sudo", "iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
-            capture_output=True,
+    def setup_killswitch(self):
+        """Apply UFW kill switch — calls ufw_killswitch.sh to block all non-VPN output."""
+        self.log("Applying UFW kill switch...")
+        result = subprocess.run(
+            ["sudo", "bash", os.path.join(_VPN_DIR, "ufw_killswitch.sh")],
+            capture_output=True, text=True,
         )
-
-        # Established / related connections
-        subprocess.run(
-            ["sudo", "iptables", "-A", "OUTPUT",
-             "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
-            capture_output=True,
-        )
-
-        # Local networks — keep LAN and the web UI accessible
-        for net in ["192.168.0.0/16", "10.0.0.0/8", "172.16.0.0/12"]:
-            subprocess.run(
-                ["sudo", "iptables", "-A", "OUTPUT", "-d", net, "-j", "ACCEPT"],
-                capture_output=True,
-            )
-
-        # DNS — allow queries to the DNS servers we configure in setup_dns()
-        # so that OpenVPN can resolve the VPN server hostname after the kill
-        # switch is active.  Without this, DNS to 1.1.1.1 is blocked and
-        # OpenVPN cannot connect.
-        for dns_ip in ["1.1.1.1", "1.0.0.1"]:
-            for p in ["udp", "tcp"]:
-                subprocess.run(
-                    ["sudo", "iptables", "-A", "OUTPUT",
-                     "-d", dns_ip, "-p", p, "--dport", "53", "-j", "ACCEPT"],
-                    capture_output=True,
-                )
-
-        # VPN server(s) — allow OpenVPN to reach the endpoint through the kill switch
-        if servers:
-            for ip, port, proto in servers:
-                p = "udp" if "udp" in proto else "tcp"
-                subprocess.run(
-                    ["sudo", "iptables", "-A", "OUTPUT",
-                     "-d", ip, "-p", p, "--dport", port, "-j", "ACCEPT"],
-                    capture_output=True,
-                )
-        else:
-            # Fallback when server hostname could not be resolved
-            self.log("Kill switch fallback: allowing ports 1194 and 443 (UDP+TCP) to any host", level="WARNING")
-            for port in ["1194", "443"]:
-                for p in ["udp", "tcp"]:
-                    subprocess.run(
-                        ["sudo", "iptables", "-A", "OUTPUT",
-                         "-p", p, "--dport", port, "-j", "ACCEPT"],
-                        capture_output=True,
-                    )
-
-        # All traffic through the VPN tunnel
-        subprocess.run(
-            ["sudo", "iptables", "-A", "OUTPUT", "-o", "tun+", "-j", "ACCEPT"],
-            capture_output=True,
-        )
-
-        # DROP everything else — set last so rules above take effect cleanly
-        subprocess.run(["sudo", "iptables", "-P", "OUTPUT", "DROP"], capture_output=True)
-
-        # IPv6 kill switch — defense-in-depth even though IPv6 is disabled via sysctl.
-        # If sysctl is reset (reboot, manual change) this prevents IPv6 from bypassing
-        # the tunnel entirely. VPNGate doesn't use IPv6 so we allow only loopback + tun+.
-        subprocess.run(["sudo", "ip6tables", "-P", "OUTPUT", "ACCEPT"], capture_output=True)
-        subprocess.run(["sudo", "ip6tables", "-F", "OUTPUT"], capture_output=True)
-        subprocess.run(
-            ["sudo", "ip6tables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
-            capture_output=True,
-        )
-        subprocess.run(
-            ["sudo", "ip6tables", "-A", "OUTPUT",
-             "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
-            capture_output=True,
-        )
-        # Allow link-local (fe80::/10) for neighbour discovery / LAN
-        subprocess.run(
-            ["sudo", "ip6tables", "-A", "OUTPUT", "-d", "fe80::/10", "-j", "ACCEPT"],
-            capture_output=True,
-        )
-        # Allow any traffic that exits via the tunnel
-        subprocess.run(
-            ["sudo", "ip6tables", "-A", "OUTPUT", "-o", "tun+", "-j", "ACCEPT"],
-            capture_output=True,
-        )
-        subprocess.run(["sudo", "ip6tables", "-P", "OUTPUT", "DROP"], capture_output=True)
-
+        if result.returncode != 0:
+            err = (result.stderr or result.stdout).strip()
+            self.log(f"UFW kill switch failed — {err}", level="ERROR")
+            raise RuntimeError(f"UFW kill switch failed: {err}")
         self.status["kill_switch_active"] = True
-        self.log("Kill switch active — non-VPN output traffic blocked (IPv4 + IPv6)")
-
-    def _tighten_killswitch_dns(self):
-        """Remove the direct DNS exception rules now that tun0 is up.
-
-        The DNS ACCEPT rules for 1.1.1.1/1.0.0.1 are needed during VPN startup
-        so OpenVPN can resolve the server hostname before the tunnel exists.
-        Once tun0 is up, redirect-gateway routes all traffic (including 1.1.1.1)
-        through the tunnel — so the explicit exception is no longer needed and
-        becomes a potential leak path if the tunnel drops unexpectedly.
-        """
-        removed = 0
-        for dns_ip in ["1.1.1.1", "1.0.0.1"]:
-            for p in ["udp", "tcp"]:
-                r = subprocess.run(
-                    ["sudo", "iptables", "-D", "OUTPUT",
-                     "-d", dns_ip, "-p", p, "--dport", "53", "-j", "ACCEPT"],
-                    capture_output=True,
-                )
-                if r.returncode == 0:
-                    removed += 1
-        if removed:
-            self.log("DNS kill switch rules tightened — DNS now routes through tunnel")
+        self.log("Kill switch active — all outgoing blocked except VPN tunnel and LAN")
 
     def teardown_killswitch(self):
-        """Restore iptables and ip6tables to the state recorded before VPN was started."""
-        # IPv4
-        backup = os.path.join(_BACKUP_DIR, "iptables.backup")
-        if os.path.exists(backup):
-            self.log("Restoring original iptables rules...")
-            result = subprocess.run(
-                ["sudo", "iptables-restore", backup], capture_output=True
-            )
-            if result.returncode == 0:
-                os.remove(backup)
-                self.log("iptables restored")
-            else:
-                self.log("iptables-restore failed — resetting OUTPUT to ACCEPT", level="WARNING")
-                subprocess.run(["sudo", "iptables", "-F", "OUTPUT"], capture_output=True)
-                subprocess.run(
-                    ["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"], capture_output=True
-                )
+        """Restore UFW to base state — calls ufw_base.sh."""
+        self.log("Resetting UFW to base state...")
+        result = subprocess.run(
+            ["sudo", "bash", os.path.join(_VPN_DIR, "ufw_base.sh")],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            self.log("UFW base state restored — outgoing unrestricted")
         else:
-            self.log("No iptables backup found — resetting OUTPUT to ACCEPT")
-            subprocess.run(["sudo", "iptables", "-F", "OUTPUT"], capture_output=True)
-            subprocess.run(
-                ["sudo", "iptables", "-P", "OUTPUT", "ACCEPT"], capture_output=True
-            )
-
-        # IPv6
-        ip6backup = os.path.join(_BACKUP_DIR, "ip6tables.backup")
-        if os.path.exists(ip6backup):
-            self.log("Restoring original ip6tables rules...")
-            result = subprocess.run(
-                ["sudo", "ip6tables-restore", ip6backup], capture_output=True
-            )
-            if result.returncode == 0:
-                os.remove(ip6backup)
-                self.log("ip6tables restored")
-            else:
-                self.log("ip6tables-restore failed — resetting OUTPUT to ACCEPT", level="WARNING")
-                subprocess.run(["sudo", "ip6tables", "-F", "OUTPUT"], capture_output=True)
-                subprocess.run(
-                    ["sudo", "ip6tables", "-P", "OUTPUT", "ACCEPT"], capture_output=True
-                )
-        else:
-            subprocess.run(["sudo", "ip6tables", "-F", "OUTPUT"], capture_output=True)
-            subprocess.run(
-                ["sudo", "ip6tables", "-P", "OUTPUT", "ACCEPT"], capture_output=True
-            )
-
+            err = (result.stderr or result.stdout).strip()
+            self.log(f"UFW reset failed — {err}", level="WARNING")
         self.status["kill_switch_active"] = False
 
     def disable_ipv6(self):
@@ -592,10 +366,8 @@ class VPNMonitor:
         self.log(f"Using config: {config}")
 
         # 2. Apply / update kill switch BEFORE stopping existing OpenVPN.
-        #    On reconnect this atomically updates the allowed VPN server IP so
-        #    the new OpenVPN process can reach its endpoint through the kill switch.
         try:
-            self.setup_killswitch(config)
+            self.setup_killswitch()
         except RuntimeError as e:
             self.log(str(e), level="ERROR")
             return False
@@ -617,6 +389,7 @@ class VPNMonitor:
                 "--config", config,
                 "--log", "/var/log/openvpn.log",
                 "--daemon",
+                "--script-security", "0",
                 "--ping", "10",
                 "--ping-exit", "60",
                 "--auth-nocache",
@@ -656,7 +429,6 @@ class VPNMonitor:
                 pass
             if self.check_vpn_interface():
                 self.log("tun0 interface is up", source="OPENVPN")
-                self._tighten_killswitch_dns()
                 ip = self.get_external_ip()
                 if ip:
                     self.log(f"VPN connected — external IP: {ip}")
@@ -686,24 +458,100 @@ class VPNMonitor:
         self.log(f"Installed: {dest} — ready to Start VPN")
         return True
 
+    # Serializes the socket.getaddrinfo monkeypatch in _fetch_pinned so concurrent
+    # downloads can't clobber each other's pinned hostname/IP.
+    _dns_pin_lock = threading.Lock()
+
+    @staticmethod
+    def _check_ovpn_url(url):
+        """Return an error string if url is not a safe HTTPS URL to a public host, else None."""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return "Invalid URL"
+        if parsed.scheme != "https":
+            return "Only HTTPS URLs are allowed"
+        host = parsed.hostname
+        if not host:
+            return "No host in URL"
+        try:
+            ip = ipaddress.ip_address(socket.gethostbyname(host))
+        except Exception:
+            return f"Could not resolve host: {host}"
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            return "Private/internal addresses not allowed"
+        return None
+
+    @staticmethod
+    def _resolve_public_ip(host):
+        """Resolve host and return its IP as a string, raising ValueError if it's
+        not a public address (blocks loopback/private/link-local/etc. targets)."""
+        try:
+            ip = ipaddress.ip_address(socket.gethostbyname(host))
+        except Exception:
+            raise ValueError(f"Could not resolve host: {host}")
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+            raise ValueError("Private/internal addresses not allowed")
+        return str(ip)
+
+    @classmethod
+    def _fetch_pinned(cls, url, timeout=15, max_redirects=5):
+        """GET url, pinning the TCP connection for each hop to the IP that was just
+        validated as public for that hop's hostname. Plain "resolve once, then let
+        requests resolve again to connect" has a DNS-rebinding gap: the second
+        resolution can return a different (internal) address. Redirects are
+        followed manually and re-validated so a malicious redirect can't reach
+        an internal host either."""
+        for _ in range(max_redirects + 1):
+            err = cls._check_ovpn_url(url)
+            if err:
+                raise ValueError(err)
+            host = urlparse(url).hostname
+            ip = cls._resolve_public_ip(host)
+
+            real_getaddrinfo = socket.getaddrinfo
+
+            def _pinned_getaddrinfo(node, *args, **kwargs):
+                if node == host:
+                    node = ip
+                return real_getaddrinfo(node, *args, **kwargs)
+
+            with cls._dns_pin_lock:
+                socket.getaddrinfo = _pinned_getaddrinfo
+                try:
+                    r = requests.get(url, timeout=timeout, allow_redirects=False)
+                finally:
+                    socket.getaddrinfo = real_getaddrinfo
+
+            if r.is_redirect or r.is_permanent_redirect:
+                location = r.headers.get("Location")
+                if not location:
+                    raise ValueError("Redirect with no Location header")
+                url = urljoin(url, location)
+                continue
+
+            r.raise_for_status()
+            return r
+
+        raise ValueError("Too many redirects")
+
     def download_ovpn(self, url):
         """Download a .ovpn file from url and install it. Runs in background."""
         def _run():
             self.log(f"Downloading OVPN config from: {url}")
             try:
-                r = requests.get(url, timeout=15)
-                r.raise_for_status()
+                r = self._fetch_pinned(url)
             except Exception as e:
-                self.log(f"Download failed — {e}", level="ERROR")
+                self.log(f"Download rejected — {e}", level="ERROR")
                 return
 
-            filename = url.split("/")[-1].split("?")[0]
+            filename = os.path.basename(url.split("/")[-1].split("?")[0])
             if not filename.endswith(".ovpn"):
                 filename += ".ovpn"
-            tmp = f"/tmp/{filename}"
 
+            fd, tmp = tempfile.mkstemp(suffix=".ovpn", prefix="vpnconf_")
             try:
-                with open(tmp, "wb") as f:
+                with os.fdopen(fd, "wb") as f:
                     f.write(r.content)
                 self.log(f"Downloaded {len(r.content)} bytes")
             except Exception as e:
@@ -718,9 +566,9 @@ class VPNMonitor:
         """Install an uploaded .ovpn file (data is bytes). Runs in background."""
         def _run():
             self.log(f"Installing uploaded OVPN config: {filename} ({len(data)} bytes)")
-            tmp = f"/tmp/{filename}"
+            fd, tmp = tempfile.mkstemp(suffix=".ovpn", prefix="vpnconf_")
             try:
-                with open(tmp, "wb") as f:
+                with os.fdopen(fd, "wb") as f:
                     f.write(data)
             except Exception as e:
                 self.log(f"Could not write temp file — {e}", level="ERROR")
@@ -781,6 +629,7 @@ class VPNMonitor:
         self.log(f"Fast checks every {self.fast_interval}s, IP checks every {self.ip_interval}s")
 
         last_ip_check = 0
+        consecutive_ip_errors = 0
 
         while not self._stop_event.is_set():
             vpn_proc = self.check_openvpn_process()
@@ -806,14 +655,20 @@ class VPNMonitor:
             now_ts = time.time()
             if now_ts - last_ip_check >= self.ip_interval:
                 ip = self.get_external_ip()
+                post_check_ts = time.time()
                 self.status["external_ip"] = ip
 
                 if ip is None:
-                    self.log("Cannot determine external IP — stopping everything", level="CRITICAL")
-                    self.status["secure"] = False
-                    if self.is_qbittorrent_running():
-                        self.stop_qbittorrent()
-                    break
+                    consecutive_ip_errors += 1
+                    self.log(f"IP check error ({consecutive_ip_errors} consecutive)", level="WARNING")
+                    if consecutive_ip_errors >= 3:
+                        self.log("3 consecutive IP check failures — stopping everything", level="CRITICAL")
+                        self.status["secure"] = False
+                        if self.is_qbittorrent_running():
+                            self.stop_qbittorrent()
+                        break
+                    # Retry sooner than normal (stamp from post-check time)
+                    last_ip_check = post_check_ts - self.ip_interval + 5
                 elif ip.strip() == self.home_ip.strip():
                     self.log(f"IP LEAK DETECTED: external IP {ip} matches home IP — stopping everything", level="CRITICAL")
                     self.status["secure"] = False
@@ -821,20 +676,23 @@ class VPNMonitor:
                         self.stop_qbittorrent()
                     break
                 else:
+                    consecutive_ip_errors = 0
                     self.status["secure"] = True
                     self.log(f"VPN secure — external IP: {ip}")
-
-                last_ip_check = now_ts
+                    last_ip_check = post_check_ts
 
             self.status["qbittorrent"] = self.is_qbittorrent_running()
             self._stop_event.wait(self.fast_interval)
 
         self.status["running"] = False
         if not self._stop_event.is_set():
-            # Internal exit (VPN failure / leak) — shut everything down
-            self.log("Monitoring stopped due to failure — shutting down qBittorrent and OpenVPN", level="WARNING")
+            # Internal exit (VPN failure / leak) — stop qBittorrent and OpenVPN,
+            # but leave the kill switch active so no traffic leaks out.
+            # User must click Stop VPN to restore network access.
+            self.log("Monitoring stopped due to VPN failure — kill switch remains active", level="WARNING")
             self.stop_qbittorrent()
-            self.stop_vpn()
+            subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
+            self.log("OpenVPN stopped — use Stop VPN to restore network access", source="OPENVPN")
         else:
             # External exit (Stop Monitor or Stop All) — caller handles teardown
             self.log("Monitoring stopped")

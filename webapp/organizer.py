@@ -1,10 +1,10 @@
 import os
 import re
 
-_VIDEO_EXTS = {".mp4", ".mkv"}
+_VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".m4v"}
 
 # Matches quality/release tags that mark the end of the meaningful title,
-# plus everything that follows. Mirrors the sed pipeline in stopvpn.sh.
+# plus everything that follows. Mirrors organize.py's clean_filename.
 _STRIP_RE = re.compile(
     r"[\s.]+"
     r"(\d{3,4}[pP]"                                         # 1080p, 720p, 4K…

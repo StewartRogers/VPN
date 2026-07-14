@@ -68,6 +68,47 @@ Follow the prompts to install dependencies and configure VPN.
 - **vpn_status.sh** - Display current status of all services
 - **vpn_config.conf** - Configuration file for customizing behavior
 
+## Web App
+
+A browser-based dashboard is available as an alternative to the CLI scripts.
+
+### Start the web app
+
+```bash
+cd VPN
+python3 webapp/app.py
+# Open http://<pi-ip>:5000
+```
+
+Install Python dependencies first if needed:
+
+```bash
+pip install -r webapp/requirements.txt
+```
+
+### Optional: enable API authentication
+
+By default the web app is unauthenticated — fine for a trusted LAN, but set a token if you want access control:
+
+```bash
+VPN_API_TOKEN=your-secret-token python3 webapp/app.py
+```
+
+All API requests must then include `Authorization: Bearer your-secret-token`.
+
+### Workflow
+
+1. **Page load** — home IP is auto-detected and the monitor is auto-configured
+2. **Step 1 — VPN** — paste a `.ovpn` URL to download a config, then click Start VPN
+3. **Step 2 — Monitor** — start the monitoring daemon (watches for IP leaks, auto-reconnects)
+4. **Step 3 — qBittorrent** — start qBittorrent (button is disabled until monitor is running and VPN is secure)
+
+Live OpenVPN logs stream directly in the dashboard. The organizer tab (`/organizer`) provides a file-rename and move tool for downloaded video files.
+
+### sudo requirements for the web app
+
+The `pi` user needs passwordless sudo for several system operations. See [INSTALL.md](INSTALL.md) and [CLAUDE.md](CLAUDE.md) for the full sudoers template.
+
 ## Documentation
 
 - **[INSTALL.md](INSTALL.md)** - Detailed installation and setup guide

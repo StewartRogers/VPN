@@ -1,8 +1,10 @@
+import ipaddress
 import json
 import os
 import secrets
 import subprocess
 import threading
+from typing import Optional
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
@@ -14,9 +16,13 @@ load_dotenv()
 
 app = Flask(__name__)
 
-monitor: VPNMonitor | None = None
+monitor: Optional[VPNMonitor] = None
 
 _API_TOKEN = os.environ.get("VPN_API_TOKEN", "").strip()
+
+if not _API_TOKEN:
+    print("WARNING: VPN_API_TOKEN is not set - the API is unauthenticated. "
+          "Set VPN_API_TOKEN=<secret> to require a bearer token.", flush=True)
 
 
 def _auth():
@@ -122,7 +128,7 @@ def vpn_running():
     if err:
         return err
     try:
-        result = subprocess.run(["pgrep", "-f", "openvpn"], capture_output=True, timeout=2)
+        result = subprocess.run(["pgrep", "-x", "openvpn"], capture_output=True, timeout=2)
         return jsonify({"running": result.returncode == 0})
     except Exception:
         return jsonify({"running": False})
@@ -245,13 +251,26 @@ def configure():
     if not home_ip:
         return jsonify({"error": "Could not detect home IP"}), 503
 
+    try:
+        addr = ipaddress.ip_address(home_ip)
+        if not isinstance(addr, ipaddress.IPv4Address) or addr.is_unspecified or addr.is_reserved:
+            raise ValueError
+    except ValueError:
+        return jsonify({"error": "Invalid home IP address"}), 400
+
+    try:
+        fast_interval = max(1, min(int(data.get("fast_interval", 2)), 60))
+        ip_interval = max(5, min(int(data.get("ip_interval", 5)), 300))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid interval value"}), 400
+
     if monitor and monitor.status["running"]:
         monitor.stop()
 
     monitor = VPNMonitor(
         home_ip=home_ip,
-        fast_interval=int(data.get("fast_interval", 2)),
-        ip_interval=int(data.get("ip_interval", 5)),
+        fast_interval=fast_interval,
+        ip_interval=ip_interval,
     )
     return jsonify({"configured": True, "home_ip": home_ip})
 

@@ -39,7 +39,6 @@ python3 vpn_active.py <home_ip>
 
 - `checkip.sh` - Main monitoring daemon; all orchestration logic lives here
 - `vpn_active.py` - Python IP-leak detector; checks OpenVPN process, tun0 interface, and external IP via multiple fallback services (ipify, httpbin, api64.ipify)
-- `vpn_active_debug.py` - Simplified single-service version for debugging (no process/interface checks)
 - `vpn_status.sh` - Read-only status display; shows state of OpenVPN, tun0, qBittorrent, Deluge, monitoring script, and iptables kill switch
 
 ### Configuration

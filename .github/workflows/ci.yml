@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install dependencies
+        run: pip install -r webapp/requirements.txt flake8
+
+      - name: Lint (errors and undefined names)
+        run: |
+          flake8 --select=E9,F \
+            vpn_active.py \
+            webapp/app.py \
+            webapp/monitor.py \
+            webapp/organizer.py \
+            tests/
+
+      - name: Test
+        run: python -m pytest -v
