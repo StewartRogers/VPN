@@ -13,6 +13,9 @@ qBittorrent-data.conf
 # Backup and temporary files (outside repo, listed for reference only)
 # ~/.vpn_backups/ — iptables/DNS backups, never in the repo
 
+# Secrets
+.env
+
 # IDE and system files
 .vscode/
 .idea/

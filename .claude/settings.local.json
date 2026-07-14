@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir \"c:\\\\DEV\\\\VPN\")"
+      "Bash(dir \"c:\\\\DEV\\\\VPN\")",
+      "PowerShell(Get-Command pip -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command python -ErrorAction SilentlyContinue)",
+      "PowerShell(cd c:\\\\DEV\\\\VPN; try { & .\\\\.venv\\\\Scripts\\\\pip.exe install -r webapp/requirements.txt 2>&1 | Tee-Object -Variable out; $out | Out-File c:\\\\DEV\\\\VPN\\\\pipout.txt } catch { $_.Exception.Message | Out-File c:\\\\DEV\\\\VPN\\\\pipout.txt }; Get-Content c:\\\\DEV\\\\VPN\\\\pipout.txt)"
     ]
   }
 }

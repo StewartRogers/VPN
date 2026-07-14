@@ -4,10 +4,13 @@ import secrets
 import subprocess
 import threading
 
+from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 
 from monitor import VPNMonitor, detect_external_ip
 from organizer import scan_directory, organize_files
+
+load_dotenv()
 
 app = Flask(__name__)
 
