@@ -23,6 +23,10 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -f "$SCRIPT_DIR/webapp/.env" ]; then
     while IFS='=' read -r key value; do
         case "$key" in ''|'#'*) continue ;; esac
+        # Strip matching surrounding quotes, same as python-dotenv
+        if [[ "$value" == \"*\" && "$value" == *\" ]] || [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:-1}"
+        fi
         if [ -z "${!key+x}" ]; then
             export "$key=$value"
         fi
