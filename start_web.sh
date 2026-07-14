@@ -19,6 +19,16 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Load webapp/.env, without clobbering vars already set in the environment
+if [ -f "$SCRIPT_DIR/webapp/.env" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in ''|'#'*) continue ;; esac
+        if [ -z "${!key+x}" ]; then
+            export "$key=$value"
+        fi
+    done < <(grep -v '^\s*#' "$SCRIPT_DIR/webapp/.env" | grep -v '^\s*$')
+fi
+
 # Load optional config file
 if [ -f "$HOME/.vpn_config.conf" ]; then
     source "$HOME/.vpn_config.conf"
