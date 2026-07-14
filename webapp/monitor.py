@@ -409,6 +409,8 @@ class VPNMonitor:
                 self._log_openvpn(line, level="WARNING")
         if result.returncode != 0:
             self.log(f"openvpn exited with code {result.returncode}", source="OPENVPN", level="ERROR")
+            self.log("Reverting kill switch so a new config can be downloaded", level="WARNING")
+            self.teardown_killswitch()
             return False
 
         # 6. Wait for tun0 to come up, streaming the OpenVPN log
@@ -435,6 +437,8 @@ class VPNMonitor:
                 return True
 
         self.log("tun0 never came up — check OpenVPN log lines above", source="OPENVPN", level="ERROR")
+        self.log("Reverting kill switch so a new config can be downloaded", level="WARNING")
+        self.teardown_killswitch()
         return False
 
     def _install_ovpn(self, tmp_path, filename):
