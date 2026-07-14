@@ -1,5 +1,6 @@
 import ipaddress
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -13,6 +14,9 @@ from monitor import VPNMonitor, detect_external_ip
 from organizer import scan_directory, organize_files
 
 load_dotenv()
+
+if os.environ.get("ACCESS_LOG", "").strip().lower() not in ("1", "true", "yes"):
+    logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 app = Flask(__name__)
 

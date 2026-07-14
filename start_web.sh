@@ -7,6 +7,8 @@
 #   BIND_HOST       Network interface to bind to (default: 0.0.0.0 = all interfaces).
 #                   Set to your LAN IP (e.g. 192.168.1.100) to restrict access.
 #   HOME_IP         Pre-VPN ISP IP. If set, the monitor is pre-configured on startup.
+#   ACCESS_LOG      Set to 1/true to log every HTTP request (default: off — only
+#                    warnings/errors and the app's own MONITOR/OPENVPN log lines show).
 #
 # Examples:
 #   ./start_web.sh
@@ -57,6 +59,11 @@ fi
 if [ -n "$HOME_IP" ]; then
     echo "  Home IP: $HOME_IP"
 fi
+if [[ "${ACCESS_LOG,,}" =~ ^(1|true|yes)$ ]]; then
+    echo "  Access log: on"
+else
+    echo "  Access log: off (set ACCESS_LOG=1 to enable)"
+fi
 echo ""
 
 # Check Python version is 3.8+
@@ -93,4 +100,5 @@ exec env \
     BIND_HOST="$BIND_HOST" \
     VPN_API_TOKEN="${VPN_API_TOKEN:-}" \
     HOME_IP="${HOME_IP:-}" \
+    ACCESS_LOG="${ACCESS_LOG:-}" \
     python3 "$SCRIPT_DIR/webapp/app.py"
