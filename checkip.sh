@@ -211,15 +211,37 @@ if ! check_openvpn_process || ! check_vpn_interface || ! check_routing; then
     exit 1
 fi
 
-perform_ip_check
-ip_rc=$?
-if [ $ip_rc -eq 1 ]; then
-    log "CRITICAL" "IP leak detected at startup - aborting"
+# qBittorrent must not start until the external IP has been CONFIRMED to differ
+# from the home IP. "Could not determine" is not "safe" - proceeding on it means
+# torrenting over a path that was never verified, which is exactly what happens
+# when the VPN is connected but not carrying traffic. Retry, then fail closed.
+STARTUP_IP_RETRIES="${STARTUP_IP_RETRIES:-3}"
+ip_verified=false
+
+for attempt in $(seq 1 "$STARTUP_IP_RETRIES"); do
+    perform_ip_check
+    ip_rc=$?
+    if [ $ip_rc -eq 0 ]; then
+        ip_verified=true
+        break
+    elif [ $ip_rc -eq 1 ]; then
+        log "CRITICAL" "IP leak detected at startup - aborting"
+        exit 1
+    fi
+    log "WARN" "IP check inconclusive (attempt $attempt/$STARTUP_IP_RETRIES)"
+    if [ "$attempt" -lt "$STARTUP_IP_RETRIES" ]; then
+        sleep 5
+    fi
+done
+
+if [ "$ip_verified" != true ]; then
+    log "CRITICAL" "External IP never verified after $STARTUP_IP_RETRIES attempts - refusing to start qBittorrent"
+    log "CRITICAL" "The VPN may be connected but not carrying traffic, or IP services are unreachable."
+    log "CRITICAL" "Check: ip route get 1.1.1.1   and   curl https://api.ipify.org"
     exit 1
-elif [ $ip_rc -eq 2 ]; then
-    log "WARN" "Could not verify IP at startup - continuing, will recheck"
 fi
 
+log "INFO" "External IP verified - safe to start qBittorrent"
 start_qbittorrent
 
 LAST_IP_CHECK=$(date +%s)

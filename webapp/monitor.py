@@ -732,10 +732,16 @@ class VPNMonitor:
         ok = self._openvpn_start()
         if ok:
             ip = self.get_external_ip()
+            # Only a positively confirmed non-home IP restarts torrenting.
+            # An unreachable IP service (ip is None) is not a pass.
             if ip and ip.strip() != self.home_ip.strip():
-                self.log("Reconnection successful!")
+                self.log(f"Reconnection successful — external IP verified: {ip}")
+                self.status["secure"] = True
                 self.start_qbittorrent()
                 return True
+            if not ip:
+                self.log("Reconnected but external IP could not be verified — "
+                         "not starting qBittorrent", level="WARNING")
         self.log("Reconnection failed", level="WARNING")
         return False
 

@@ -311,6 +311,14 @@ def qbt_start():
     err = _auth() or _require_monitor()
     if err:
         return err
+    # Enforce server-side, not just by disabling the button. qBittorrent must
+    # never start unless the monitor is running AND has positively confirmed
+    # the external IP differs from the home IP. secure is None until the first
+    # successful check, and None is not "safe".
+    if not monitor.status.get("running"):
+        return jsonify({"error": "Monitor is not running — start it before qBittorrent"}), 400
+    if monitor.status.get("secure") is not True:
+        return jsonify({"error": "VPN is not verified secure — refusing to start qBittorrent"}), 400
     threading.Thread(target=monitor.start_qbittorrent, daemon=True).start()
     return jsonify({"started": True})
 
