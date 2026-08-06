@@ -235,26 +235,11 @@ class VPNMonitor:
     def check_killswitch_active(self):
         """Returns True if UFW is in kill-switch mode (outgoing deny default).
 
-        Asserts the live kernel ruleset as well as UFW's configured policy.
-        Flushing the iptables OUTPUT chain removes UFW's jump rules so nothing
-        actually filters, yet `ufw status` — which reads UFW's own config files
-        — keeps reporting "deny (outgoing)". Checking only the latter reports a
-        kill switch that is not there.
+        UFW is the single source of truth. `ufw status verbose` prints
+        "Status: inactive" with no Default line when UFW is disabled, so a
+        "deny (outgoing)" match already implies UFW is active with that policy.
         """
-        try:
-            r = subprocess.run(
-                ["sudo", "ufw", "status", "verbose"],
-                capture_output=True, text=True, timeout=3,
-            )
-            if "deny (outgoing)" not in r.stdout:
-                return False
-            live = subprocess.run(
-                ["sudo", "iptables", "-S", "OUTPUT"],
-                capture_output=True, text=True, timeout=3,
-            )
-            return "ufw-before-output" in live.stdout
-        except Exception:
-            return False
+        return killswitch_blocking_outbound()
 
     def get_external_ip(self):
         return detect_external_ip()

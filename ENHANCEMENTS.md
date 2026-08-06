@@ -21,11 +21,11 @@ All items below are complete and in production.
 
 ### Usability
 - **Non-interactive mode** — `--non-interactive`, `--ovpn-url` flags on `startvpn.sh`
-- **Status script** — `vpn_status.sh` shows OpenVPN, tun0, qBittorrent, monitor, and iptables state
+- **Status script** — `vpn_status.sh` shows OpenVPN, tun0, qBittorrent, monitor, and UFW kill-switch state
 - **Web dashboard** — Flask app (`webapp/`) with live log streaming, one-click VPN/qBittorrent control, and a video file organiser
 
 ### Code quality
-- **Test suite** — 58 pytest unit tests covering the monitoring loop, kill-switch state machine, IP leak detection, SSRF guard, and logging
+- **Test suite** — 88 pytest unit tests covering the monitoring loop, kill-switch state machine, IP leak detection, `.ovpn` config validation, SSRF guard, and logging
 - **CI** — GitHub Actions runs flake8 (`E9,F`) and pytest on every push and PR
 
 ### Documentation

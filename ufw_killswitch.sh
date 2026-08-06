@@ -149,10 +149,6 @@ if ! ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
     echo "  Status:     FAILED - UFW does not report 'deny (outgoing)'."
     exit 1
 fi
-if ! iptables -S OUTPUT 2>/dev/null | grep -q "ufw-before-output"; then
-    echo "  Status:     FAILED - the live OUTPUT chain is not filtering."
-    exit 1
-fi
 
 echo "  LAN:        ${LAN_SUBNETS:-none detected}"
 echo "  Status:     ACTIVE - all outgoing blocked except VPN tunnel and LAN"

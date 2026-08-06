@@ -15,9 +15,8 @@ The following packages are required:
 - `python3` - Python runtime
 - `python3-pip` - Python package manager
 - `curl` - HTTP client
-- `iptables` - Firewall management
+- `ufw` - Firewall management (the kill switch depends on it)
 - `screen` - Terminal multiplexer (optional)
-- `ufw` - Uncomplicated Firewall (optional)
 
 ## Quick Installation
 
@@ -43,7 +42,7 @@ Or install manually:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y openvpn qbittorrent-nox python3 python3-pip curl iptables screen ufw
+sudo apt-get install -y openvpn qbittorrent-nox python3 python3-pip curl screen ufw
 pip3 install --user requests
 ```
 

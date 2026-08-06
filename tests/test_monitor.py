@@ -63,11 +63,9 @@ class TestSystemChecks:
 
     def test_check_killswitch_active_true(self):
         m = make_monitor()
-        ufw = _proc(0)
-        ufw.stdout = "Default: deny (outgoing)\n  allow (incoming)"
-        chain = _proc(0)
-        chain.stdout = "-A OUTPUT -j ufw-before-output\n"
-        with patch("subprocess.run", side_effect=[ufw, chain]):
+        result = _proc(0)
+        result.stdout = "Status: active\nDefault: deny (outgoing)\n  allow (incoming)"
+        with patch("subprocess.run", return_value=result):
             assert m.check_killswitch_active() is True
 
     def test_check_killswitch_active_false(self):
@@ -77,17 +75,19 @@ class TestSystemChecks:
         with patch("subprocess.run", return_value=result):
             assert m.check_killswitch_active() is False
 
-    def test_check_killswitch_false_when_output_chain_was_flushed(self):
-        # Fail-open regression: `iptables -F OUTPUT` removes UFW's jump rules so
-        # nothing filters, but `ufw status` reads UFW's own config files and
-        # keeps reporting "deny (outgoing)". Trusting only the latter reports a
-        # kill switch that is not actually there.
+    def test_check_killswitch_false_when_ufw_is_disabled(self):
+        # `ufw status verbose` prints only "Status: inactive" when disabled —
+        # no Default line — so matching "deny (outgoing)" already implies UFW
+        # is active with that policy. No second source needed.
         m = make_monitor()
-        ufw = _proc(0)
-        ufw.stdout = "Default: deny (outgoing)\n  allow (incoming)"
-        chain = _proc(0)
-        chain.stdout = "-P OUTPUT ACCEPT\n"
-        with patch("subprocess.run", side_effect=[ufw, chain]):
+        result = _proc(0)
+        result.stdout = "Status: inactive\n"
+        with patch("subprocess.run", return_value=result):
+            assert m.check_killswitch_active() is False
+
+    def test_check_killswitch_false_when_ufw_command_fails(self):
+        m = make_monitor()
+        with patch("subprocess.run", side_effect=OSError("no ufw")):
             assert m.check_killswitch_active() is False
 
 

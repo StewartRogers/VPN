@@ -76,10 +76,7 @@
 
 2. **Verify kill switch:**
    ```bash
-   # Both must be true. The first is UFW's configured policy; the second
-   # confirms the live kernel chain is actually filtering.
    sudo ufw status verbose | grep "deny (outgoing)"
-   sudo iptables -S OUTPUT  | grep ufw-before-output
    ```
 
 3. **Check for DNS leaks:**
@@ -208,18 +205,14 @@
 
 **Solutions:**
 
-The kill switch is **UFW-based**. Do not add or remove raw iptables rules to
-manage it — they will be silently out of step with what UFW reports.
+The kill switch is **UFW-based**. Manage it only with `ufw` and the scripts
+here — raw iptables rules will be silently out of step with what UFW reports.
 
 1. **Verify the rules:**
    ```bash
    sudo ufw status verbose
-   sudo iptables -S OUTPUT | grep ufw-before-output
+   sudo ufw status numbered
    ```
-
-   If UFW says `deny (outgoing)` but the second command prints nothing, the
-   OUTPUT chain has been flushed: **nothing is filtering**, even though every
-   status display will report the kill switch as active. Re-apply it.
 
 2. **Re-apply the kill switch:**
    ```bash
@@ -317,10 +310,9 @@ manage it — they will be silently out of step with what UFW reports.
 
 3. **Manual restore:**
    ```bash
-   # Restore the firewall — drive UFW, never flush the OUTPUT chain.
-   # `iptables -F OUTPUT` removes UFW's jump rules so nothing filters, while
-   # `ufw status` still reports "deny (outgoing)" and every check in this
-   # project believes you are protected.
+   # Restore the firewall with UFW. Never flush the iptables OUTPUT chain:
+   # that removes UFW's jump rules so nothing filters, while UFW still
+   # reports itself active and every check here believes you are protected.
    sudo bash ufw_base.sh
 
    # Restore DNS
@@ -428,8 +420,8 @@ ip addr show
 # Check routing table
 ip route show
 
-# Check iptables rules
-sudo iptables -L -n -v
+# Check firewall rules
+sudo ufw status verbose
 
 # Check DNS
 cat /etc/resolv.conf
@@ -457,7 +449,7 @@ If you still have issues:
 2. **Collect diagnostic information:**
    ```bash
    ./vpn_status.sh > diagnostic.txt
-   sudo iptables -L -n -v >> diagnostic.txt
+   sudo ufw status verbose >> diagnostic.txt
    ip route show >> diagnostic.txt
    cat /etc/resolv.conf >> diagnostic.txt
    ```

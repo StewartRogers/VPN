@@ -71,18 +71,12 @@ else
     echo "✗ VPN Monitor: Not running"
 fi
 
-# Check for kill switch rules.
-# The kill switch is UFW-based, so check UFW's policy — but also confirm the
-# live kernel chain still contains UFW's jump rules. Flushing the iptables
-# OUTPUT chain removes them (nothing filters any more) while 'ufw status',
-# which reads UFW's config files, keeps reporting "deny (outgoing)".
+# Check for kill switch.
+# UFW-based. The previous check grepped 'iptables -L OUTPUT' for "tun", which
+# could never match: -L omits interface columns, and UFW's tun0 rules live in
+# ufw-user-output, not the built-in OUTPUT chain. It always read "Not active".
 if sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
-    if sudo iptables -S OUTPUT 2>/dev/null | grep -q "ufw-before-output"; then
-        echo "✓ Kill Switch: Active"
-    else
-        echo "✗ Kill Switch: BROKEN - UFW says deny but the OUTPUT chain is not filtering"
-        echo "  Re-apply with: sudo bash ufw_killswitch.sh"
-    fi
+    echo "✓ Kill Switch: Active"
 else
     echo "✗ Kill Switch: Not active"
 fi

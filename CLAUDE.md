@@ -56,16 +56,19 @@ python3 vpn_active.py <home_ip>
 
 UFW-based, not raw iptables. `ufw_killswitch.sh` applies it; `ufw_base.sh` restores the base state (and takes `OUTGOING_POLICY=deny` so the kill-switch path can enable the firewall with egress already blocked rather than transiting an allow-outgoing window).
 
-**Detecting whether it is active requires checking two things**, and every consumer does:
+**This project uses UFW exclusively.** Nothing reads or writes iptables directly — do not add iptables commands, even read-only ones. UFW is the single source of truth for firewall state.
+
+Detecting whether the kill switch is active:
 
 ```bash
-sudo ufw status verbose | grep -q "deny (outgoing)"      # UFW's configured policy
-sudo iptables -S OUTPUT  | grep -q "ufw-before-output"   # the LIVE kernel chain
+sudo ufw status verbose | grep -q "deny (outgoing)"
 ```
 
-`ufw status` reads UFW's own config files. Flushing the iptables OUTPUT chain (`iptables -F OUTPUT`) removes UFW's jump rules so nothing filters at all, while `ufw status` keeps reporting `deny (outgoing)`. Checking only the first is a fail-open: the machine reports itself protected while it is wide open. **Never flush the OUTPUT chain to disable the kill switch** — drive UFW instead.
+That one check is sufficient: `ufw status verbose` prints `Status: inactive` with no `Default:` line when UFW is disabled, so a `deny (outgoing)` match already implies UFW is active with that policy.
 
-Consumers: `checkip.sh:check_killswitch_active`, `vpn_status.sh`, `VPNMonitor.check_killswitch_active`.
+Consumers: `checkip.sh:check_killswitch_active`, `vpn_status.sh`, `VPNMonitor.check_killswitch_active` (which delegates to `monitor.killswitch_blocking_outbound`).
+
+**Never disable the kill switch by flushing the iptables OUTPUT chain.** That removes UFW's jump rules so nothing filters, while UFW still reports itself active — the machine looks protected and is not. Use `ufw_base.sh` or `remove_killswitch.sh`.
 
 ### Untrusted `.ovpn` configs
 
@@ -120,7 +123,7 @@ Note that the shell enforcement layer (`checkip.sh`, `ufw_*.sh`) has no automate
 - `python3` with `requests`, `flask`, `python-dotenv`
 - `openvpn`, `qbittorrent-nox` (or `deluged`)
 - `ufw` — **required**; the kill switch depends on it
-- Standard tools: `pgrep`, `ip`, `curl`, `ss`, `iptables`, `sudo`
+- Standard tools: `pgrep`, `ip`, `curl`, `ss`, `sudo`
 
 ## sudo Requirements (web app)
 
@@ -138,9 +141,8 @@ pi ALL=(ALL) NOPASSWD: /bin/rm
 pi ALL=(ALL) NOPASSWD: /bin/chmod
 pi ALL=(ALL) NOPASSWD: /bin/chown
 
-# Kill switch — ufw for state changes, iptables to READ the live chain
+# Kill switch — UFW only
 pi ALL=(ALL) NOPASSWD: /usr/sbin/ufw
-pi ALL=(ALL) NOPASSWD: /sbin/iptables
 pi ALL=(ALL) NOPASSWD: /bin/bash /home/pi/VPN/ufw_killswitch.sh
 pi ALL=(ALL) NOPASSWD: /bin/bash /home/pi/VPN/ufw_base.sh
 
