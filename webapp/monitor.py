@@ -71,6 +71,24 @@ def validate_ovpn_config(text):
     return None
 
 
+def killswitch_blocking_outbound():
+    """True if UFW's policy is deny-outgoing.
+
+    Module-level so callers without a VPNMonitor (e.g. /api/configure before
+    one exists) can explain *why* an external IP lookup failed: while the kill
+    switch is up every outbound request is blocked, including the one used to
+    capture the pre-VPN home IP.
+    """
+    try:
+        r = subprocess.run(
+            ["sudo", "ufw", "status", "verbose"],
+            capture_output=True, text=True, timeout=3,
+        )
+        return "deny (outgoing)" in r.stdout
+    except Exception:
+        return False
+
+
 def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 

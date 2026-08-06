@@ -175,15 +175,68 @@ echo ""
 divider
 
 #
-# Capture home IP before VPN starts
+# Clear any leftover kill switch BEFORE capturing the home IP.
 #
-YHOMEIP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null)
-if ! validate_ip "$YHOMEIP"; then
-    log_message "WARN" "Could not retrieve valid external IP address"
-    YHOMEIP=""
+# The kill switch is fail-closed by design and survives reboots, so a previous
+# session that ended badly leaves outgoing traffic blocked. That blocks the
+# ipify call below, YHOMEIP silently becomes empty, and the run only fails at
+# the very end - after the VPN is already connected - with "Home IP not
+# captured". Catch it here instead, while it is still cheap to fix.
+#
+if sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
+    echo "  A kill switch from a previous session is still active."
+    echo "  Removing it so the pre-VPN home IP can be captured..."
+    log_message "INFO" "Clearing leftover kill switch before home IP capture"
+    if ! sudo bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1; then
+        echo ""
+        echo "  ERROR: Could not clear the existing kill switch."
+        echo "  Run this, then start again:"
+        echo "    ./remove_killswitch.sh"
+        echo ""
+        log_message "ERROR" "Failed to clear leftover kill switch"
+        ERROR_HANDLED=true
+        exit 1
+    fi
+    echo "  Cleared."
+    echo ""
 fi
-echo "  Home IP (pre-VPN): ${YHOMEIP:-unknown}"
-log_message "INFO" "Home IP (pre-VPN): ${YHOMEIP:-unknown}"
+
+#
+# Capture home IP before VPN starts.
+# HOME_IP in the environment or webapp/.env overrides the lookup - useful when
+# the detection services are unreachable or your ISP IP is static.
+#
+if [ -n "$HOME_IP" ] && validate_ip "$HOME_IP"; then
+    YHOMEIP="$HOME_IP"
+    log_message "INFO" "Using HOME_IP from environment"
+else
+    YHOMEIP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null)
+    if ! validate_ip "$YHOMEIP"; then
+        log_message "WARN" "Could not retrieve valid external IP address"
+        YHOMEIP=""
+    fi
+fi
+
+if [ -z "$YHOMEIP" ]; then
+    echo "  ERROR: Could not determine your pre-VPN home IP."
+    echo ""
+    echo "  The monitor needs it to detect leaks, so starting the VPN now would"
+    echo "  leave you unmonitored. Nothing has been changed."
+    echo ""
+    echo "  Check outbound connectivity:"
+    echo "    curl https://api.ipify.org"
+    echo ""
+    echo "  Or set it explicitly (find it at https://whatismyip.com from any"
+    echo "  device on this network) and run again:"
+    echo "    HOME_IP=203.0.113.5 ./startvpn.sh"
+    echo ""
+    log_message "ERROR" "Home IP could not be determined - aborting before VPN start"
+    ERROR_HANDLED=true
+    exit 1
+fi
+
+echo "  Home IP (pre-VPN): $YHOMEIP"
+log_message "INFO" "Home IP (pre-VPN): $YHOMEIP"
 echo ""
 
 #

@@ -11,7 +11,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 
-from monitor import VPNMonitor, detect_external_ip
+from monitor import VPNMonitor, detect_external_ip, killswitch_blocking_outbound
 from organizer import scan_directory, organize_files
 
 load_dotenv()
@@ -95,6 +95,23 @@ def _require_monitor():
     return None
 
 
+def _ip_lookup_error():
+    """Explain why an external IP lookup failed.
+
+    The usual cause is not a dead lookup service: the kill switch is fail-closed
+    and survives reboots, so a previous session that ended badly leaves outgoing
+    traffic blocked — including the request used to capture the pre-VPN home IP.
+    Saying only "could not detect" sends people hunting the wrong problem.
+    """
+    if killswitch_blocking_outbound():
+        return ("The kill switch is still active from a previous session, so all "
+                "outbound requests are blocked and your home IP cannot be detected. "
+                "Click Stop VPN, or run ./remove_killswitch.sh on the Pi, then retry. "
+                "You can also set HOME_IP in webapp/.env to skip detection entirely.")
+    return ("Could not determine external IP — check this machine has internet access, "
+            "or set HOME_IP in webapp/.env to skip detection.")
+
+
 def _organizer_roots():
     """Directories the file organizer is permitted to touch.
 
@@ -159,7 +176,7 @@ def detect_ip():
     ip = detect_external_ip()
     if ip:
         return jsonify({"ip": ip})
-    return jsonify({"error": "Could not determine external IP"}), 503
+    return jsonify({"error": _ip_lookup_error()}), 503
 
 
 @app.route("/api/status")
@@ -334,9 +351,9 @@ def configure():
     data = request.get_json(force=True)
     home_ip = (data.get("home_ip") or "").strip()
     if not home_ip:
-        home_ip = detect_external_ip()
+        home_ip = os.environ.get("HOME_IP", "").strip() or detect_external_ip()
     if not home_ip:
-        return jsonify({"error": "Could not detect home IP"}), 503
+        return jsonify({"error": _ip_lookup_error()}), 503
 
     try:
         addr = ipaddress.ip_address(home_ip)
