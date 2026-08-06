@@ -12,6 +12,23 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Read PORT from webapp/.env (sudo doesn't inherit the caller's shell env),
+# without clobbering an already-exported PORT.
+if [ -z "${PORT+x}" ] && [ -f "$SCRIPT_DIR/webapp/.env" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in ''|'#'*) continue ;; esac
+        if [[ "$value" == \"*\" && "$value" == *\" ]] || [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:-1}"
+        fi
+        if [ "$key" = "PORT" ]; then
+            PORT="$value"
+        fi
+    done < <(grep -v '^\s*#' "$SCRIPT_DIR/webapp/.env" | grep -v '^\s*$')
+fi
+PORT="${PORT:-5000}"
+
 echo "[$(date '+%Y-%m-%d %H:%M:%S')] Applying UFW base state..."
 
 ufw --force reset                   > /dev/null 2>&1
@@ -23,11 +40,11 @@ ufw allow 22/tcp    comment 'SSH'              > /dev/null 2>&1
 ufw allow 443/tcp   comment 'HTTPS'            > /dev/null 2>&1
 ufw allow 32400/tcp comment 'Plex'             > /dev/null 2>&1
 ufw allow 8080/tcp  comment 'Web UI'           > /dev/null 2>&1
-ufw allow 5000/tcp  comment 'VPN Web UI'       > /dev/null 2>&1
+ufw allow "$PORT/tcp" comment 'VPN Web UI'     > /dev/null 2>&1
 ufw allow 19806/tcp comment 'qBittorrent peer' > /dev/null 2>&1
 ufw allow 19806/udp comment 'qBittorrent peer' > /dev/null 2>&1
 ufw allow in on tun0 comment 'VPN interface'   > /dev/null 2>&1
 
 ufw --force enable                  > /dev/null 2>&1
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base state applied - outgoing unrestricted."
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base state applied - outgoing unrestricted, web UI port $PORT/tcp open."

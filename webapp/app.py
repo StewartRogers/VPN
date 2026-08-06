@@ -330,4 +330,5 @@ if __name__ == "__main__":
         monitor = VPNMonitor(home_ip)
 
     bind_host = os.environ.get("BIND_HOST", "0.0.0.0").strip()
-    app.run(host=bind_host, port=5000, threaded=True)
+    port = int(os.environ.get("PORT", "5000").strip())
+    app.run(host=bind_host, port=port, threaded=True)
