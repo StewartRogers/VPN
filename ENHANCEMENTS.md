@@ -12,7 +12,7 @@ All items below are complete and in production.
 - **SSRF protection** — `.ovpn` download rejects non-HTTPS URLs, private/loopback/reserved IPs, and unresolvable hosts
 
 ### Reliability
-- **Auto-reconnect** — up to 3 attempts on VPN failure before emergency shutdown; configurable via `MAX_RECONNECT_ATTEMPTS`
+- **Fail-closed monitoring** — stops qBittorrent and exits on VPN failure or IP leak, leaving the kill switch active. Auto-reconnect was removed from `checkip.sh`; the web UI has a manual Force Reconnect
 - **Two-tier monitoring loop** — fast process/interface checks (2s) + periodic external IP checks (10s) with 3-consecutive-failure tolerance before shutdown
 - **Kill switch on failure** — kill switch stays active when the monitor exits due to VPN failure (traffic cannot leak while waiting for user to intervene)
 

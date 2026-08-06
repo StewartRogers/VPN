@@ -15,6 +15,26 @@ qBittorrent-data.conf
 
 # Secrets
 .env
+.env.*
+!.env.example
+
+# Diagnostic output — TROUBLESHOOTING.md tells you to generate this in the repo
+# and it contains `ip a` output, i.e. your real IP addresses.
+diagnostic.txt
+pipout.txt
+
+# Python virtualenvs
+.venv/
+venv/
+
+# Runtime state
+*.pid
+nohup.out
+
+# Editor / merge leftovers
+*.bak
+*.orig
+*.rej
 
 # IDE and system files
 .vscode/

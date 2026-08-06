@@ -60,6 +60,20 @@ check_killswitch_active() {
         echo ""
         return 1
     fi
+    # UFW's status comes from its config files, so it keeps saying
+    # "deny (outgoing)" even after the live OUTPUT chain has been flushed
+    # (which removes UFW's jump rules and stops all filtering). Assert the
+    # kernel is actually enforcing before trusting the policy.
+    if ! sudo iptables -S OUTPUT 2>/dev/null | grep -q "ufw-before-output"; then
+        echo ""
+        echo "ERROR: UFW reports 'deny (outgoing)' but the live OUTPUT chain is not"
+        echo "       filtering - the kill switch has been flushed and is NOT protecting you."
+        echo ""
+        echo "  Re-apply the kill switch:"
+        echo "    sudo bash \"$SCRIPT_DIR/ufw_killswitch.sh\""
+        echo ""
+        return 1
+    fi
     return 0
 }
 

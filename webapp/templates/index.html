@@ -377,7 +377,7 @@
         <div class="field">
           <label>Home IP (pre-VPN)</label>
           <div style="display:flex;gap:5px;align-items:center">
-            <input type="text" id="cfg-home-ip" value="{{ home_ip }}" placeholder="Detecting…" style="width:130px">
+            <input type="text" id="cfg-home-ip" value="" placeholder="Detecting…" style="width:130px">
             <button class="btn-save" onclick="detectHomeIP()">Detect</button>
           </div>
         </div>
@@ -489,6 +489,11 @@
                     s.secure === null ? 'dim' : s.secure ? 'ok' : 'fail');
     set('s-ip',  s.external_ip || '—', s.external_ip ? 'info' : 'dim');
     set('s-qbt', s.qbittorrent ? 'Running' : 'Stopped', s.qbittorrent ? 'ok' : 'dim');
+
+    // home_ip is no longer server-rendered into the page (it is the real ISP
+    // address); fill it in from the authenticated status payload instead.
+    const homeIpEl = document.getElementById('cfg-home-ip');
+    if (s.home_ip && !homeIpEl.value) homeIpEl.value = s.home_ip;
 
     document.getElementById('btn-vpn-start').disabled = s.vpn_starting;
     document.getElementById('btn-vpn-stop').disabled  = s.running || s.vpn_starting;

@@ -78,14 +78,23 @@ stop_service_by_pid() {
     local pid_file="$PID_DIR/${service}.pid"
 
     if [ -f "$pid_file" ]; then
-        local pid=$(cat "$pid_file")
-        if kill -0 $pid 2>/dev/null; then
+        local pid
+        pid=$(cat "$pid_file")
+        # Quote and validate: PID files live in a predictable path, and an
+        # unquoted "0" would make 'kill 0' signal this script's whole process
+        # group — aborting shutdown before the firewall is restored.
+        if ! [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+            echo "  $service PID file is malformed - removing"
+            rm -f "$pid_file"
+            return
+        fi
+        if kill -0 "$pid" 2>/dev/null; then
             echo "  Stopping $service (PID: $pid)"
             log_message "INFO" "Stopping $service (PID: $pid)"
-            kill $pid 2>/dev/null
+            kill "$pid" 2>/dev/null
             sleep 1
-            if kill -0 $pid 2>/dev/null; then
-                kill -9 $pid 2>/dev/null
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null
             fi
             rm "$pid_file"
         else

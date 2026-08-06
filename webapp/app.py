@@ -2,6 +2,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import secrets
 import subprocess
 import threading
@@ -20,35 +21,72 @@ if os.environ.get("ACCESS_LOG", "").strip().lower() not in ("1", "true", "yes"):
 
 app = Flask(__name__)
 
+# Cap request bodies — the .ovpn upload path reads the whole file into memory,
+# so an unbounded POST is an easy way to OOM a Pi.
+app.config["MAX_CONTENT_LENGTH"] = 1024 * 1024
+
 monitor: Optional[VPNMonitor] = None
 
-_API_TOKEN = os.environ.get("VPN_API_TOKEN", "").strip()
+_ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
-if not _API_TOKEN:
-    print("WARNING: VPN_API_TOKEN is not set - the API is unauthenticated. "
-          "Set VPN_API_TOKEN=<secret> to require a bearer token.", flush=True)
+
+def _load_or_create_token():
+    """Return the API token, generating and persisting one when unset.
+
+    The API is never served unauthenticated. Every endpoint below reaches a
+    sudo-backed operation, and because a cross-origin HTML form cannot set an
+    Authorization header, requiring a token is also what stops any website the
+    operator visits from driving these routes via CSRF. A generated token is
+    written to webapp/.env (mode 0600) so it survives restarts.
+    """
+    token = os.environ.get("VPN_API_TOKEN", "").strip()
+    if token:
+        return token
+
+    token = secrets.token_urlsafe(32)
+    try:
+        gap = "\n" if os.path.exists(_ENV_PATH) and os.path.getsize(_ENV_PATH) else ""
+        with open(_ENV_PATH, "a", encoding="utf-8") as fh:
+            fh.write(f"{gap}VPN_API_TOKEN={token}\n")
+        os.chmod(_ENV_PATH, 0o600)
+        saved_to = _ENV_PATH
+    except OSError as exc:
+        saved_to = f"NOT SAVED ({exc}) - this token lasts only until restart"
+
+    print(f"\n  No VPN_API_TOKEN was set, so one was generated.\n"
+          f"  Token:    {token}\n"
+          f"  Saved to: {saved_to}\n"
+          f"  Enter it once in the web UI to authenticate.\n", flush=True)
+    return token
+
+
+_API_TOKEN = _load_or_create_token().encode("utf-8")
+
+
+def _bearer_token():
+    """Extract the presented token from the Authorization header."""
+    header = request.headers.get("Authorization", "").strip()
+    parts = header.split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return header
+
+
+def _check_token(token):
+    # compare_digest raises TypeError on non-ASCII str, so compare bytes.
+    if not secrets.compare_digest(token.encode("utf-8", "replace"), _API_TOKEN):
+        return jsonify({"error": "Unauthorized"}), 401
+    return None
 
 
 def _auth():
     """Return a 401 response if the token is wrong, else None."""
-    if not _API_TOKEN:
-        return None  # auth disabled when no token configured
-    auth_header = request.headers.get("Authorization", "")
-    token = auth_header.removeprefix("Bearer ").strip()
-    if not secrets.compare_digest(token, _API_TOKEN):
-        return jsonify({"error": "Unauthorized"}), 401
-    return None
+    return _check_token(_bearer_token())
 
 
 def _auth_sse():
     """Like _auth() but also accepts ?token= query param (EventSource can't set headers)."""
-    if not _API_TOKEN:
-        return None
-    auth_header = request.headers.get("Authorization", "")
-    token = auth_header.removeprefix("Bearer ").strip() or request.args.get("token", "")
-    if not secrets.compare_digest(token, _API_TOKEN):
-        return jsonify({"error": "Unauthorized"}), 401
-    return None
+    return _check_token(_bearer_token() or request.args.get("token", ""))
 
 
 def _require_monitor():
@@ -57,11 +95,53 @@ def _require_monitor():
     return None
 
 
+def _organizer_roots():
+    """Directories the file organizer is permitted to touch.
+
+    ORGANIZER_ROOTS is a comma-separated list. It defaults to the user's home
+    directory so the organizer keeps working without configuration, while still
+    refusing paths like /etc or /.
+    """
+    raw = os.environ.get("ORGANIZER_ROOTS", "").strip()
+    entries = [p.strip() for p in raw.split(",") if p.strip()] or [os.path.expanduser("~")]
+    return [os.path.realpath(p) for p in entries]
+
+
+def _resolve_under_roots(path):
+    """Return the resolved path if it sits inside an allowed root, else None."""
+    resolved = os.path.realpath(path)
+    for root in _organizer_roots():
+        if resolved == root or resolved.startswith(root + os.sep):
+            return resolved
+    return None
+
+
+@app.after_request
+def _security_headers(resp):
+    """Deny framing — a clickjacked "Stop All" tears down the kill switch —
+    and keep the SSE token out of Referer headers. Both templates use inline
+    handlers, so script-src must still allow 'unsafe-inline'.
+    """
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+    )
+    return resp
+
+
 # ------------------------------------------------------------------ pages
 
 @app.route("/")
 def index():
-    return render_template("index.html", home_ip=monitor.home_ip if monitor else "")
+    # home_ip is the operator's real pre-VPN ISP address — the one value this
+    # project exists to conceal — so it is not rendered into a page that has to
+    # stay loadable before a token is supplied. The UI reads it from
+    # /api/status instead, which is authenticated.
+    return render_template("index.html")
 
 
 @app.route("/organizer")
@@ -95,6 +175,7 @@ def status():
     live["qbittorrent"] = monitor.is_qbittorrent_running()
     live["vpn_starting"] = monitor.status.get("vpn_starting", False)
     live["kill_switch_active"] = monitor.check_killswitch_active()
+    live["home_ip"] = monitor.home_ip
     return jsonify(live)
 
 
@@ -158,10 +239,12 @@ def vpn_upload_config():
     f = request.files.get("file")
     if not f:
         return jsonify({"error": "no file uploaded"}), 400
-    filename = f.filename or "config.ovpn"
-    filename = os.path.basename(filename)  # strip any path components
-    if not filename.endswith(".ovpn"):
-        return jsonify({"error": "file must have a .ovpn extension"}), 400
+    filename = os.path.basename(f.filename or "config.ovpn")  # strip path components
+    # Must be a real name, not a bare ".ovpn" dotfile — glob("*.ovpn") would not
+    # match that, so accepting it wipes the installed config and leaves nothing
+    # the VPN can start from.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}\.ovpn", filename) or filename.startswith("."):
+        return jsonify({"error": "invalid filename — use letters, digits, . _ - and a .ovpn extension"}), 400
     monitor.upload_ovpn(f.read(), filename)
     return jsonify({"started": True})
 
@@ -289,15 +372,18 @@ def files_scan():
     source_dir = request.args.get("dir", "").strip()
     if not source_dir:
         return jsonify({"error": "dir parameter required"}), 400
-    source_dir = os.path.realpath(source_dir)
+    source_dir = _resolve_under_roots(source_dir)
+    if source_dir is None:
+        return jsonify({"error": "Directory is outside the permitted roots"}), 403
     if not os.path.isdir(source_dir):
         return jsonify({"error": "Directory not found"}), 404
     exclude_dirs = {d.strip() for d in request.args.get("exclude", "").split(",") if d.strip()}
     try:
         files = scan_directory(source_dir, exclude_dirs)
         return jsonify({"source_dir": source_dir, "files": files})
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+    except Exception:
+        app.logger.exception("scan failed for %s", source_dir)
+        return jsonify({"error": "Scan failed"}), 500
 
 
 @app.route("/api/files/organize", methods=["POST"])
@@ -312,14 +398,17 @@ def files_organize():
         return jsonify({"error": "source_dir required"}), 400
     if not isinstance(operations, list) or not operations:
         return jsonify({"error": "files list required"}), 400
-    source_dir = os.path.realpath(source_dir)
+    source_dir = _resolve_under_roots(source_dir)
+    if source_dir is None:
+        return jsonify({"error": "Directory is outside the permitted roots"}), 403
     if not os.path.isdir(source_dir):
         return jsonify({"error": "Directory not found"}), 404
     try:
         results = organize_files(source_dir, operations)
         return jsonify({"results": results})
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+    except Exception:
+        app.logger.exception("organize failed for %s", source_dir)
+        return jsonify({"error": "Organize failed"}), 500
 
 
 # ------------------------------------------------------------------ main
@@ -329,6 +418,12 @@ if __name__ == "__main__":
     if home_ip:
         monitor = VPNMonitor(home_ip)
 
-    bind_host = os.environ.get("BIND_HOST", "0.0.0.0").strip()
-    port = int(os.environ.get("PORT", "5000").strip())
+    bind_host = os.environ.get("BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
+    # A bare "PORT=" line in .env yields "", which int() would reject.
+    port_raw = os.environ.get("PORT", "").strip() or "5000"
+    try:
+        port = int(port_raw)
+    except ValueError:
+        print(f"WARNING: PORT={port_raw!r} is not a number — using 5000", flush=True)
+        port = 5000
     app.run(host=bind_host, port=port, threaded=True)

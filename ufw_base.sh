@@ -29,22 +29,45 @@ if [ -z "${PORT+x}" ] && [ -f "$SCRIPT_DIR/webapp/.env" ]; then
 fi
 PORT="${PORT:-5000}"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Applying UFW base state..."
+# Outgoing policy. Defaults to "allow" (base state). ufw_killswitch.sh calls
+# this with OUTGOING_POLICY=deny so the firewall is *enabled already denying*
+# outgoing — otherwise there is a window between 'ufw enable' and the kill
+# switch setting its policy in which egress is unrestricted.
+OUTGOING_POLICY="${OUTGOING_POLICY:-allow}"
 
-ufw --force reset                   > /dev/null 2>&1
+# Every ufw call used to be fire-and-forget, so this script always exited 0 and
+# callers' return-code checks were decorative. Track failures instead: a failed
+# 'ufw allow 22/tcp' after a successful reset means no SSH rule and a remote
+# lockout, which must not be reported as success.
+FAILED=0
+run_ufw() {
+    if ! ufw "$@" > /dev/null 2>&1; then
+        echo "  ERROR: 'ufw $*' failed"
+        FAILED=1
+    fi
+}
 
-ufw default deny  incoming          > /dev/null 2>&1
-ufw default allow outgoing          > /dev/null 2>&1
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Applying UFW base state (outgoing: $OUTGOING_POLICY)..."
 
-ufw allow 22/tcp    comment 'SSH'              > /dev/null 2>&1
-ufw allow 443/tcp   comment 'HTTPS'            > /dev/null 2>&1
-ufw allow 32400/tcp comment 'Plex'             > /dev/null 2>&1
-ufw allow 8080/tcp  comment 'Web UI'           > /dev/null 2>&1
-ufw allow "$PORT/tcp" comment 'VPN Web UI'     > /dev/null 2>&1
-ufw allow 19806/tcp comment 'qBittorrent peer' > /dev/null 2>&1
-ufw allow 19806/udp comment 'qBittorrent peer' > /dev/null 2>&1
-ufw allow in on tun0 comment 'VPN interface'   > /dev/null 2>&1
+run_ufw --force reset
 
-ufw --force enable                  > /dev/null 2>&1
+run_ufw default deny  incoming
+run_ufw default "$OUTGOING_POLICY" outgoing
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base state applied - outgoing unrestricted, web UI port $PORT/tcp open."
+run_ufw allow 22/tcp    comment 'SSH'
+run_ufw allow 443/tcp   comment 'HTTPS'
+run_ufw allow 32400/tcp comment 'Plex'
+run_ufw allow 8080/tcp  comment 'Web UI'
+run_ufw allow "$PORT/tcp" comment 'VPN Web UI'
+run_ufw allow 19806/tcp comment 'qBittorrent peer'
+run_ufw allow 19806/udp comment 'qBittorrent peer'
+run_ufw allow in on tun0 comment 'VPN interface'
+
+run_ufw --force enable
+
+if [ "$FAILED" -ne 0 ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] FAILED - UFW is not in the expected state. Check 'sudo ufw status verbose'."
+    exit 1
+fi
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base state applied - outgoing $OUTGOING_POLICY, web UI port $PORT/tcp open."

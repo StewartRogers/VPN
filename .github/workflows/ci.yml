@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [master]
 
+# Least privilege: without this the job inherits the repository default, which
+# on older repos is read/write. `pip install` runs third-party setup code with
+# whatever token is in the environment.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -24,6 +30,7 @@ jobs:
         run: |
           flake8 --select=E9,F \
             vpn_active.py \
+            organize.py \
             webapp/app.py \
             webapp/monitor.py \
             webapp/organizer.py \

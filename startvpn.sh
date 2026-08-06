@@ -44,6 +44,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --ovpn-url)
+            # Without the guard, 'shift 2' with only one argument left fails and
+            # leaves $# unchanged, so the while loop re-reads --ovpn-url forever.
+            if [ -z "$2" ]; then
+                echo "ERROR: --ovpn-url requires a URL"
+                exit 1
+            fi
             CUSTOM_OVPN_URL="$2"
             shift 2
             ;;
@@ -94,8 +100,11 @@ rotate_logs() {
 ##
 validate_url() {
     local url=$1
-    if [[ ! "$url" =~ ^https?:// ]]; then
-        log_message "ERROR" "Invalid URL format: $url"
+    # HTTPS only: the downloaded file is executed by 'sudo openvpn', so a
+    # plaintext fetch lets anyone on-path choose the VPN endpoint and the
+    # firewall exception that gets opened for it.
+    if [[ ! "$url" =~ ^https:// ]]; then
+        log_message "ERROR" "Invalid URL - must start with https:// : $url"
         return 1
     fi
     return 0
@@ -272,9 +281,28 @@ if [ "$GETOVPN" = "y" ]; then
         fi
     fi
 
-    curl -s -L -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"
+    # -f: without it curl exits 0 on a 404/403 and the (non-empty) HTML error
+    # page is installed as the config, poisoning every later run.
+    curl -fsSL -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"
     if [ $? -ne 0 ] || [ ! -s "$SCRIPT_DIR/$OVPN_FILENAME" ]; then
         log_message "ERROR" "Failed to download OVPN file"
+        rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
+        ERROR_HANDLED=true
+        exit 1
+    fi
+
+    # Reject configs carrying directives that run commands or write files as
+    # root. --script-security 0 below blocks the up/down script hooks, but
+    # --status / --writepid / --management are not overridden on the command
+    # line, so a config directive would take effect unopposed.
+    if grep -qiE '^[[:space:]]*(script-security|up|down|route-up|route-pre-down|ipchange|tls-verify|auth-user-pass-verify|client-connect|client-disconnect|learn-address|plugin|status|writepid|log|log-append|management[[:alnum:]-]*|cd|tmp-dir|askpass)[[:space:]]' "$SCRIPT_DIR/$OVPN_FILENAME"; then
+        log_message "ERROR" "Downloaded config contains a disallowed directive - refusing to install"
+        rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
+        ERROR_HANDLED=true
+        exit 1
+    fi
+    if ! grep -qiE '^[[:space:]]*remote[[:space:]]+[^[:space:]]' "$SCRIPT_DIR/$OVPN_FILENAME"; then
+        log_message "ERROR" "Downloaded file has no 'remote' line - not an OpenVPN config"
         rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
         ERROR_HANDLED=true
         exit 1
@@ -366,6 +394,7 @@ sudo openvpn \
     --config "$XCONFIGFILE" \
     --log "$XVPNLOGFILE" \
     --daemon \
+    --script-security 0 \
     --ping 10 \
     --ping-exit 60 \
     --auth-nocache \

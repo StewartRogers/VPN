@@ -63,9 +63,11 @@ class TestSystemChecks:
 
     def test_check_killswitch_active_true(self):
         m = make_monitor()
-        result = _proc(0)
-        result.stdout = "Default: deny (outgoing)\n  allow (incoming)"
-        with patch("subprocess.run", return_value=result):
+        ufw = _proc(0)
+        ufw.stdout = "Default: deny (outgoing)\n  allow (incoming)"
+        chain = _proc(0)
+        chain.stdout = "-A OUTPUT -j ufw-before-output\n"
+        with patch("subprocess.run", side_effect=[ufw, chain]):
             assert m.check_killswitch_active() is True
 
     def test_check_killswitch_active_false(self):
@@ -73,6 +75,19 @@ class TestSystemChecks:
         result = _proc(0)
         result.stdout = "Default: allow (outgoing)\n  disabled (routed)"
         with patch("subprocess.run", return_value=result):
+            assert m.check_killswitch_active() is False
+
+    def test_check_killswitch_false_when_output_chain_was_flushed(self):
+        # Fail-open regression: `iptables -F OUTPUT` removes UFW's jump rules so
+        # nothing filters, but `ufw status` reads UFW's own config files and
+        # keeps reporting "deny (outgoing)". Trusting only the latter reports a
+        # kill switch that is not actually there.
+        m = make_monitor()
+        ufw = _proc(0)
+        ufw.stdout = "Default: deny (outgoing)\n  allow (incoming)"
+        chain = _proc(0)
+        chain.stdout = "-P OUTPUT ACCEPT\n"
+        with patch("subprocess.run", side_effect=[ufw, chain]):
             assert m.check_killswitch_active() is False
 
 
@@ -94,6 +109,76 @@ class TestDetectExternalIp:
     def test_returns_none_when_all_fail(self):
         with patch("requests.get", side_effect=Exception("timeout")):
             assert mon.detect_external_ip() is None
+
+    def test_http_error_body_is_not_treated_as_an_ip(self):
+        # Fail-open regression: with no raise_for_status(), a 502 HTML page from
+        # the plain-text endpoint was returned as "the external IP". It never
+        # equals home_ip, so the monitor logged "VPN secure" indefinitely while
+        # the leak check was effectively disabled.
+        bad = MagicMock()
+        bad.text = "<html>502 Bad Gateway</html>"
+        bad.raise_for_status.side_effect = Exception("502 Server Error")
+        good = MagicMock()
+        good.json.return_value = {"origin": "9.10.11.12"}
+        with patch("requests.get", side_effect=[Exception("timeout"), bad, good]):
+            assert mon.detect_external_ip() == "9.10.11.12"
+
+    def test_non_ipv4_answer_is_rejected(self):
+        junk = MagicMock()
+        junk.json.return_value = {"ip": "2001:db8::1"}
+        good = MagicMock()
+        good.text = "9.10.11.12\n"
+        with patch("requests.get", side_effect=[junk, good]):
+            assert mon.detect_external_ip() == "9.10.11.12"
+
+    def test_returns_none_when_every_service_returns_junk(self):
+        junk = MagicMock()
+        junk.json.return_value = {"ip": "nonsense"}
+        junk.text = "nonsense"
+        with patch("requests.get", return_value=junk):
+            assert mon.detect_external_ip() is None
+
+
+# ------------------------------------------------------------------ .ovpn validation
+
+class TestValidateOvpnConfig:
+    """An installed config is handed to `sudo openvpn`, and ufw_killswitch.sh
+    reads its `remote` line to pick the egress exception — so it chooses both
+    the tunnel endpoint and the hole opened in the firewall for it."""
+
+    GOOD = "client\ndev tun\nproto udp\nremote vpn.example.com 1194\n"
+
+    def test_accepts_a_plain_config(self):
+        assert mon.validate_ovpn_config(self.GOOD) is None
+
+    def test_rejects_config_with_no_remote_line(self):
+        assert mon.validate_ovpn_config("client\ndev tun\n") is not None
+
+    @pytest.mark.parametrize("directive", [
+        "script-security 2",
+        "up /tmp/evil.sh",
+        "down /tmp/evil.sh",
+        "route-up /tmp/evil.sh",
+        "plugin /tmp/evil.so",
+        "status /etc/cron.d/x 1",       # root-owned arbitrary file write
+        "writepid /etc/passwd",
+        "management 0.0.0.0 7505",      # unauthenticated remote control socket
+        "tls-verify /tmp/evil.sh",
+        "auth-user-pass-verify /tmp/evil.sh via-file",
+        "learn-address /tmp/evil.sh",
+    ])
+    def test_rejects_dangerous_directives(self, directive):
+        assert mon.validate_ovpn_config(self.GOOD + directive + "\n") is not None
+
+    def test_rejects_dangerous_directive_with_leading_whitespace(self):
+        assert mon.validate_ovpn_config(self.GOOD + "   up /tmp/evil.sh\n") is not None
+
+    def test_rejects_dangerous_directive_regardless_of_case(self):
+        assert mon.validate_ovpn_config(self.GOOD + "SCRIPT-SECURITY 2\n") is not None
+
+    def test_does_not_reject_a_similarly_named_safe_directive(self):
+        # "upstream"/"downgrade" must not trip the "up"/"down" patterns.
+        assert mon.validate_ovpn_config(self.GOOD + "up-restart\n") is None
 
 
 # ------------------------------------------------------------------ kill switch behaviour

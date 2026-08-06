@@ -2,6 +2,7 @@
 # Copyright (c) 2022-2025 Stewart Rogers
 # SPDX-License-Identifier: MIT
 
+import ipaddress
 import sys
 import requests
 import subprocess
@@ -14,16 +15,43 @@ def check_openvpn_running():
         return False
 
 def check_vpn_interface():
+    """True only if tun0 exists AND is UP.
+
+    'ip link show tun0' exits 0 whenever the device exists, including state
+    DOWN — a tun0 left behind by --persist-tun or a SIGKILLed openvpn would
+    otherwise pass while carrying no traffic.
+    """
     try:
-        result = subprocess.run(['ip', 'link', 'show', 'tun0'], capture_output=True, timeout=2)
-        return result.returncode == 0
+        result = subprocess.run(['ip', '-o', 'link', 'show', 'tun0'],
+                                capture_output=True, text=True, timeout=2)
+        if result.returncode != 0:
+            return False
+        return 'state UP' in result.stdout or ',UP' in result.stdout
+    except Exception:
+        return False
+
+def check_routing():
+    """True if traffic to the internet actually egresses via tun0.
+
+    Uses 'ip route get' rather than the default route because redirect-gateway
+    def1 installs two /1 routes and leaves the default pointing at eth0.
+    """
+    try:
+        result = subprocess.run(['ip', 'route', 'get', '8.8.8.8'],
+                                capture_output=True, text=True, timeout=2)
+        return 'tun0' in result.stdout
     except Exception:
         return False
 
 def get_external_ip():
+    """Return the external IPv4 address as a string, or None.
+
+    IPv4-only endpoints: api64.ipify.org is deliberately excluded because it is
+    dual-stack and returns an IPv6 address when one is available, which can
+    never equal the (IPv4) home IP — making every leak check read "secure".
+    """
     services = [
         ("https://api.ipify.org?format=json", "ip"),
-        ("https://api64.ipify.org?format=json", "ip"),
         ("https://httpbin.org/ip", "origin"),
     ]
     for url, key in services:
@@ -32,12 +60,26 @@ def get_external_ip():
             response.raise_for_status()
             ip = response.json().get(key, "").split(",")[0].strip()
             if ip:
-                return ip
+                # Reject anything that is not a well-formed IPv4 literal — an
+                # error page or an IPv6 answer must not be treated as our IP.
+                return str(ipaddress.IPv4Address(ip))
         except Exception:
             continue
     return None
 
 def main(home_ip):
+    """Return 0 = secure, 1 = confirmed leak, 2 = could not determine.
+
+    Note the contract: 0 is "secure", which is also shell success. A caller
+    writing `if vpn_active.py "$ip"; then start_torrenting; fi` is correct.
+    """
+    try:
+        home_ip = str(ipaddress.IPv4Address(home_ip.strip()))
+    except ValueError:
+        print("error")
+        print(f"Invalid home IP: {home_ip!r}", file=sys.stderr)
+        return 2
+
     if not check_openvpn_running():
         print("leak")
         return 1
@@ -46,12 +88,22 @@ def main(home_ip):
         print("leak")
         return 1
 
+    if not check_routing():
+        print("leak")
+        return 1
+
     current_ip = get_external_ip()
     if current_ip is None:
         print("error")
         return 2
 
-    if home_ip.strip() == current_ip.strip():
+    try:
+        current_ip = str(ipaddress.IPv4Address(str(current_ip).strip()))
+    except ValueError:
+        print("error")
+        return 2
+
+    if home_ip == current_ip:
         print("leak")
         return 1
 

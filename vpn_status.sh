@@ -11,7 +11,7 @@ echo "==================================="
 echo ""
 
 # Check OpenVPN
-if pgrep -f openvpn > /dev/null 2>&1; then
+if pgrep -x openvpn > /dev/null 2>&1; then
     echo "✓ OpenVPN: Running"
     VPN_IP=$(curl -s --max-time 3 https://api.ipify.org 2>/dev/null)
     if [ -n "$VPN_IP" ]; then
@@ -71,9 +71,18 @@ else
     echo "✗ VPN Monitor: Not running"
 fi
 
-# Check for kill switch rules
-if sudo iptables -L OUTPUT -n 2>/dev/null | grep -q "tun"; then
-    echo "✓ Kill Switch: Active"
+# Check for kill switch rules.
+# The kill switch is UFW-based, so check UFW's policy — but also confirm the
+# live kernel chain still contains UFW's jump rules. Flushing the iptables
+# OUTPUT chain removes them (nothing filters any more) while 'ufw status',
+# which reads UFW's config files, keeps reporting "deny (outgoing)".
+if sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
+    if sudo iptables -S OUTPUT 2>/dev/null | grep -q "ufw-before-output"; then
+        echo "✓ Kill Switch: Active"
+    else
+        echo "✗ Kill Switch: BROKEN - UFW says deny but the OUTPUT chain is not filtering"
+        echo "  Re-apply with: sudo bash ufw_killswitch.sh"
+    fi
 else
     echo "✗ Kill Switch: Not active"
 fi

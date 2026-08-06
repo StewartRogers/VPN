@@ -28,6 +28,49 @@ _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BACKUP_DIR = os.path.join(os.path.expanduser("~"), ".vpn_backups")
 
 
+# OpenVPN config directives that let a config file run commands, write files as
+# root, or open a control socket. `--script-security 0` on the command line
+# neutralises the script hooks, but --status/--writepid/--management are not
+# specified there, so a config directive would take effect unopposed.
+_OVPN_FORBIDDEN = re.compile(
+    r"^\s*(script-security|up|down|route-up|route-pre-down|ipchange|tls-verify"
+    r"|auth-user-pass-verify|client-connect|client-disconnect|learn-address"
+    r"|plugin|status|writepid|log|log-append|management[\w-]*|cd|tmp-dir|askpass)"
+    # Not \b: a word boundary matches at the hyphen too, so "up-restart" (a
+    # legitimate directive) would be read as "up".
+    r"(?![\w-])",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+# Ranges Python's is_private does not cover but that still reach infrastructure
+# the operator does not control: RFC 6598 CGNAT, IETF protocol assignments,
+# and the benchmarking range.
+_EXTRA_NON_PUBLIC = (
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("192.0.0.0/24"),
+    ipaddress.ip_network("198.18.0.0/15"),
+)
+
+
+def _is_non_public(ip):
+    """True if ip must not be fetched from (SSRF guard)."""
+    if (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+        return True
+    return any(ip in net for net in _EXTRA_NON_PUBLIC)
+
+
+def validate_ovpn_config(text):
+    """Return an error string if the config is unsafe or unusable, else None."""
+    match = _OVPN_FORBIDDEN.search(text)
+    if match:
+        return f"disallowed directive '{match.group(1)}'"
+    if not re.search(r"^\s*remote\s+\S+", text, re.IGNORECASE | re.MULTILINE):
+        return "no 'remote' line found (not a usable OpenVPN config)"
+    return None
+
+
 def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -50,9 +93,16 @@ def detect_external_ip():
     for url, extract in services:
         try:
             r = requests.get(url, timeout=3)
+            # Without this, an HTTP error body (a 502 HTML page from the
+            # plain-text endpoint) is returned as "the external IP". It never
+            # equals home_ip, so the leak check silently passes forever.
+            r.raise_for_status()
             ip = extract(r)
-            if ip:
-                return ip
+            if not ip:
+                continue
+            # Only trust a well-formed IPv4 literal — these are third-party
+            # services and the value gates whether torrenting is allowed.
+            return str(ipaddress.IPv4Address(str(ip).strip()))
         except Exception:
             continue
     return None
@@ -165,13 +215,26 @@ class VPNMonitor:
             return False
 
     def check_killswitch_active(self):
-        """Returns True if UFW is in kill-switch mode (outgoing deny default)."""
+        """Returns True if UFW is in kill-switch mode (outgoing deny default).
+
+        Asserts the live kernel ruleset as well as UFW's configured policy.
+        Flushing the iptables OUTPUT chain removes UFW's jump rules so nothing
+        actually filters, yet `ufw status` — which reads UFW's own config files
+        — keeps reporting "deny (outgoing)". Checking only the latter reports a
+        kill switch that is not there.
+        """
         try:
             r = subprocess.run(
                 ["sudo", "ufw", "status", "verbose"],
                 capture_output=True, text=True, timeout=3,
             )
-            return "deny (outgoing)" in r.stdout
+            if "deny (outgoing)" not in r.stdout:
+                return False
+            live = subprocess.run(
+                ["sudo", "iptables", "-S", "OUTPUT"],
+                capture_output=True, text=True, timeout=3,
+            )
+            return "ufw-before-output" in live.stdout
         except Exception:
             return False
 
@@ -257,11 +320,12 @@ class VPNMonitor:
             return True
         self.apply_qbittorrent_config()
         self.log("Starting qBittorrent...", source="QBIT")
-        proc = subprocess.Popen(
-            ["qbittorrent-nox"],
-            stdout=open(os.path.join(_VPN_DIR, "qbit.log"), "w"),
-            stderr=subprocess.STDOUT,
-        )
+        with open(os.path.join(_VPN_DIR, "qbit.log"), "w") as logfile:
+            proc = subprocess.Popen(
+                ["qbittorrent-nox"],
+                stdout=logfile,
+                stderr=subprocess.STDOUT,
+            )
         time.sleep(1)
         if proc.poll() is None:
             self.log(f"qBittorrent started (PID: {proc.pid})", source="QBIT")
@@ -366,6 +430,13 @@ class VPNMonitor:
         self.log(f"Using config: {config}")
 
         # 2. Apply / update kill switch BEFORE stopping existing OpenVPN.
+        #    Stop qBittorrent first: applying the switch resets UFW, and for the
+        #    duration of that reset nothing is filtering — torrent traffic in
+        #    flight would egress on the physical interface with the real IP.
+        #    /api/reconnect reaches here without otherwise stopping qBittorrent.
+        if self.is_qbittorrent_running():
+            self.log("Stopping qBittorrent before reconfiguring the firewall", source="QBIT")
+            self.stop_qbittorrent()
         try:
             self.setup_killswitch()
         except RuntimeError as e:
@@ -445,6 +516,23 @@ class VPNMonitor:
         """Move tmp_path into /etc/openvpn/client/, removing any existing .ovpn files first."""
         dest = f"/etc/openvpn/client/{filename}"
 
+        # Validate BEFORE destroying the working config. This file is handed to
+        # `sudo openvpn`, and ufw_killswitch.sh reads its `remote` line to decide
+        # which egress to whitelist — so an unvalidated config chooses both the
+        # tunnel endpoint and the firewall exception for it.
+        try:
+            with open(tmp_path, "r", encoding="utf-8", errors="replace") as fh:
+                err = validate_ovpn_config(fh.read())
+        except OSError as e:
+            err = f"could not read config — {e}"
+        if err:
+            self.log(f"Rejected config — {err}", level="ERROR")
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            return False
+
         for old in glob.glob("/etc/openvpn/client/*.ovpn"):
             rm = subprocess.run(["sudo", "rm", "-f", old], capture_output=True)
             if rm.returncode == 0:
@@ -482,7 +570,7 @@ class VPNMonitor:
             ip = ipaddress.ip_address(socket.gethostbyname(host))
         except Exception:
             return f"Could not resolve host: {host}"
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+        if _is_non_public(ip):
             return "Private/internal addresses not allowed"
         return None
 
@@ -494,12 +582,12 @@ class VPNMonitor:
             ip = ipaddress.ip_address(socket.gethostbyname(host))
         except Exception:
             raise ValueError(f"Could not resolve host: {host}")
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+        if _is_non_public(ip):
             raise ValueError("Private/internal addresses not allowed")
         return str(ip)
 
     @classmethod
-    def _fetch_pinned(cls, url, timeout=15, max_redirects=5):
+    def _fetch_pinned(cls, url, timeout=15, max_redirects=5, max_bytes=1024 * 1024):
         """GET url, pinning the TCP connection for each hop to the IP that was just
         validated as public for that hop's hostname. Plain "resolve once, then let
         requests resolve again to connect" has a DNS-rebinding gap: the second
@@ -523,41 +611,63 @@ class VPNMonitor:
             with cls._dns_pin_lock:
                 socket.getaddrinfo = _pinned_getaddrinfo
                 try:
-                    r = requests.get(url, timeout=timeout, allow_redirects=False)
+                    r = requests.get(
+                        url, timeout=timeout, allow_redirects=False, stream=True,
+                        # requests honours HTTPS_PROXY by default; a proxy would
+                        # resolve the hostname itself and bypass the pin above.
+                        proxies={"http": None, "https": None},
+                    )
                 finally:
                     socket.getaddrinfo = real_getaddrinfo
 
             if r.is_redirect or r.is_permanent_redirect:
                 location = r.headers.get("Location")
+                r.close()
                 if not location:
                     raise ValueError("Redirect with no Location header")
                 url = urljoin(url, location)
                 continue
 
-            r.raise_for_status()
-            return r
+            try:
+                r.raise_for_status()
+                # Read with a ceiling — an endless body would otherwise be
+                # buffered until the Pi runs out of memory.
+                body = b""
+                for chunk in r.iter_content(8192):
+                    body += chunk
+                    if len(body) > max_bytes:
+                        raise ValueError(f"Config exceeds {max_bytes} bytes — refusing")
+            finally:
+                r.close()
+            return body
 
         raise ValueError("Too many redirects")
 
     def download_ovpn(self, url):
         """Download a .ovpn file from url and install it. Runs in background."""
         def _run():
-            self.log(f"Downloading OVPN config from: {url}")
+            # Log the host and path only — provider config URLs routinely carry
+            # an account token in the query string, and this buffer is served
+            # to any authenticated client via /api/logs/*.
+            parsed = urlparse(url)
+            self.log(f"Downloading OVPN config from: {parsed.scheme}://{parsed.hostname}{parsed.path}")
             try:
-                r = self._fetch_pinned(url)
+                body = self._fetch_pinned(url)
             except Exception as e:
                 self.log(f"Download rejected — {e}", level="ERROR")
                 return
 
             filename = os.path.basename(url.split("/")[-1].split("?")[0])
+            if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", filename) or filename.startswith("."):
+                filename = "downloaded"
             if not filename.endswith(".ovpn"):
                 filename += ".ovpn"
 
             fd, tmp = tempfile.mkstemp(suffix=".ovpn", prefix="vpnconf_")
             try:
                 with os.fdopen(fd, "wb") as f:
-                    f.write(r.content)
-                self.log(f"Downloaded {len(r.content)} bytes")
+                    f.write(body)
+                self.log(f"Downloaded {len(body)} bytes")
             except Exception as e:
                 self.log(f"Could not write temp file — {e}", level="ERROR")
                 return
@@ -629,6 +739,26 @@ class VPNMonitor:
     # ---------------------------------------------------------- monitor loop
 
     def _run(self):
+        """Monitor loop wrapper.
+
+        Without this guard an unhandled exception kills the monitoring thread
+        while status["running"] and status["secure"] keep their last values —
+        so the UI reports a healthy, protected system that nothing is watching.
+        """
+        try:
+            self._run_loop()
+        except Exception as exc:
+            self.log(f"Monitoring aborted by unexpected error: {exc!r}", level="CRITICAL")
+            self.status["secure"] = False
+            try:
+                if self.is_qbittorrent_running():
+                    self.stop_qbittorrent()
+            except Exception:
+                pass
+        finally:
+            self.status["running"] = False
+
+    def _run_loop(self):
         self.log(f"Starting VPN monitoring (home IP: {self.home_ip})")
         self.log(f"Fast checks every {self.fast_interval}s, IP checks every {self.ip_interval}s")
 

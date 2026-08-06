@@ -80,24 +80,17 @@ Create `~/.vpn_config.conf` or `./vpn_config.conf`:
 # Monitoring intervals (seconds)
 FAST_CHECK_INTERVAL=2
 IP_CHECK_INTERVAL=10
-MAX_RECONNECT_ATTEMPTS=3
 
-# Network security settings
-# Note: Killswitch disabled by default. Use UFW for firewall management.
-# Set to true to enable iptables-based killswitch (may conflict with UFW)
-SETUP_KILLSWITCH=false
-PREVENT_DNS_LEAK=true
-DISABLE_IPV6=true
-
-# BitTorrent settings
-BIND_TO_VPN_INTERFACE=true
-TORRENT_CLIENT="qbittorrent-nox"  # or "deluge"
-
-# Backup and log locations
-BACKUP_DIR="/tmp/vpn_backups"
+# Paths
 PID_DIR="/tmp/vpn_pids"
-LOG_DIR="$HOME/.vpn_logs"
+LOG_DIR="./vpn_logs"
+MAX_SESSIONS=20
 ```
+
+The kill switch is **UFW-based and always applied** by `startvpn.sh` (skip it
+with `--no-killswitch`). Backups are written to `$HOME/.vpn_backups`.
+
+Web app settings live separately in `webapp/.env` — see `webapp/.env.example`.
 
 ## Usage
 
@@ -175,10 +168,12 @@ When VPN connects, the following security measures are automatically applied:
 - Prevents accidental torrenting on regular connection
 - **Original config restored on shutdown**
 
-### 5. Auto-Reconnect
-- Automatically attempts to reconnect VPN on failure
-- Configurable number of attempts (default: 3)
-- Emergency shutdown if all attempts fail
+### 5. Fail-Closed Monitoring
+- Stops qBittorrent immediately on VPN failure or IP leak
+- Leaves the kill switch **active** on exit, so nothing leaks while unattended
+- Does not auto-reconnect — restart with `./startvpn.sh`, or use the web UI's
+  Force Reconnect button
+- Run `./remove_killswitch.sh` to restore network access afterwards
 
 ## Verification
 
@@ -192,10 +187,10 @@ After starting, verify everything is working:
 curl https://api.ipify.org
 
 # Check monitoring logs
-tail -f checkvpn.log
+tail -f vpn_logs/latest.log
 
 # Check application logs (default location)
-tail -f ./vpn_logs/vpn.log
+ls -t vpn_logs/session_*.log | head
 ```
 
 ## Troubleshooting

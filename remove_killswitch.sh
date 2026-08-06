@@ -5,83 +5,63 @@
 # Run this from the terminal if the kill switch has locked out your internet
 # and the web app is not accessible.
 #
+# The kill switch is UFW-based, so this drives UFW. Earlier versions flushed
+# the raw iptables OUTPUT chain instead, which removed UFW's jump rules so
+# nothing filtered at all — while 'ufw status' still reported "deny (outgoing)"
+# because that comes from UFW's own config files. Every kill-switch check in
+# this project reads that string, so the machine reported itself protected
+# while it was wide open. Never flush the OUTPUT chain to disable the switch.
+#
 # Usage:
-#   ./remove_killswitch.sh           # restore from backup if available, else reset
-#   ./remove_killswitch.sh --reset   # always flush and reset to ACCEPT (ignore backup)
+#   ./remove_killswitch.sh
 #
 
-BACKUP="$HOME/.vpn_backups/iptables.backup"
-IP6BACKUP="$HOME/.vpn_backups/ip6tables.backup"
-FORCE_RESET=false
-
-if [[ "${1:-}" == "--reset" ]]; then
-    FORCE_RESET=true
-fi
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+BACKUP_DIR="$HOME/.vpn_backups"
 
 echo ""
 echo "VPN Kill Switch Removal"
 echo ""
 
-# ---- IPv4 ----
-if [ "$FORCE_RESET" = false ] && [ -f "$BACKUP" ]; then
-    echo "Found iptables backup: $BACKUP"
-    echo "Restoring original IPv4 rules..."
-    if sudo iptables-restore < "$BACKUP"; then
-        rm -f "$BACKUP"
-        echo "IPv4 restored. Backup deleted."
+# ---- Firewall ----
+if [ -f "$SCRIPT_DIR/ufw_base.sh" ]; then
+    echo "Restoring UFW base state (outgoing unrestricted)..."
+    if sudo bash "$SCRIPT_DIR/ufw_base.sh"; then
+        echo "UFW restored."
     else
-        echo "Restore failed — falling back to manual reset"
-        FORCE_RESET=true
+        echo "ufw_base.sh failed — disabling UFW outright as a last resort."
+        sudo ufw --force disable
     fi
-fi
-
-if [ "$FORCE_RESET" = true ] || [ ! -f "$BACKUP" ]; then
-    if [ ! -f "$BACKUP" ]; then
-        echo "No IPv4 backup found at $BACKUP"
-    fi
-    echo "Flushing IPv4 OUTPUT chain and setting policy to ACCEPT..."
-    sudo iptables -F OUTPUT
-    sudo iptables -P OUTPUT ACCEPT
-    echo "Done."
+else
+    echo "ufw_base.sh not found — disabling UFW outright."
+    sudo ufw --force disable
 fi
 
 # ---- IPv6 ----
-if [ "$FORCE_RESET" = false ] && [ -f "$IP6BACKUP" ]; then
-    echo "Found ip6tables backup: $IP6BACKUP"
-    echo "Restoring original IPv6 rules..."
-    if sudo ip6tables-restore < "$IP6BACKUP"; then
-        rm -f "$IP6BACKUP"
-        echo "IPv6 restored. Backup deleted."
-    else
-        echo "ip6tables restore failed — falling back to manual reset"
-        sudo ip6tables -F OUTPUT
-        sudo ip6tables -P OUTPUT ACCEPT
-    fi
-elif [ "$FORCE_RESET" = true ] || [ ! -f "$IP6BACKUP" ]; then
-    echo "Flushing IPv6 OUTPUT chain and setting policy to ACCEPT..."
-    sudo ip6tables -F OUTPUT
-    sudo ip6tables -P OUTPUT ACCEPT
-    echo "Done."
-fi
-
-# Re-enable IPv6 in case it was disabled via sysctl
+# Re-enable IPv6 in case it was disabled via sysctl during VPN start
 echo "Re-enabling IPv6..."
 sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0 > /dev/null 2>&1 || true
 sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null 2>&1 || true
 
-# Restore resolv.conf if it was locked
-DNS_BACKUP="$HOME/.vpn_backups/resolv.conf.backup"
+# ---- DNS ----
+# The web app pins /etc/resolv.conf to Cloudflare and sets chattr +i on it.
+DNS_BACKUP="$BACKUP_DIR/resolv.conf.backup"
+sudo chattr -i /etc/resolv.conf 2>/dev/null || true
 if [ -f "$DNS_BACKUP" ]; then
     echo "Restoring DNS configuration..."
-    sudo chattr -i /etc/resolv.conf 2>/dev/null || true
     sudo mv "$DNS_BACKUP" /etc/resolv.conf
     echo "DNS restored."
 else
-    # Just unlock it in case chattr +i is still set
-    sudo chattr -i /etc/resolv.conf 2>/dev/null || true
+    echo "No DNS backup found — left /etc/resolv.conf as-is (now unlocked)."
 fi
 
+# ---- Verify ----
 echo ""
-echo "Kill switch removed. Internet access should be restored."
-echo "You can verify with: curl -s https://ipinfo.io/ip"
+if sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
+    echo "WARNING: UFW still reports 'deny (outgoing)' — the kill switch is NOT removed."
+    echo "         Try: sudo ufw --force disable"
+else
+    echo "Kill switch removed. Internet access should be restored."
+fi
+echo "Verify with: curl -s https://ipinfo.io/ip"
 echo ""
