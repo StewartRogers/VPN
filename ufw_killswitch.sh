@@ -97,13 +97,18 @@ if [ -z "$LAN_SUBNETS" ]; then
     echo "WARNING: Could not detect a LAN subnet - local access may be blocked."
 fi
 
-# Resolvers permitted pre-tunnel: whatever /etc/resolv.conf currently uses,
-# plus the Cloudflare pair the web app pins once the VPN is starting.
-if [ -z "$DNS_SERVERS" ]; then
-    DNS_SERVERS=$(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null \
-        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
-    DNS_SERVERS=$(printf '%s\n1.1.1.1\n1.0.0.1\n' "$DNS_SERVERS" | sort -u | grep -v '^$')
-fi
+# DNS permitted on the physical interfaces. OpenVPN must resolve its 'remote'
+# hostname before tun0 exists, so some DNS has to be allowed pre-tunnel.
+#
+# Default is unrestricted port 53, because narrowing it to the resolvers listed
+# in /etc/resolv.conf breaks systemd-resolved: resolv.conf holds the 127.0.0.53
+# stub, not the upstream the stub actually forwards to, so every lookup is
+# dropped and the monitor reports "could not reach IP services" forever.
+#
+# To narrow it anyway, name the real upstream resolvers explicitly:
+#   sudo DNS_SERVERS="192.168.1.1 1.1.1.1" bash ufw_killswitch.sh
+# Note this only affects queries leaving on eth0/wlan0 -- once tun0 is up, DNS
+# goes through the tunnel under the 'VPN tunnel' rule regardless.
 
 FAILED=0
 run_ufw() {
@@ -130,14 +135,14 @@ for iface in eth0 wlan0; do
     for subnet in $LAN_SUBNETS; do
         run_ufw allow out on "$iface" to "$subnet" comment 'LAN'
     done
-    # Pre-tunnel DNS, scoped to the actual resolvers. OpenVPN has to resolve
-    # its 'remote' hostname before tun0 exists, so some DNS must be permitted —
-    # but the previous 'to any port 53' allowed egress to any host on the
-    # internet, which is both a plaintext DNS leak to the ISP and a general
-    # tunnelling channel straight through the kill switch.
-    for resolver in $DNS_SERVERS; do
-        run_ufw allow out on "$iface" to "$resolver" port 53 comment 'DNS'
-    done
+    # Pre-tunnel DNS (see the DNS_SERVERS note above).
+    if [ -n "$DNS_SERVERS" ]; then
+        for resolver in $DNS_SERVERS; do
+            run_ufw allow out on "$iface" to "$resolver" port 53 comment 'DNS'
+        done
+    else
+        run_ufw allow out on "$iface" to any port 53 comment 'DNS'
+    fi
 done
 
 # --- Verify the switch is genuinely in place before reporting success ---
@@ -151,4 +156,5 @@ if ! ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
 fi
 
 echo "  LAN:        ${LAN_SUBNETS:-none detected}"
+echo "  DNS:        ${DNS_SERVERS:-any (port 53)}"
 echo "  Status:     ACTIVE - all outgoing blocked except VPN tunnel and LAN"
