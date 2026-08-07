@@ -93,8 +93,12 @@ def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def detect_external_ip():
+def detect_external_ip(on_error=None):
     """Return the external IPv4 address, or None on failure.
+
+    on_error: optional callable invoked with a diagnostic string for each
+    service that fails, so callers with a log (VPNMonitor) can surface why a
+    lookup failed instead of reporting a bare "could not reach IP services".
 
     Uses IPv4-only endpoints. api64.ipify.org is intentionally excluded —
     it is dual-stack and returns an IPv6 address when available, which would
@@ -109,6 +113,7 @@ def detect_external_ip():
         ("https://httpbin.org/ip", lambda r: r.json().get("origin", "").split(",")[0].strip()),
     ]
     for url, extract in services:
+        started = time.monotonic()
         try:
             r = requests.get(url, timeout=3)
             # Without this, an HTTP error body (a 502 HTML page from the
@@ -117,12 +122,22 @@ def detect_external_ip():
             r.raise_for_status()
             ip = extract(r)
             if not ip:
+                if on_error:
+                    on_error(f"{url} -> HTTP {r.status_code} but no address in the response")
                 continue
             # Only trust a well-formed IPv4 literal — these are third-party
             # services and the value gates whether torrenting is allowed.
             return str(ipaddress.IPv4Address(str(ip).strip()))
-        except Exception:
+        except Exception as exc:
+            # Name the failure. A timeout, a DNS error, a TLS error and a
+            # malformed response are different problems with different fixes,
+            # and silently collapsing them hides permanent misconfiguration.
+            if on_error:
+                on_error(f"{url} -> {type(exc).__name__}: {exc} "
+                         f"({time.monotonic() - started:.1f}s)")
             continue
+    if on_error:
+        on_error("All IP services failed")
     return None
 
 
@@ -242,7 +257,9 @@ class VPNMonitor:
         return killswitch_blocking_outbound()
 
     def get_external_ip(self):
-        return detect_external_ip()
+        return detect_external_ip(
+            on_error=lambda msg: self.log(f"IP lookup: {msg}", level="WARNING")
+        )
 
     def _get_tun0_ip(self):
         """Return the current IPv4 address assigned to tun0, or None."""

@@ -4,8 +4,19 @@
 
 import ipaddress
 import sys
+import time
 import requests
 import subprocess
+
+def diag(message):
+    """Write a diagnostic line to stderr.
+
+    stdout carries the machine-readable verdict (secure/leak/error) that
+    checkip.sh parses, so anything explanatory must go to stderr. Without this
+    every failure -- DNS, TLS, timeout, a service changing its JSON shape --
+    collapsed into one indistinguishable "could not reach IP services".
+    """
+    print(message, file=sys.stderr)
 
 def check_openvpn_running():
     try:
@@ -55,16 +66,29 @@ def get_external_ip():
         ("https://httpbin.org/ip", "origin"),
     ]
     for url, key in services:
+        started = time.monotonic()
         try:
             response = requests.get(url, timeout=3)
             response.raise_for_status()
-            ip = response.json().get(key, "").split(",")[0].strip()
-            if ip:
-                # Reject anything that is not a well-formed IPv4 literal — an
-                # error page or an IPv6 answer must not be treated as our IP.
-                return str(ipaddress.IPv4Address(ip))
-        except Exception:
+            payload = response.json()
+            raw = payload.get(key, "")
+            ip = str(raw).split(",")[0].strip()
+            if not ip:
+                diag(f"{url} -> HTTP {response.status_code} but no '{key}' field "
+                     f"in {payload!r} ({time.monotonic() - started:.1f}s)")
+                continue
+            # Reject anything that is not a well-formed IPv4 literal — an
+            # error page or an IPv6 answer must not be treated as our IP.
+            validated = str(ipaddress.IPv4Address(ip))
+            diag(f"{url} -> {validated} ({time.monotonic() - started:.1f}s)")
+            return validated
+        except Exception as exc:
+            # Name the failure: a timeout, a DNS error, a TLS error and a
+            # malformed response are all different problems.
+            diag(f"{url} -> {type(exc).__name__}: {exc} "
+                 f"({time.monotonic() - started:.1f}s)")
             continue
+    diag("All IP services failed")
     return None
 
 def main(home_ip):

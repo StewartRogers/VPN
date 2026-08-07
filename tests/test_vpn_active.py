@@ -159,6 +159,43 @@ class TestGetExternalIp:
 
 # ------------------------------------------------------------------ main
 
+class TestDiagnostics:
+    """checkip.sh parses stdout for exactly secure/leak/error, so diagnostics
+    must go to stderr only. A stray print() on stdout degrades every check to
+    'unexpected response' and the monitor stops trusting the detector."""
+
+    def test_stdout_carries_only_the_verdict(self, capsys):
+        proc, iface, route = _vpn_up()
+        with proc, iface, route, patch("requests.get", side_effect=OSError("boom")):
+            rc = vpn_active.main("1.2.3.4")
+        captured = capsys.readouterr()
+        assert rc == 2
+        assert captured.out == "error\n"
+
+    def test_failures_are_explained_on_stderr(self, capsys):
+        with patch("requests.get", side_effect=OSError("Network is unreachable")):
+            assert vpn_active.get_external_ip() is None
+        err = capsys.readouterr().err
+        # Name the service and the actual exception, not just "it failed".
+        assert "api.ipify.org" in err
+        assert "OSError" in err
+        assert "Network is unreachable" in err
+
+    def test_success_is_logged_with_the_resolved_address(self, capsys):
+        with patch("requests.get", return_value=_response({"ip": "5.6.7.8"})):
+            assert vpn_active.get_external_ip() == "5.6.7.8"
+        assert "5.6.7.8" in capsys.readouterr().err
+
+    def test_wrong_json_shape_reports_the_payload(self, capsys):
+        # This is the case that is impossible to diagnose without the body:
+        # HTTP 200, but the service changed its field names.
+        with patch("requests.get", return_value=_response({"unexpected": "1.2.3.4"})):
+            vpn_active.get_external_ip()
+        err = capsys.readouterr().err
+        assert "no 'ip' field" in err
+        assert "unexpected" in err
+
+
 class TestMain:
     """Exit-code contract: 0 = secure, 1 = confirmed leak, 2 = undetermined."""
 
