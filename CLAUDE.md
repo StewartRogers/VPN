@@ -74,7 +74,9 @@ Consumers: `checkip.sh:check_killswitch_active`, `vpn_status.sh`, `VPNMonitor.ch
 
 A downloaded or uploaded `.ovpn` is installed to `/etc/openvpn/client/` and then run by `sudo openvpn`, and `ufw_killswitch.sh` parses its `remote` line to decide which egress to whitelist. It therefore chooses both the tunnel endpoint and the firewall hole opened for it.
 
-Both install paths validate before installing — `webapp/monitor.py:validate_ovpn_config` and the equivalent `grep` in `startvpn.sh` — rejecting directives that run commands, write files as root, or open a control socket (`up`, `down`, `script-security`, `plugin`, `status`, `writepid`, `management*`, …). `--script-security 0` is also passed on both command lines. Keep the two lists in sync.
+Both install paths validate before installing — `webapp/monitor.py:validate_ovpn_config` and the equivalent `grep` in `startvpn.sh` — rejecting directives that run commands, write files as root, or open a control socket (`up`, `down`, `script-security`, `plugin`, `status`, `writepid`, `management*`, …). Keep the two lists in sync.
+
+**Do not add `--script-security 0` to either openvpn command line.** It reads like a safe hardening flag and is not: level 0 means "strictly no calling of external programs", which also blocks `ip`/`ifconfig`/`route`. On OpenVPN 2.4/2.5 those configure the tunnel, so tun0 comes up half-configured — routes present, MTU wrong — and forwards small packets while dropping large ones. DNS resolves, TLS handshakes hang, and every external IP check times out while the VPN looks connected. Install-time validation above is the defence instead.
 
 ### Key Files
 

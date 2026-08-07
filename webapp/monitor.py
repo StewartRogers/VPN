@@ -29,9 +29,9 @@ _BACKUP_DIR = os.path.join(os.path.expanduser("~"), ".vpn_backups")
 
 
 # OpenVPN config directives that let a config file run commands, write files as
-# root, or open a control socket. `--script-security 0` on the command line
-# neutralises the script hooks, but --status/--writepid/--management are not
-# specified there, so a config directive would take effect unopposed.
+# root, or open a control socket. This validation is the primary defence: the
+# command line deliberately leaves --script-security at its default of 1, since
+# level 0 also blocks ip/ifconfig/route and leaves the tunnel misconfigured.
 _OVPN_FORBIDDEN = re.compile(
     r"^\s*(script-security|up|down|route-up|route-pre-down|ipchange|tls-verify"
     r"|auth-user-pass-verify|client-connect|client-disconnect|learn-address"
@@ -455,7 +455,19 @@ class VPNMonitor:
         self.disable_ipv6()
         self.setup_dns()
 
-        # 5. Start OpenVPN daemon
+        # 5. Start OpenVPN daemon.
+        #
+        # --script-security is deliberately not set, leaving OpenVPN's default
+        # of 1. Level 0 means "strictly no calling of external programs", which
+        # also blocks ip/ifconfig/route -- on OpenVPN 2.4/2.5 that is how the
+        # tunnel gets configured, and a half-configured tun0 forwards small
+        # packets while dropping large ones: DNS resolves, TLS handshakes hang,
+        # and every external IP check times out.
+        #
+        # The RCE risk it was guarding is handled at install time instead:
+        # _install_ovpn runs validate_ovpn_config on every config, from both
+        # the upload and download paths, and rejects up/down/script-security/
+        # plugin/status/management directives outright.
         self.log("Starting OpenVPN daemon...", source="OPENVPN")
         result = subprocess.run(
             [
@@ -463,7 +475,6 @@ class VPNMonitor:
                 "--config", config,
                 "--log", "/var/log/openvpn.log",
                 "--daemon",
-                "--script-security", "0",
                 "--ping", "10",
                 "--ping-exit", "60",
                 "--auth-nocache",

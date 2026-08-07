@@ -345,9 +345,9 @@ if [ "$GETOVPN" = "y" ]; then
     fi
 
     # Reject configs carrying directives that run commands or write files as
-    # root. --script-security 0 below blocks the up/down script hooks, but
-    # --status / --writepid / --management are not overridden on the command
-    # line, so a config directive would take effect unopposed.
+    # root. This is the only defence: the command line deliberately leaves
+    # --script-security at OpenVPN's default (see the note above the openvpn
+    # invocation for why level 0 breaks the tunnel).
     if grep -qiE '^[[:space:]]*(script-security|up|down|route-up|route-pre-down|ipchange|tls-verify|auth-user-pass-verify|client-connect|client-disconnect|learn-address|plugin|status|writepid|log|log-append|management[[:alnum:]-]*|cd|tmp-dir|askpass)[[:space:]]' "$SCRIPT_DIR/$OVPN_FILENAME"; then
         log_message "ERROR" "Downloaded config contains a disallowed directive - refusing to install"
         rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
@@ -443,11 +443,19 @@ echo ""
 echo "  Starting OpenVPN..."
 log_message "INFO" "Starting OpenVPN: $(basename "$XCONFIGFILE")"
 sudo rm -f "$XVPNLOGFILE"
+# NOTE: --script-security is deliberately NOT set here, leaving OpenVPN's
+# default of 1. Level 0 means "strictly no calling of external programs", which
+# blocks OpenVPN from invoking ip/ifconfig/route -- on 2.4/2.5 that is how the
+# tunnel is configured, and a partially configured tun0 passes small packets
+# while dropping large ones (DNS works, TLS handshakes hang).
+#
+# The RCE risk that motivated level 0 is covered where it actually arises: the
+# download path above rejects configs carrying up/down/script-security/plugin
+# and similar directives before installing them.
 sudo openvpn \
     --config "$XCONFIGFILE" \
     --log "$XVPNLOGFILE" \
     --daemon \
-    --script-security 0 \
     --ping 10 \
     --ping-exit 60 \
     --auth-nocache \
