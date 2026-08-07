@@ -3,10 +3,19 @@
 # SPDX-License-Identifier: MIT
 
 import ipaddress
+import os
 import sys
 import time
 import requests
 import subprocess
+
+# Seconds to wait for an external IP service. Every request here travels the
+# full length of the VPN tunnel, so the round trip is far slower than a LAN
+# call -- and a busy or distant exit node can push it past a few seconds
+# without anything being wrong. A too-tight value produces ReadTimeout on a
+# working tunnel, which reads as "could not reach IP services" and stops
+# torrenting for no reason.
+IP_SERVICE_TIMEOUT = float(os.environ.get("IP_SERVICE_TIMEOUT", "10"))
 
 def diag(message):
     """Write a diagnostic line to stderr.
@@ -68,7 +77,9 @@ def get_external_ip():
     for url, key in services:
         started = time.monotonic()
         try:
-            response = requests.get(url, timeout=3)
+            # Split timeout: fail fast if the connection cannot be made at all
+            # (that is a real block), but allow a slow tunnel time to answer.
+            response = requests.get(url, timeout=(5, IP_SERVICE_TIMEOUT))
             response.raise_for_status()
             payload = response.json()
             raw = payload.get(key, "")

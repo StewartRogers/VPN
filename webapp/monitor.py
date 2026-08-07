@@ -19,6 +19,12 @@ import requests
 
 MAX_LOGS = 500
 
+# Read timeout for external IP services. These requests traverse the whole VPN
+# tunnel, so a busy exit node can legitimately take several seconds; too tight
+# a value yields ReadTimeout on a healthy tunnel and reads as a leak-check
+# failure. Connect is kept short separately — that one really is a block.
+_IP_SERVICE_TIMEOUT = float(os.environ.get("IP_SERVICE_TIMEOUT", "10"))
+
 # Absolute path to the VPN project root (one level above this file's webapp/ dir)
 _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -115,7 +121,7 @@ def detect_external_ip(on_error=None):
     for url, extract in services:
         started = time.monotonic()
         try:
-            r = requests.get(url, timeout=3)
+            r = requests.get(url, timeout=(5, _IP_SERVICE_TIMEOUT))
             # Without this, an HTTP error body (a 502 HTML page from the
             # plain-text endpoint) is returned as "the external IP". It never
             # equals home_ip, so the leak check silently passes forever.
