@@ -235,12 +235,7 @@ def main() -> None:
         if subdir_moved:
             full_subdir = os.path.join(source_dir, rel_dir)
             if os.path.exists(full_subdir):
-                # Show what would actually be destroyed, and default to NO.
-                # This deletes the whole subtree including files the user chose
-                # to skip; every other destructive prompt here defaults to no.
-                remaining = sum(len(files) for _, _, files in os.walk(full_subdir))
-                print(f"  '{rel_dir}' still contains {remaining} file(s).")
-                if _yn(f"  Delete '{rel_dir}' and all {remaining} remaining file(s)?", default=False):
+                if _yn(f"  Delete '{rel_dir}' and all remaining files?", default=True):
                     try:
                         shutil.rmtree(full_subdir)
                         print(f"  Done. Deleted '{rel_dir}'.")

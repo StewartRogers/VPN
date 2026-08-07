@@ -19,12 +19,6 @@ import requests
 
 MAX_LOGS = 500
 
-# Read timeout for external IP services. These requests traverse the whole VPN
-# tunnel, so a busy exit node can legitimately take several seconds; too tight
-# a value yields ReadTimeout on a healthy tunnel and reads as a leak-check
-# failure. Connect is kept short separately — that one really is a block.
-_IP_SERVICE_TIMEOUT = float(os.environ.get("IP_SERVICE_TIMEOUT", "10"))
-
 # Absolute path to the VPN project root (one level above this file's webapp/ dir)
 _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -34,77 +28,12 @@ _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BACKUP_DIR = os.path.join(os.path.expanduser("~"), ".vpn_backups")
 
 
-# OpenVPN config directives that let a config file run commands, write files as
-# root, or open a control socket. This validation is the primary defence: the
-# command line deliberately leaves --script-security at its default of 1, since
-# level 0 also blocks ip/ifconfig/route and leaves the tunnel misconfigured.
-_OVPN_FORBIDDEN = re.compile(
-    r"^\s*(script-security|up|down|route-up|route-pre-down|ipchange|tls-verify"
-    r"|auth-user-pass-verify|client-connect|client-disconnect|learn-address"
-    r"|plugin|status|writepid|log|log-append|management[\w-]*|cd|tmp-dir|askpass)"
-    # Not \b: a word boundary matches at the hyphen too, so "up-restart" (a
-    # legitimate directive) would be read as "up".
-    r"(?![\w-])",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
-# Ranges Python's is_private does not cover but that still reach infrastructure
-# the operator does not control: RFC 6598 CGNAT, IETF protocol assignments,
-# and the benchmarking range.
-_EXTRA_NON_PUBLIC = (
-    ipaddress.ip_network("100.64.0.0/10"),
-    ipaddress.ip_network("192.0.0.0/24"),
-    ipaddress.ip_network("198.18.0.0/15"),
-)
-
-
-def _is_non_public(ip):
-    """True if ip must not be fetched from (SSRF guard)."""
-    if (ip.is_private or ip.is_loopback or ip.is_link_local
-            or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
-        return True
-    return any(ip in net for net in _EXTRA_NON_PUBLIC)
-
-
-def validate_ovpn_config(text):
-    """Return an error string if the config is unsafe or unusable, else None."""
-    match = _OVPN_FORBIDDEN.search(text)
-    if match:
-        return f"disallowed directive '{match.group(1)}'"
-    if not re.search(r"^\s*remote\s+\S+", text, re.IGNORECASE | re.MULTILINE):
-        return "no 'remote' line found (not a usable OpenVPN config)"
-    return None
-
-
-def killswitch_blocking_outbound():
-    """True if UFW's policy is deny-outgoing.
-
-    Module-level so callers without a VPNMonitor (e.g. /api/configure before
-    one exists) can explain *why* an external IP lookup failed: while the kill
-    switch is up every outbound request is blocked, including the one used to
-    capture the pre-VPN home IP.
-    """
-    try:
-        r = subprocess.run(
-            ["sudo", "ufw", "status", "verbose"],
-            capture_output=True, text=True, timeout=3,
-        )
-        return "deny (outgoing)" in r.stdout
-    except Exception:
-        return False
-
-
 def _now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def detect_external_ip(on_error=None):
+def detect_external_ip():
     """Return the external IPv4 address, or None on failure.
-
-    on_error: optional callable invoked with a diagnostic string for each
-    service that fails, so callers with a log (VPNMonitor) can surface why a
-    lookup failed instead of reporting a bare "could not reach IP services".
 
     Uses IPv4-only endpoints. api64.ipify.org is intentionally excluded —
     it is dual-stack and returns an IPv6 address when available, which would
@@ -119,31 +48,13 @@ def detect_external_ip(on_error=None):
         ("https://httpbin.org/ip", lambda r: r.json().get("origin", "").split(",")[0].strip()),
     ]
     for url, extract in services:
-        started = time.monotonic()
         try:
-            r = requests.get(url, timeout=(5, _IP_SERVICE_TIMEOUT))
-            # Without this, an HTTP error body (a 502 HTML page from the
-            # plain-text endpoint) is returned as "the external IP". It never
-            # equals home_ip, so the leak check silently passes forever.
-            r.raise_for_status()
+            r = requests.get(url, timeout=3)
             ip = extract(r)
-            if not ip:
-                if on_error:
-                    on_error(f"{url} -> HTTP {r.status_code} but no address in the response")
-                continue
-            # Only trust a well-formed IPv4 literal — these are third-party
-            # services and the value gates whether torrenting is allowed.
-            return str(ipaddress.IPv4Address(str(ip).strip()))
-        except Exception as exc:
-            # Name the failure. A timeout, a DNS error, a TLS error and a
-            # malformed response are different problems with different fixes,
-            # and silently collapsing them hides permanent misconfiguration.
-            if on_error:
-                on_error(f"{url} -> {type(exc).__name__}: {exc} "
-                         f"({time.monotonic() - started:.1f}s)")
+            if ip:
+                return ip
+        except Exception:
             continue
-    if on_error:
-        on_error("All IP services failed")
     return None
 
 
@@ -254,18 +165,18 @@ class VPNMonitor:
             return False
 
     def check_killswitch_active(self):
-        """Returns True if UFW is in kill-switch mode (outgoing deny default).
-
-        UFW is the single source of truth. `ufw status verbose` prints
-        "Status: inactive" with no Default line when UFW is disabled, so a
-        "deny (outgoing)" match already implies UFW is active with that policy.
-        """
-        return killswitch_blocking_outbound()
+        """Returns True if UFW is in kill-switch mode (outgoing deny default)."""
+        try:
+            r = subprocess.run(
+                ["sudo", "ufw", "status", "verbose"],
+                capture_output=True, text=True, timeout=3,
+            )
+            return "deny (outgoing)" in r.stdout
+        except Exception:
+            return False
 
     def get_external_ip(self):
-        return detect_external_ip(
-            on_error=lambda msg: self.log(f"IP lookup: {msg}", level="WARNING")
-        )
+        return detect_external_ip()
 
     def _get_tun0_ip(self):
         """Return the current IPv4 address assigned to tun0, or None."""
@@ -346,12 +257,11 @@ class VPNMonitor:
             return True
         self.apply_qbittorrent_config()
         self.log("Starting qBittorrent...", source="QBIT")
-        with open(os.path.join(_VPN_DIR, "qbit.log"), "w") as logfile:
-            proc = subprocess.Popen(
-                ["qbittorrent-nox"],
-                stdout=logfile,
-                stderr=subprocess.STDOUT,
-            )
+        proc = subprocess.Popen(
+            ["qbittorrent-nox"],
+            stdout=open(os.path.join(_VPN_DIR, "qbit.log"), "w"),
+            stderr=subprocess.STDOUT,
+        )
         time.sleep(1)
         if proc.poll() is None:
             self.log(f"qBittorrent started (PID: {proc.pid})", source="QBIT")
@@ -456,13 +366,6 @@ class VPNMonitor:
         self.log(f"Using config: {config}")
 
         # 2. Apply / update kill switch BEFORE stopping existing OpenVPN.
-        #    Stop qBittorrent first: applying the switch resets UFW, and for the
-        #    duration of that reset nothing is filtering — torrent traffic in
-        #    flight would egress on the physical interface with the real IP.
-        #    /api/reconnect reaches here without otherwise stopping qBittorrent.
-        if self.is_qbittorrent_running():
-            self.log("Stopping qBittorrent before reconfiguring the firewall", source="QBIT")
-            self.stop_qbittorrent()
         try:
             self.setup_killswitch()
         except RuntimeError as e:
@@ -478,19 +381,7 @@ class VPNMonitor:
         self.disable_ipv6()
         self.setup_dns()
 
-        # 5. Start OpenVPN daemon.
-        #
-        # --script-security is deliberately not set, leaving OpenVPN's default
-        # of 1. Level 0 means "strictly no calling of external programs", which
-        # also blocks ip/ifconfig/route -- on OpenVPN 2.4/2.5 that is how the
-        # tunnel gets configured, and a half-configured tun0 forwards small
-        # packets while dropping large ones: DNS resolves, TLS handshakes hang,
-        # and every external IP check times out.
-        #
-        # The RCE risk it was guarding is handled at install time instead:
-        # _install_ovpn runs validate_ovpn_config on every config, from both
-        # the upload and download paths, and rejects up/down/script-security/
-        # plugin/status/management directives outright.
+        # 5. Start OpenVPN daemon
         self.log("Starting OpenVPN daemon...", source="OPENVPN")
         result = subprocess.run(
             [
@@ -498,6 +389,7 @@ class VPNMonitor:
                 "--config", config,
                 "--log", "/var/log/openvpn.log",
                 "--daemon",
+                "--script-security", "0",
                 "--ping", "10",
                 "--ping-exit", "60",
                 "--auth-nocache",
@@ -553,23 +445,6 @@ class VPNMonitor:
         """Move tmp_path into /etc/openvpn/client/, removing any existing .ovpn files first."""
         dest = f"/etc/openvpn/client/{filename}"
 
-        # Validate BEFORE destroying the working config. This file is handed to
-        # `sudo openvpn`, and ufw_killswitch.sh reads its `remote` line to decide
-        # which egress to whitelist — so an unvalidated config chooses both the
-        # tunnel endpoint and the firewall exception for it.
-        try:
-            with open(tmp_path, "r", encoding="utf-8", errors="replace") as fh:
-                err = validate_ovpn_config(fh.read())
-        except OSError as e:
-            err = f"could not read config — {e}"
-        if err:
-            self.log(f"Rejected config — {err}", level="ERROR")
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            return False
-
         for old in glob.glob("/etc/openvpn/client/*.ovpn"):
             rm = subprocess.run(["sudo", "rm", "-f", old], capture_output=True)
             if rm.returncode == 0:
@@ -607,7 +482,7 @@ class VPNMonitor:
             ip = ipaddress.ip_address(socket.gethostbyname(host))
         except Exception:
             return f"Could not resolve host: {host}"
-        if _is_non_public(ip):
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
             return "Private/internal addresses not allowed"
         return None
 
@@ -619,12 +494,12 @@ class VPNMonitor:
             ip = ipaddress.ip_address(socket.gethostbyname(host))
         except Exception:
             raise ValueError(f"Could not resolve host: {host}")
-        if _is_non_public(ip):
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
             raise ValueError("Private/internal addresses not allowed")
         return str(ip)
 
     @classmethod
-    def _fetch_pinned(cls, url, timeout=15, max_redirects=5, max_bytes=1024 * 1024):
+    def _fetch_pinned(cls, url, timeout=15, max_redirects=5):
         """GET url, pinning the TCP connection for each hop to the IP that was just
         validated as public for that hop's hostname. Plain "resolve once, then let
         requests resolve again to connect" has a DNS-rebinding gap: the second
@@ -648,63 +523,41 @@ class VPNMonitor:
             with cls._dns_pin_lock:
                 socket.getaddrinfo = _pinned_getaddrinfo
                 try:
-                    r = requests.get(
-                        url, timeout=timeout, allow_redirects=False, stream=True,
-                        # requests honours HTTPS_PROXY by default; a proxy would
-                        # resolve the hostname itself and bypass the pin above.
-                        proxies={"http": None, "https": None},
-                    )
+                    r = requests.get(url, timeout=timeout, allow_redirects=False)
                 finally:
                     socket.getaddrinfo = real_getaddrinfo
 
             if r.is_redirect or r.is_permanent_redirect:
                 location = r.headers.get("Location")
-                r.close()
                 if not location:
                     raise ValueError("Redirect with no Location header")
                 url = urljoin(url, location)
                 continue
 
-            try:
-                r.raise_for_status()
-                # Read with a ceiling — an endless body would otherwise be
-                # buffered until the Pi runs out of memory.
-                body = b""
-                for chunk in r.iter_content(8192):
-                    body += chunk
-                    if len(body) > max_bytes:
-                        raise ValueError(f"Config exceeds {max_bytes} bytes — refusing")
-            finally:
-                r.close()
-            return body
+            r.raise_for_status()
+            return r
 
         raise ValueError("Too many redirects")
 
     def download_ovpn(self, url):
         """Download a .ovpn file from url and install it. Runs in background."""
         def _run():
-            # Log the host and path only — provider config URLs routinely carry
-            # an account token in the query string, and this buffer is served
-            # to any authenticated client via /api/logs/*.
-            parsed = urlparse(url)
-            self.log(f"Downloading OVPN config from: {parsed.scheme}://{parsed.hostname}{parsed.path}")
+            self.log(f"Downloading OVPN config from: {url}")
             try:
-                body = self._fetch_pinned(url)
+                r = self._fetch_pinned(url)
             except Exception as e:
                 self.log(f"Download rejected — {e}", level="ERROR")
                 return
 
             filename = os.path.basename(url.split("/")[-1].split("?")[0])
-            if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", filename) or filename.startswith("."):
-                filename = "downloaded"
             if not filename.endswith(".ovpn"):
                 filename += ".ovpn"
 
             fd, tmp = tempfile.mkstemp(suffix=".ovpn", prefix="vpnconf_")
             try:
                 with os.fdopen(fd, "wb") as f:
-                    f.write(body)
-                self.log(f"Downloaded {len(body)} bytes")
+                    f.write(r.content)
+                self.log(f"Downloaded {len(r.content)} bytes")
             except Exception as e:
                 self.log(f"Could not write temp file — {e}", level="ERROR")
                 return
@@ -766,42 +619,16 @@ class VPNMonitor:
         ok = self._openvpn_start()
         if ok:
             ip = self.get_external_ip()
-            # Only a positively confirmed non-home IP restarts torrenting.
-            # An unreachable IP service (ip is None) is not a pass.
             if ip and ip.strip() != self.home_ip.strip():
-                self.log(f"Reconnection successful — external IP verified: {ip}")
-                self.status["secure"] = True
+                self.log("Reconnection successful!")
                 self.start_qbittorrent()
                 return True
-            if not ip:
-                self.log("Reconnected but external IP could not be verified — "
-                         "not starting qBittorrent", level="WARNING")
         self.log("Reconnection failed", level="WARNING")
         return False
 
     # ---------------------------------------------------------- monitor loop
 
     def _run(self):
-        """Monitor loop wrapper.
-
-        Without this guard an unhandled exception kills the monitoring thread
-        while status["running"] and status["secure"] keep their last values —
-        so the UI reports a healthy, protected system that nothing is watching.
-        """
-        try:
-            self._run_loop()
-        except Exception as exc:
-            self.log(f"Monitoring aborted by unexpected error: {exc!r}", level="CRITICAL")
-            self.status["secure"] = False
-            try:
-                if self.is_qbittorrent_running():
-                    self.stop_qbittorrent()
-            except Exception:
-                pass
-        finally:
-            self.status["running"] = False
-
-    def _run_loop(self):
         self.log(f"Starting VPN monitoring (home IP: {self.home_ip})")
         self.log(f"Fast checks every {self.fast_interval}s, IP checks every {self.ip_interval}s")
 

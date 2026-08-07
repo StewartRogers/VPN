@@ -11,7 +11,7 @@ echo "==================================="
 echo ""
 
 # Check OpenVPN
-if pgrep -x openvpn > /dev/null 2>&1; then
+if pgrep -f openvpn > /dev/null 2>&1; then
     echo "✓ OpenVPN: Running"
     VPN_IP=$(curl -s --max-time 3 https://api.ipify.org 2>/dev/null)
     if [ -n "$VPN_IP" ]; then
@@ -71,11 +71,8 @@ else
     echo "✗ VPN Monitor: Not running"
 fi
 
-# Check for kill switch.
-# UFW-based. The previous check grepped 'iptables -L OUTPUT' for "tun", which
-# could never match: -L omits interface columns, and UFW's tun0 rules live in
-# ufw-user-output, not the built-in OUTPUT chain. It always read "Not active".
-if sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
+# Check for kill switch rules
+if sudo iptables -L OUTPUT -n 2>/dev/null | grep -q "tun"; then
     echo "✓ Kill Switch: Active"
 else
     echo "✗ Kill Switch: Not active"

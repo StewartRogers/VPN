@@ -44,12 +44,6 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --ovpn-url)
-            # Without the guard, 'shift 2' with only one argument left fails and
-            # leaves $# unchanged, so the while loop re-reads --ovpn-url forever.
-            if [ -z "$2" ]; then
-                echo "ERROR: --ovpn-url requires a URL"
-                exit 1
-            fi
             CUSTOM_OVPN_URL="$2"
             shift 2
             ;;
@@ -100,11 +94,8 @@ rotate_logs() {
 ##
 validate_url() {
     local url=$1
-    # HTTPS only: the downloaded file is executed by 'sudo openvpn', so a
-    # plaintext fetch lets anyone on-path choose the VPN endpoint and the
-    # firewall exception that gets opened for it.
-    if [[ ! "$url" =~ ^https:// ]]; then
-        log_message "ERROR" "Invalid URL - must start with https:// : $url"
+    if [[ ! "$url" =~ ^https?:// ]]; then
+        log_message "ERROR" "Invalid URL format: $url"
         return 1
     fi
     return 0
@@ -175,68 +166,15 @@ echo ""
 divider
 
 #
-# Clear any leftover kill switch BEFORE capturing the home IP.
+# Capture home IP before VPN starts
 #
-# The kill switch is fail-closed by design and survives reboots, so a previous
-# session that ended badly leaves outgoing traffic blocked. That blocks the
-# ipify call below, YHOMEIP silently becomes empty, and the run only fails at
-# the very end - after the VPN is already connected - with "Home IP not
-# captured". Catch it here instead, while it is still cheap to fix.
-#
-if sudo ufw status verbose 2>/dev/null | grep -q "deny (outgoing)"; then
-    echo "  A kill switch from a previous session is still active."
-    echo "  Removing it so the pre-VPN home IP can be captured..."
-    log_message "INFO" "Clearing leftover kill switch before home IP capture"
-    if ! sudo bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1; then
-        echo ""
-        echo "  ERROR: Could not clear the existing kill switch."
-        echo "  Run this, then start again:"
-        echo "    ./remove_killswitch.sh"
-        echo ""
-        log_message "ERROR" "Failed to clear leftover kill switch"
-        ERROR_HANDLED=true
-        exit 1
-    fi
-    echo "  Cleared."
-    echo ""
+YHOMEIP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null)
+if ! validate_ip "$YHOMEIP"; then
+    log_message "WARN" "Could not retrieve valid external IP address"
+    YHOMEIP=""
 fi
-
-#
-# Capture home IP before VPN starts.
-# HOME_IP in the environment or webapp/.env overrides the lookup - useful when
-# the detection services are unreachable or your ISP IP is static.
-#
-if [ -n "$HOME_IP" ] && validate_ip "$HOME_IP"; then
-    YHOMEIP="$HOME_IP"
-    log_message "INFO" "Using HOME_IP from environment"
-else
-    YHOMEIP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null)
-    if ! validate_ip "$YHOMEIP"; then
-        log_message "WARN" "Could not retrieve valid external IP address"
-        YHOMEIP=""
-    fi
-fi
-
-if [ -z "$YHOMEIP" ]; then
-    echo "  ERROR: Could not determine your pre-VPN home IP."
-    echo ""
-    echo "  The monitor needs it to detect leaks, so starting the VPN now would"
-    echo "  leave you unmonitored. Nothing has been changed."
-    echo ""
-    echo "  Check outbound connectivity:"
-    echo "    curl https://api.ipify.org"
-    echo ""
-    echo "  Or set it explicitly (find it at https://whatismyip.com from any"
-    echo "  device on this network) and run again:"
-    echo "    HOME_IP=203.0.113.5 ./startvpn.sh"
-    echo ""
-    log_message "ERROR" "Home IP could not be determined - aborting before VPN start"
-    ERROR_HANDLED=true
-    exit 1
-fi
-
-echo "  Home IP (pre-VPN): $YHOMEIP"
-log_message "INFO" "Home IP (pre-VPN): $YHOMEIP"
+echo "  Home IP (pre-VPN): ${YHOMEIP:-unknown}"
+log_message "INFO" "Home IP (pre-VPN): ${YHOMEIP:-unknown}"
 echo ""
 
 #
@@ -334,28 +272,9 @@ if [ "$GETOVPN" = "y" ]; then
         fi
     fi
 
-    # -f: without it curl exits 0 on a 404/403 and the (non-empty) HTML error
-    # page is installed as the config, poisoning every later run.
-    curl -fsSL -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"
+    curl -s -L -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"
     if [ $? -ne 0 ] || [ ! -s "$SCRIPT_DIR/$OVPN_FILENAME" ]; then
         log_message "ERROR" "Failed to download OVPN file"
-        rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
-        ERROR_HANDLED=true
-        exit 1
-    fi
-
-    # Reject configs carrying directives that run commands or write files as
-    # root. This is the only defence: the command line deliberately leaves
-    # --script-security at OpenVPN's default (see the note above the openvpn
-    # invocation for why level 0 breaks the tunnel).
-    if grep -qiE '^[[:space:]]*(script-security|up|down|route-up|route-pre-down|ipchange|tls-verify|auth-user-pass-verify|client-connect|client-disconnect|learn-address|plugin|status|writepid|log|log-append|management[[:alnum:]-]*|cd|tmp-dir|askpass)[[:space:]]' "$SCRIPT_DIR/$OVPN_FILENAME"; then
-        log_message "ERROR" "Downloaded config contains a disallowed directive - refusing to install"
-        rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
-        ERROR_HANDLED=true
-        exit 1
-    fi
-    if ! grep -qiE '^[[:space:]]*remote[[:space:]]+[^[:space:]]' "$SCRIPT_DIR/$OVPN_FILENAME"; then
-        log_message "ERROR" "Downloaded file has no 'remote' line - not an OpenVPN config"
         rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
         ERROR_HANDLED=true
         exit 1
@@ -443,15 +362,6 @@ echo ""
 echo "  Starting OpenVPN..."
 log_message "INFO" "Starting OpenVPN: $(basename "$XCONFIGFILE")"
 sudo rm -f "$XVPNLOGFILE"
-# NOTE: --script-security is deliberately NOT set here, leaving OpenVPN's
-# default of 1. Level 0 means "strictly no calling of external programs", which
-# blocks OpenVPN from invoking ip/ifconfig/route -- on 2.4/2.5 that is how the
-# tunnel is configured, and a partially configured tun0 passes small packets
-# while dropping large ones (DNS works, TLS handshakes hang).
-#
-# The RCE risk that motivated level 0 is covered where it actually arises: the
-# download path above rejects configs carrying up/down/script-security/plugin
-# and similar directives before installing them.
 sudo openvpn \
     --config "$XCONFIGFILE" \
     --log "$XVPNLOGFILE" \

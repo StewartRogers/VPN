@@ -25,10 +25,6 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 if [ -f "$SCRIPT_DIR/webapp/.env" ]; then
     while IFS='=' read -r key value; do
         case "$key" in ''|'#'*) continue ;; esac
-        # Only accept well-formed variable names. "${!key+x}" below performs an
-        # indirect expansion, and bash arithmetic-evaluates array subscripts —
-        # so a key like 'x[$(cmd)]' from .env would execute cmd.
-        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
         # Strip matching surrounding quotes, same as python-dotenv
         if [[ "$value" == \"*\" && "$value" == *\" ]] || [[ "$value" == \'*\' && "$value" == *\' ]]; then
             value="${value:1:-1}"

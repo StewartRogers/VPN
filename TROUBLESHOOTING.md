@@ -76,7 +76,7 @@
 
 2. **Verify kill switch:**
    ```bash
-   sudo ufw status verbose | grep "deny (outgoing)"
+   sudo iptables -L OUTPUT -n
    ```
 
 3. **Check for DNS leaks:**
@@ -164,8 +164,8 @@
 
 2. **Check logs:**
    ```bash
-   cat vpn_logs/latest.log
-   tail -f vpn_logs/latest.log
+   cat checkvpn.log
+   tail -f ~/.vpn_logs/vpn.log
    ```
 
 3. **Restart monitoring:**
@@ -191,11 +191,10 @@
    ping -c 100 8.8.8.8
    ```
 
-3. **Note there is no auto-reconnect.**
-
-   `checkip.sh` stops qBittorrent and exits on failure, leaving the kill
-   switch active. Restart with `./startvpn.sh`, or use the web UI's
-   "Force Reconnect" button.
+3. **Increase reconnect attempts:**
+   ```bash
+   MAX_RECONNECT_ATTEMPTS=5
+   ```
 
 ### Security Issues
 
@@ -205,27 +204,24 @@
 
 **Solutions:**
 
-The kill switch is **UFW-based**. Manage it only with `ufw` and the scripts
-here — raw iptables rules will be silently out of step with what UFW reports.
-
-1. **Verify the rules:**
+1. **Verify iptables rules:**
    ```bash
-   sudo ufw status verbose
-   sudo ufw status numbered
+   sudo iptables -L OUTPUT -n -v
    ```
 
-2. **Re-apply the kill switch:**
+2. **Manual kill switch setup:**
    ```bash
-   sudo bash ufw_killswitch.sh
+   sudo iptables -A OUTPUT -o lo -j ACCEPT
+   sudo iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
+   sudo iptables -A OUTPUT -o tun+ -j ACCEPT
+   sudo iptables -A OUTPUT -j DROP
    ```
 
-   It parses the installed `.ovpn` for the server address and whitelists only
-   that endpoint, the tun0 tunnel, your LAN, and your DNS resolvers. It now
-   verifies its own result and exits non-zero if any rule was rejected.
-
-3. **Check what it allowed:**
+3. **Check for conflicting rules:**
    ```bash
-   sudo ufw status numbered
+   sudo iptables -L OUTPUT -n --line-numbers
+   # Remove conflicting rules if needed
+   sudo iptables -D OUTPUT <line-number>
    ```
 
 #### DNS Leaks Persist
@@ -262,21 +258,14 @@ here — raw iptables rules will be silently out of step with what UFW reports.
 
 1. **Verify local network exceptions:**
    ```bash
-   sudo ufw status | grep LAN
+   sudo iptables -L OUTPUT -n | grep "192.168\|10.0\|172.16"
    ```
 
-2. **Re-apply with the right subnet:**
-
-   `ufw_killswitch.sh` auto-detects your LAN from the physical interfaces'
-   link routes. If detection picks the wrong one, override it:
+2. **Add missing rules:**
    ```bash
-   sudo LAN_SUBNETS="192.168.1.0/24" bash ufw_killswitch.sh
-   ```
-
-   Likewise `DNS_SERVERS` overrides which resolvers are reachable before the
-   tunnel is up:
-   ```bash
-   sudo DNS_SERVERS="192.168.1.1 1.1.1.1" bash ufw_killswitch.sh
+   sudo iptables -I OUTPUT -d 192.168.0.0/16 -j ACCEPT
+   sudo iptables -I OUTPUT -d 10.0.0.0/8 -j ACCEPT
+   sudo iptables -I OUTPUT -d 172.16.0.0/12 -j ACCEPT
    ```
 
 3. **Restart without kill switch:**
@@ -291,36 +280,27 @@ here — raw iptables rules will be silently out of step with what UFW reports.
 
 **Solutions:**
 
-1. **Use the recovery script — it does all of the below:**
+1. **Check if backups exist:**
    ```bash
-   ./remove_killswitch.sh
+   ls -la /tmp/vpn_backups/
    ```
 
-   It restores the UFW base state, re-enables IPv6, unlocks and restores
-   `/etc/resolv.conf`, and then verifies the switch is actually gone.
-
-2. **Check backups exist** (only if you want to restore by hand):
+2. **Manual restore:**
    ```bash
-   ls -la ~/.vpn_backups/
-   ```
-
-   Backups live under `$HOME/.vpn_backups`, not `/tmp` — a world-writable
-   location would let any local user swap a backup before it is restored
-   with sudo.
-
-3. **Manual restore:**
-   ```bash
-   # Restore the firewall with UFW. Never flush the iptables OUTPUT chain:
-   # that removes UFW's jump rules so nothing filters, while UFW still
-   # reports itself active and every check here believes you are protected.
-   sudo bash ufw_base.sh
-
+   # Restore iptables
+   if [ -f /tmp/vpn_backups/iptables.backup ]; then
+       sudo iptables-restore < /tmp/vpn_backups/iptables.backup
+   else
+       sudo iptables -F OUTPUT
+       sudo iptables -P OUTPUT ACCEPT
+   fi
+   
    # Restore DNS
    sudo chattr -i /etc/resolv.conf
-   if [ -f ~/.vpn_backups/resolv.conf.backup ]; then
-       sudo mv ~/.vpn_backups/resolv.conf.backup /etc/resolv.conf
+   if [ -f /tmp/vpn_backups/resolv.conf.backup ]; then
+       sudo mv /tmp/vpn_backups/resolv.conf.backup /etc/resolv.conf
    fi
-
+   
    # Restore IPv6
    sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0
    sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0
@@ -396,7 +376,8 @@ here — raw iptables rules will be silently out of step with what UFW reports.
 ### Important Log Locations
 
 - VPN connection log: `/var/log/openvpn.log`
-- Monitoring log: `./vpn_logs/latest.log` (symlink to the current `session_*.log`)
+- Application log: `./vpn_logs/vpn.log`
+- Monitoring log: `./checkvpn.log`
 - qBittorrent log: `./qbit.log`
 
 ### Diagnostic Commands
@@ -409,10 +390,10 @@ here — raw iptables rules will be silently out of step with what UFW reports.
 sudo tail -f /var/log/openvpn.log
 
 # View monitoring log
-tail -f vpn_logs/latest.log
+tail -f checkvpn.log
 
 # View application log
-ls -t vpn_logs/session_*.log | head
+tail -f ./vpn_logs/vpn.log
 
 # Check network interfaces
 ip addr show
@@ -420,8 +401,8 @@ ip addr show
 # Check routing table
 ip route show
 
-# Check firewall rules
-sudo ufw status verbose
+# Check iptables rules
+sudo iptables -L -n -v
 
 # Check DNS
 cat /etc/resolv.conf
@@ -449,7 +430,7 @@ If you still have issues:
 2. **Collect diagnostic information:**
    ```bash
    ./vpn_status.sh > diagnostic.txt
-   sudo ufw status verbose >> diagnostic.txt
+   sudo iptables -L -n -v >> diagnostic.txt
    ip route show >> diagnostic.txt
    cat /etc/resolv.conf >> diagnostic.txt
    ```
@@ -469,10 +450,9 @@ sudo pkill -f openvpn
 sudo pkill -f qbittorrent
 sudo pkill -f checkip
 
-# Restore the firewall. Drive UFW — do NOT flush the OUTPUT chain: that
-# removes UFW's jump rules so nothing filters, while every status check in
-# this project still reports the kill switch as active.
-sudo bash ufw_base.sh
+# Flush iptables
+sudo iptables -F OUTPUT
+sudo iptables -P OUTPUT ACCEPT
 
 # Restore DNS
 sudo chattr -i /etc/resolv.conf

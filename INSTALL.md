@@ -15,8 +15,9 @@ The following packages are required:
 - `python3` - Python runtime
 - `python3-pip` - Python package manager
 - `curl` - HTTP client
-- `ufw` - Firewall management (the kill switch depends on it)
+- `iptables` - Firewall management
 - `screen` - Terminal multiplexer (optional)
+- `ufw` - Uncomplicated Firewall (optional)
 
 ## Quick Installation
 
@@ -42,7 +43,7 @@ Or install manually:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y openvpn qbittorrent-nox python3 python3-pip curl screen ufw
+sudo apt-get install -y openvpn qbittorrent-nox python3 python3-pip curl iptables screen ufw
 pip3 install --user requests
 ```
 
@@ -79,17 +80,24 @@ Create `~/.vpn_config.conf` or `./vpn_config.conf`:
 # Monitoring intervals (seconds)
 FAST_CHECK_INTERVAL=2
 IP_CHECK_INTERVAL=10
+MAX_RECONNECT_ATTEMPTS=3
 
-# Paths
+# Network security settings
+# Note: Killswitch disabled by default. Use UFW for firewall management.
+# Set to true to enable iptables-based killswitch (may conflict with UFW)
+SETUP_KILLSWITCH=false
+PREVENT_DNS_LEAK=true
+DISABLE_IPV6=true
+
+# BitTorrent settings
+BIND_TO_VPN_INTERFACE=true
+TORRENT_CLIENT="qbittorrent-nox"  # or "deluge"
+
+# Backup and log locations
+BACKUP_DIR="/tmp/vpn_backups"
 PID_DIR="/tmp/vpn_pids"
-LOG_DIR="./vpn_logs"
-MAX_SESSIONS=20
+LOG_DIR="$HOME/.vpn_logs"
 ```
-
-The kill switch is **UFW-based and always applied** by `startvpn.sh` (skip it
-with `--no-killswitch`). Backups are written to `$HOME/.vpn_backups`.
-
-Web app settings live separately in `webapp/.env` — see `webapp/.env.example`.
 
 ## Usage
 
@@ -167,12 +175,10 @@ When VPN connects, the following security measures are automatically applied:
 - Prevents accidental torrenting on regular connection
 - **Original config restored on shutdown**
 
-### 5. Fail-Closed Monitoring
-- Stops qBittorrent immediately on VPN failure or IP leak
-- Leaves the kill switch **active** on exit, so nothing leaks while unattended
-- Does not auto-reconnect — restart with `./startvpn.sh`, or use the web UI's
-  Force Reconnect button
-- Run `./remove_killswitch.sh` to restore network access afterwards
+### 5. Auto-Reconnect
+- Automatically attempts to reconnect VPN on failure
+- Configurable number of attempts (default: 3)
+- Emergency shutdown if all attempts fail
 
 ## Verification
 
@@ -186,10 +192,10 @@ After starting, verify everything is working:
 curl https://api.ipify.org
 
 # Check monitoring logs
-tail -f vpn_logs/latest.log
+tail -f checkvpn.log
 
 # Check application logs (default location)
-ls -t vpn_logs/session_*.log | head
+tail -f ./vpn_logs/vpn.log
 ```
 
 ## Troubleshooting
