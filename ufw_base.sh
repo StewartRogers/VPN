@@ -29,12 +29,25 @@ if [ -z "${PORT+x}" ] && [ -f "$SCRIPT_DIR/webapp/.env" ]; then
 fi
 PORT="${PORT:-5000}"
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Applying UFW base state..."
+# Outgoing policy, applied BEFORE ufw is enabled.
+#
+# ufw_killswitch.sh sets this to 'deny'. It used to let this script enable ufw
+# with allow-outgoing and then flip the policy afterwards, which left a window
+# of a second or more where ufw was live and outgoing was unrestricted. Setting
+# the policy first means the worst case is a brief total outage (fail-closed)
+# instead of a brief unprotected one (fail-open).
+UFW_OUT_POLICY="${UFW_OUT_POLICY:-allow}"
+case "$UFW_OUT_POLICY" in
+    allow|deny) ;;
+    *) echo "ERROR: UFW_OUT_POLICY must be 'allow' or 'deny' (got '$UFW_OUT_POLICY')"; exit 1 ;;
+esac
+
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] Applying UFW base state (outgoing: $UFW_OUT_POLICY)..."
 
 ufw --force reset                   > /dev/null 2>&1
 
-ufw default deny  incoming          > /dev/null 2>&1
-ufw default allow outgoing          > /dev/null 2>&1
+ufw default deny  incoming              > /dev/null 2>&1
+ufw default "$UFW_OUT_POLICY" outgoing  > /dev/null 2>&1
 
 ufw allow 22/tcp    comment 'SSH'              > /dev/null 2>&1
 ufw allow 443/tcp   comment 'HTTPS'            > /dev/null 2>&1
@@ -47,4 +60,8 @@ ufw allow in on tun0 comment 'VPN interface'   > /dev/null 2>&1
 
 ufw --force enable                  > /dev/null 2>&1
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base state applied - outgoing unrestricted, web UI port $PORT/tcp open."
+if [ "$UFW_OUT_POLICY" = "deny" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base rules applied with outgoing DENIED - caller must add its allow-out rules."
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base state applied - outgoing unrestricted, web UI port $PORT/tcp open."
+fi

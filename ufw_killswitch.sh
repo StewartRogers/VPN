@@ -66,10 +66,17 @@ echo "  VPN server: $VPN_IP ($VPN_HOST)"
 echo "  Port/Proto: $VPN_PORT/$VPN_PROTO"
 
 # --- Apply base state first (clean slate) ---
-bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1
+#
+# UFW_OUT_POLICY=deny makes ufw_base.sh set the deny-outgoing default BEFORE it
+# enables ufw. Previously the base script enabled ufw with allow-outgoing and
+# this script flipped the policy on the next line, leaving ufw live and
+# outgoing unrestricted in between — a fail-open window on every single kill
+# switch application, including every reconnect.
+UFW_OUT_POLICY=deny bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1
 
 # --- Add kill switch rules on top ---
-ufw default deny outgoing                                                          > /dev/null 2>&1
+# Outgoing is already denied by default at this point, so the window between
+# here and the last rule is a brief outage, not a brief exposure.
 ufw allow out to "$VPN_IP" port "$VPN_PORT" proto "$VPN_PROTO" comment 'VPN server' > /dev/null 2>&1
 ufw allow out on tun0 comment 'VPN tunnel'                                         > /dev/null 2>&1
 ufw allow out on eth0  to any port 53 comment 'DNS'                                > /dev/null 2>&1
