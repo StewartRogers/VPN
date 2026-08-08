@@ -50,9 +50,18 @@ def detect_external_ip():
     for url, extract in services:
         try:
             r = requests.get(url, timeout=3)
-            ip = extract(r)
-            if ip:
-                return ip
+            # Without this, an HTTP error body is returned as "the external IP".
+            # icanhazip is a plain-text endpoint, so a 502 HTML page would be
+            # handed back as a string that never equals home_ip — and the leak
+            # check would then pass silently, forever.
+            r.raise_for_status()
+            ip = (extract(r) or "").strip()
+            if not ip:
+                continue
+            # Same reasoning: reject anything that is not an IPv4 address rather
+            # than trusting whatever came back.
+            ipaddress.IPv4Address(ip)
+            return ip
         except Exception:
             continue
     return None
@@ -251,10 +260,41 @@ class VPNMonitor:
         else:
             self.log("Applied qBittorrent config — tun0 IP unavailable, bound by name only", source="QBIT", level="WARNING")
 
+    def torrent_start_blocked(self):
+        """Return a reason string if it is not safe to start the torrent client,
+        or None if every precondition holds.
+
+        This is the single gate every start path goes through. The tunnel must
+        exist, must actually be carrying traffic, the kill switch must be in
+        place, and the exit IP must not be the home IP. The UI also disables its
+        Start button, but a disabled button is a hint and not a control — curl,
+        a stale browser tab, or a VPN drop between status polls all still reach
+        the endpoint.
+        """
+        if not self.check_openvpn_process():
+            return "OpenVPN is not running"
+        if not self.check_vpn_interface():
+            return "VPN interface (tun0) is down"
+        if not self.check_default_route():
+            return "Traffic is not routing through tun0"
+        if not self.check_killswitch_active():
+            return "Kill switch is not active"
+        ip = self.get_external_ip()
+        if ip is None:
+            return "Could not confirm the external IP"
+        if ip.strip() == self.home_ip.strip():
+            return f"External IP {ip} is the home IP — the tunnel is not carrying traffic"
+        return None
+
     def start_qbittorrent(self):
         if self.is_qbittorrent_running():
             self.log("qBittorrent already running", source="QBIT")
             return True
+        blocked = self.torrent_start_blocked()
+        if blocked:
+            self.log(f"Refusing to start qBittorrent — {blocked}",
+                     source="QBIT", level="CRITICAL")
+            return False
         self.apply_qbittorrent_config()
         self.log("Starting qBittorrent...", source="QBIT")
         proc = subprocess.Popen(
@@ -358,7 +398,14 @@ class VPNMonitor:
         """Launch OpenVPN daemon and return True on success. Logs each step."""
 
         # 1. Locate config FIRST — needed by kill switch before we stop existing openvpn
-        configs = glob.glob("/etc/openvpn/client/*.ovpn")
+        # Newest first, matching startvpn.sh. These used to disagree — this
+        # picked an arbitrary glob entry while the shell path and the kill
+        # switch each chose differently, so with more than one config present
+        # the firewall could whitelist one server while OpenVPN dialled another.
+        configs = sorted(
+            glob.glob("/etc/openvpn/client/*.ovpn"),
+            key=os.path.getmtime, reverse=True,
+        )
         if not configs:
             self.log("No .ovpn config file found in /etc/openvpn/client/", level="ERROR")
             return False
@@ -429,14 +476,33 @@ class VPNMonitor:
                 last_log_lines = len(lines)
             except Exception:
                 pass
-            if self.check_vpn_interface():
-                self.log("tun0 interface is up", source="OPENVPN")
-                ip = self.get_external_ip()
-                if ip:
-                    self.log(f"VPN connected — external IP: {ip}")
-                return True
+            # tun0 appearing is not the same as the tunnel working. Require the
+            # default route to have moved onto it, and require the exit IP to
+            # differ from the home IP, before reporting success — otherwise
+            # "VPN connected" can be announced over a tunnel carrying nothing.
+            if not self.check_vpn_interface():
+                continue
+            if not self.check_default_route():
+                continue   # routes can land a moment after the interface
 
-        self.log("tun0 never came up — check OpenVPN log lines above", source="OPENVPN", level="ERROR")
+            self.log("tun0 is up and carrying the default route", source="OPENVPN")
+            ip = self.get_external_ip()
+            if ip is None:
+                self.log("tun0 is up but the external IP could not be read",
+                         source="OPENVPN", level="ERROR")
+                break
+            if ip.strip() == self.home_ip.strip():
+                self.log(f"tun0 is up but the external IP is still the home IP ({ip})",
+                         source="OPENVPN", level="CRITICAL")
+                break
+            self.status["external_ip"] = ip
+            self.status["secure"] = True
+            self.log(f"VPN connected — external IP: {ip}")
+            return True
+        else:
+            self.log("tun0 never came up — check OpenVPN log lines above",
+                     source="OPENVPN", level="ERROR")
+
         self.log("Reverting kill switch so a new config can be downloaded", level="WARNING")
         self.teardown_killswitch()
         return False
@@ -499,7 +565,7 @@ class VPNMonitor:
         return str(ip)
 
     @classmethod
-    def _fetch_pinned(cls, url, timeout=15, max_redirects=5):
+    def _fetch_pinned(cls, url, timeout=15, max_redirects=5, max_bytes=1024 * 1024):
         """GET url, pinning the TCP connection for each hop to the IP that was just
         validated as public for that hop's hostname. Plain "resolve once, then let
         requests resolve again to connect" has a DNS-rebinding gap: the second
@@ -523,19 +589,35 @@ class VPNMonitor:
             with cls._dns_pin_lock:
                 socket.getaddrinfo = _pinned_getaddrinfo
                 try:
-                    r = requests.get(url, timeout=timeout, allow_redirects=False)
+                    r = requests.get(
+                        url, timeout=timeout, allow_redirects=False, stream=True,
+                        # requests honours HTTPS_PROXY by default, and a proxy
+                        # resolves the hostname itself — which would bypass the
+                        # pin established above.
+                        proxies={"http": None, "https": None},
+                    )
                 finally:
                     socket.getaddrinfo = real_getaddrinfo
 
             if r.is_redirect or r.is_permanent_redirect:
                 location = r.headers.get("Location")
+                r.close()
                 if not location:
                     raise ValueError("Redirect with no Location header")
                 url = urljoin(url, location)
                 continue
 
-            r.raise_for_status()
-            return r
+            try:
+                r.raise_for_status()
+                # Cap the body so a hostile or wrong URL cannot exhaust memory.
+                body = bytearray()
+                for chunk in r.iter_content(8192):
+                    body.extend(chunk)
+                    if len(body) > max_bytes:
+                        raise ValueError(f"config exceeds {max_bytes} bytes")
+            finally:
+                r.close()
+            return bytes(body)
 
         raise ValueError("Too many redirects")
 
@@ -544,9 +626,17 @@ class VPNMonitor:
         def _run():
             self.log(f"Downloading OVPN config from: {url}")
             try:
-                r = self._fetch_pinned(url)
+                data = self._fetch_pinned(url)
             except Exception as e:
                 self.log(f"Download rejected — {e}", level="ERROR")
+                return
+
+            # Make sure this is actually an OpenVPN config and not an error page
+            # saved under a .ovpn name — otherwise the failure only shows up
+            # later as a tunnel that will not come up.
+            if not re.search(rb"^[ \t]*remote[ \t]+\S+", data, re.MULTILINE):
+                self.log("Download rejected — no 'remote' line, not an OpenVPN config",
+                         level="ERROR")
                 return
 
             filename = os.path.basename(url.split("/")[-1].split("?")[0])
@@ -556,8 +646,8 @@ class VPNMonitor:
             fd, tmp = tempfile.mkstemp(suffix=".ovpn", prefix="vpnconf_")
             try:
                 with os.fdopen(fd, "wb") as f:
-                    f.write(r.content)
-                self.log(f"Downloaded {len(r.content)} bytes")
+                    f.write(data)
+                self.log(f"Downloaded {len(data)} bytes")
             except Exception as e:
                 self.log(f"Could not write temp file — {e}", level="ERROR")
                 return
@@ -582,13 +672,30 @@ class VPNMonitor:
         threading.Thread(target=_run, daemon=True).start()
 
     def start_vpn(self):
-        """Run VPN start in a background thread so logs stream immediately."""
+        """Start the VPN, then the monitor, then the torrent client.
+
+        This is the web equivalent of the shell path, where startvpn.sh hands
+        off to checkip.sh and checkip.sh verifies before starting the client.
+        The web path used to need three separate clicks with nothing tying them
+        together, so the client could end up running with no monitor watching.
+
+        _openvpn_start only returns True once tun0 is up, carrying the default
+        route, and exiting on an IP that is not the home IP — so nothing below
+        runs on an unverified tunnel.
+
+        Runs in a background thread so logs stream to the UI immediately.
+        """
         def _thread():
             self.status["vpn_starting"] = True
             try:
-                self._openvpn_start()
+                if not self._openvpn_start():
+                    return
             finally:
                 self.status["vpn_starting"] = False
+            # Monitor first, so something is already watching before any torrent
+            # traffic can start.
+            self.start()
+            self.start_qbittorrent()
         threading.Thread(target=_thread, daemon=True).start()
 
     def stop_vpn(self):
@@ -616,6 +723,12 @@ class VPNMonitor:
 
     def attempt_reconnect(self):
         self.log("Attempting VPN reconnection...")
+        # Stop the client before touching the kill switch. _openvpn_start calls
+        # setup_killswitch, which resets UFW and briefly restores the default
+        # allow-outgoing policy — anything still running would egress
+        # unprotected during that window.
+        if self.is_qbittorrent_running():
+            self.stop_qbittorrent()
         ok = self._openvpn_start()
         if ok:
             ip = self.get_external_ip()
@@ -658,6 +771,20 @@ class VPNMonitor:
 
             now_ts = time.time()
             if now_ts - last_ip_check >= self.ip_interval:
+                # Re-verify the kill switch on the same cadence as the IP check.
+                # It used to be checked only at startup, so a UFW reset from
+                # another terminal (stop_web.sh, ufw_base.sh) went unnoticed
+                # while the monitor carried on reporting healthy.
+                if not self.check_killswitch_active():
+                    self.log("Kill switch is no longer active — stopping everything",
+                             level="CRITICAL")
+                    self.status["kill_switch_active"] = False
+                    self.status["secure"] = False
+                    if self.is_qbittorrent_running():
+                        self.stop_qbittorrent()
+                    break
+                self.status["kill_switch_active"] = True
+
                 ip = self.get_external_ip()
                 post_check_ts = time.time()
                 self.status["external_ip"] = ip

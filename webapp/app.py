@@ -211,6 +211,13 @@ def qbt_start():
     err = _auth() or _require_monitor()
     if err:
         return err
+    # The UI disables its Start button unless the monitor reports secure, but
+    # that is a client-side hint only: curl, a stale tab, or a VPN drop between
+    # status polls all still reach this endpoint. Torrent traffic must never
+    # begin unless the tunnel is verified here, on the server.
+    blocked = monitor.torrent_start_blocked()
+    if blocked:
+        return jsonify({"error": f"Refusing to start qBittorrent — {blocked}"}), 409
     threading.Thread(target=monitor.start_qbittorrent, daemon=True).start()
     return jsonify({"started": True})
 

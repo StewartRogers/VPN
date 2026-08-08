@@ -205,6 +205,11 @@ class TestMonitorLoopVpnFailure:
         monitor.check_openvpn_process = fake_proc
         monitor.check_vpn_interface = fake_iface
         monitor.check_default_route = fake_route
+        # The loop re-checks the kill switch on the IP-check cadence. Without
+        # this, subprocess.run is a bare MagicMock whose stdout does not contain
+        # "deny (outgoing)", so every test below would exit via the kill-switch
+        # branch instead of the one it means to exercise.
+        monitor.check_killswitch_active = MagicMock(return_value=True)
         monitor.get_external_ip = MagicMock(return_value="5.6.7.8")
         monitor.is_qbittorrent_running = MagicMock(return_value=True)
         monitor.stop_qbittorrent = MagicMock()
@@ -228,6 +233,7 @@ class TestMonitorLoopVpnFailure:
         m.check_openvpn_process = MagicMock(return_value=True)
         m.check_vpn_interface = MagicMock(return_value=True)
         m.check_default_route = MagicMock(return_value=True)
+        m.check_killswitch_active = MagicMock(return_value=True)
         m.get_external_ip = MagicMock(return_value="1.2.3.4")  # matches home IP
         m.is_qbittorrent_running = MagicMock(return_value=True)
         m.stop_qbittorrent = MagicMock()
@@ -241,6 +247,7 @@ class TestMonitorLoopVpnFailure:
         m.check_openvpn_process = MagicMock(return_value=True)
         m.check_vpn_interface = MagicMock(return_value=True)
         m.check_default_route = MagicMock(return_value=True)
+        m.check_killswitch_active = MagicMock(return_value=True)
         m.get_external_ip = MagicMock(return_value="1.2.3.4")
         m.is_qbittorrent_running = MagicMock(return_value=False)
         m.stop_qbittorrent = MagicMock()
@@ -273,6 +280,7 @@ class TestMonitorLoopIpErrors:
         m.check_openvpn_process = MagicMock(return_value=True)
         m.check_vpn_interface = MagicMock(return_value=True)
         m.check_default_route = MagicMock(return_value=True)
+        m.check_killswitch_active = MagicMock(return_value=True)
         # Two failures then success then stop
         m.get_external_ip = MagicMock(side_effect=[None, None, "5.6.7.8", "5.6.7.8"])
         m.is_qbittorrent_running = MagicMock(return_value=False)
@@ -297,6 +305,7 @@ class TestMonitorLoopIpErrors:
         m.check_openvpn_process = MagicMock(return_value=True)
         m.check_vpn_interface = MagicMock(return_value=True)
         m.check_default_route = MagicMock(return_value=True)
+        m.check_killswitch_active = MagicMock(return_value=True)
         m.get_external_ip = MagicMock(return_value=None)
         m.is_qbittorrent_running = MagicMock(return_value=True)
         m.stop_qbittorrent = MagicMock()
@@ -369,3 +378,86 @@ class TestLogging:
         seqs = [s for s, _ in m._logs]
         assert seqs == sorted(set(seqs))
         assert len(set(seqs)) == 2
+
+
+# ------------------------------------------------- monitor loop — kill switch
+
+class TestMonitorLoopKillSwitch:
+    def test_stops_when_kill_switch_disappears(self):
+        """A UFW reset from another terminal must not go unnoticed."""
+        m = make_monitor(home_ip="1.2.3.4", ip_interval=0)
+        m.check_openvpn_process = MagicMock(return_value=True)
+        m.check_vpn_interface = MagicMock(return_value=True)
+        m.check_default_route = MagicMock(return_value=True)
+        m.check_killswitch_active = MagicMock(return_value=False)
+        m.get_external_ip = MagicMock(return_value="5.6.7.8")
+        m.is_qbittorrent_running = MagicMock(return_value=True)
+        m.stop_qbittorrent = MagicMock()
+        m._stop_event.wait = MagicMock()
+        with patch("subprocess.run"):
+            m._run()
+        m.stop_qbittorrent.assert_called()
+        assert m.status["secure"] is False
+        assert m.status["kill_switch_active"] is False
+
+
+# --------------------------------------------- server-side torrent start gate
+
+class TestTorrentStartGate:
+    """torrent_start_blocked() is the single choke point every path to starting
+    the torrent client goes through. The UI also disables its button, but that
+    is a client-side hint — curl, a stale tab, or a VPN drop between status
+    polls all still reach the endpoint."""
+
+    def _ready(self, m):
+        m.check_openvpn_process = MagicMock(return_value=True)
+        m.check_vpn_interface = MagicMock(return_value=True)
+        m.check_default_route = MagicMock(return_value=True)
+        m.check_killswitch_active = MagicMock(return_value=True)
+        m.get_external_ip = MagicMock(return_value="5.6.7.8")
+        return m
+
+    def test_allows_when_everything_is_up(self):
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        assert m.torrent_start_blocked() is None
+
+    def test_blocks_when_openvpn_is_down(self):
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.check_openvpn_process = MagicMock(return_value=False)
+        assert m.torrent_start_blocked() is not None
+
+    def test_blocks_when_interface_is_down(self):
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.check_vpn_interface = MagicMock(return_value=False)
+        assert m.torrent_start_blocked() is not None
+
+    def test_blocks_when_traffic_bypasses_tunnel(self):
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.check_default_route = MagicMock(return_value=False)
+        assert m.torrent_start_blocked() is not None
+
+    def test_blocks_when_kill_switch_is_inactive(self):
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.check_killswitch_active = MagicMock(return_value=False)
+        assert m.torrent_start_blocked() is not None
+
+    def test_blocks_when_external_ip_is_unknown(self):
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.get_external_ip = MagicMock(return_value=None)
+        assert m.torrent_start_blocked() is not None
+
+    def test_blocks_when_external_ip_is_the_home_ip(self):
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.get_external_ip = MagicMock(return_value="1.2.3.4")
+        assert m.torrent_start_blocked() is not None
+
+    def test_start_qbittorrent_refuses_when_blocked(self):
+        """Regression: the client must not launch on a bypassed tunnel."""
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.check_default_route = MagicMock(return_value=False)
+        m.is_qbittorrent_running = MagicMock(return_value=False)
+        m.apply_qbittorrent_config = MagicMock()
+        with patch("subprocess.Popen") as popen:
+            assert m.start_qbittorrent() is False
+        popen.assert_not_called()
+        m.apply_qbittorrent_config.assert_not_called()
