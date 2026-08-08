@@ -1,87 +1,119 @@
 #!/bin/bash
+# Copyright (c) 2022-2026 Stewart Rogers
+# SPDX-License-Identifier: MIT
 #
 # remove_killswitch.sh — Emergency kill switch removal
 #
 # Run this from the terminal if the kill switch has locked out your internet
-# and the web app is not accessible.
+# and the web app is not reachable.
 #
 # Usage:
-#   ./remove_killswitch.sh           # restore from backup if available, else reset
-#   ./remove_killswitch.sh --reset   # always flush and reset to ACCEPT (ignore backup)
+#   ./remove_killswitch.sh             restore UFW base state (normal recovery)
+#   ./remove_killswitch.sh --disable   last resort: disable UFW entirely
+#
+# This script used to be entirely iptables-based: it restored
+# ~/.vpn_backups/iptables.backup, a file nothing has created since this project
+# moved to UFW, and otherwise flushed the iptables OUTPUT chain. That happened
+# to restore connectivity as a side effect — flushing OUTPUT drops UFW's jump
+# rules — but UFW itself stayed enabled and reasserted every rule on the next
+# reload or reboot. It never called ufw_base.sh, so the documented recovery path
+# did not actually recover anything.
 #
 
-BACKUP="$HOME/.vpn_backups/iptables.backup"
-IP6BACKUP="$HOME/.vpn_backups/ip6tables.backup"
-FORCE_RESET=false
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-if [[ "${1:-}" == "--reset" ]]; then
-    FORCE_RESET=true
+# Load config for TORRENT_CLIENT, if present.
+if [ -f "$HOME/.vpn_config.conf" ]; then
+    # shellcheck disable=SC1091
+    source "$HOME/.vpn_config.conf"
+elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
+    # shellcheck disable=SC1091
+    source "$SCRIPT_DIR/vpn_config.conf"
 fi
+TORRENT_CLIENT="${TORRENT_CLIENT:-qbittorrent-nox}"
+
+FORCE_DISABLE=false
+[ "${1:-}" = "--disable" ] && FORCE_DISABLE=true
+
+# Backups are written under the invoking user's home, so resolve that rather
+# than $HOME, which is /root under sudo.
+if [ -n "${SUDO_USER:-}" ]; then
+    REAL_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+else
+    REAL_HOME="$HOME"
+fi
+DNS_BACKUP="$REAL_HOME/.vpn_backups/resolv.conf.backup"
 
 echo ""
 echo "VPN Kill Switch Removal"
 echo ""
 
-# ---- IPv4 ----
-if [ "$FORCE_RESET" = false ] && [ -f "$BACKUP" ]; then
-    echo "Found iptables backup: $BACKUP"
-    echo "Restoring original IPv4 rules..."
-    if sudo iptables-restore < "$BACKUP"; then
-        rm -f "$BACKUP"
-        echo "IPv4 restored. Backup deleted."
+# --- 1. Stop the torrent client first ---
+# This script exists to reopen unrestricted outbound traffic. Anything still
+# torrenting when that happens would egress on the ISP link.
+if pgrep -f "$TORRENT_CLIENT" > /dev/null; then
+    echo "Stopping $TORRENT_CLIENT before reopening outbound traffic..."
+    sudo pkill -f "$TORRENT_CLIENT"
+    for _ in $(seq 1 10); do
+        pgrep -f "$TORRENT_CLIENT" > /dev/null || break
+        sleep 0.5
+    done
+    pgrep -f "$TORRENT_CLIENT" > /dev/null && sudo pkill -9 -f "$TORRENT_CLIENT"
+    echo "Stopped."
+else
+    echo "$TORRENT_CLIENT is not running."
+fi
+echo ""
+
+# --- 2. Firewall ---
+if [ "$FORCE_DISABLE" = true ]; then
+    echo "Disabling UFW entirely (--disable)..."
+    if sudo ufw --force disable; then
+        echo "UFW disabled. The host has no firewall until you re-enable it:"
+        echo "  sudo bash $SCRIPT_DIR/ufw_base.sh"
     else
-        echo "Restore failed — falling back to manual reset"
-        FORCE_RESET=true
+        echo "WARNING: 'ufw --force disable' failed."
     fi
-fi
-
-if [ "$FORCE_RESET" = true ] || [ ! -f "$BACKUP" ]; then
-    if [ ! -f "$BACKUP" ]; then
-        echo "No IPv4 backup found at $BACKUP"
-    fi
-    echo "Flushing IPv4 OUTPUT chain and setting policy to ACCEPT..."
-    sudo iptables -F OUTPUT
-    sudo iptables -P OUTPUT ACCEPT
-    echo "Done."
-fi
-
-# ---- IPv6 ----
-if [ "$FORCE_RESET" = false ] && [ -f "$IP6BACKUP" ]; then
-    echo "Found ip6tables backup: $IP6BACKUP"
-    echo "Restoring original IPv6 rules..."
-    if sudo ip6tables-restore < "$IP6BACKUP"; then
-        rm -f "$IP6BACKUP"
-        echo "IPv6 restored. Backup deleted."
+else
+    echo "Restoring UFW base state..."
+    if sudo bash "$SCRIPT_DIR/ufw_base.sh"; then
+        echo "UFW base state restored - outgoing unrestricted."
     else
-        echo "ip6tables restore failed — falling back to manual reset"
-        sudo ip6tables -F OUTPUT
-        sudo ip6tables -P OUTPUT ACCEPT
+        echo "WARNING: ufw_base.sh failed. Falling back to disabling UFW..."
+        if sudo ufw --force disable; then
+            echo "UFW disabled - internet should work, but the host is unfirewalled."
+            echo "Re-apply the base state when you can:"
+            echo "  sudo bash $SCRIPT_DIR/ufw_base.sh"
+        else
+            echo "ERROR: could not disable UFW either. Check 'sudo ufw status'."
+        fi
     fi
-elif [ "$FORCE_RESET" = true ] || [ ! -f "$IP6BACKUP" ]; then
-    echo "Flushing IPv6 OUTPUT chain and setting policy to ACCEPT..."
-    sudo ip6tables -F OUTPUT
-    sudo ip6tables -P OUTPUT ACCEPT
-    echo "Done."
 fi
+echo ""
 
-# Re-enable IPv6 in case it was disabled via sysctl
-echo "Re-enabling IPv6..."
-sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0 > /dev/null 2>&1 || true
-sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null 2>&1 || true
-
-# Restore resolv.conf if it was locked
-DNS_BACKUP="$HOME/.vpn_backups/resolv.conf.backup"
+# --- 3. DNS ---
 if [ -f "$DNS_BACKUP" ]; then
     echo "Restoring DNS configuration..."
-    sudo chattr -i /etc/resolv.conf 2>/dev/null || true
-    sudo mv "$DNS_BACKUP" /etc/resolv.conf
-    echo "DNS restored."
+    sudo chattr -i /etc/resolv.conf 2>/dev/null
+    if sudo mv "$DNS_BACKUP" /etc/resolv.conf; then
+        echo "DNS restored."
+    else
+        echo "WARNING: could not restore DNS - backup is still at $DNS_BACKUP"
+    fi
 else
-    # Just unlock it in case chattr +i is still set
-    sudo chattr -i /etc/resolv.conf 2>/dev/null || true
+    # Clear the immutable bit even with no backup, so resolv.conf is not left
+    # locked against every other tool on the system.
+    sudo chattr -i /etc/resolv.conf 2>/dev/null
+    echo "No DNS backup found - cleared the immutable bit on /etc/resolv.conf."
 fi
+echo ""
+
+# --- 4. IPv6 ---
+echo "Re-enabling IPv6..."
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0     > /dev/null 2>&1
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0 > /dev/null 2>&1
 
 echo ""
 echo "Kill switch removed. Internet access should be restored."
-echo "You can verify with: curl -s https://ipinfo.io/ip"
+echo "Verify with:  curl -s https://api.ipify.org"
 echo ""
