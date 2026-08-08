@@ -33,7 +33,7 @@ cd VPN
 Run the startup script with software installation option:
 
 ```bash
-chmod +x startvpn.sh stopvpn.sh checkip.sh vpn_status.sh
+chmod +x startvpn.sh stopvpn.sh checkip.sh remove_killswitch.sh
 ./startvpn.sh
 ```
 
@@ -132,8 +132,13 @@ Options:
 ### Check Status
 
 ```bash
-./vpn_status.sh
+sudo ufw status verbose        # kill switch: look for "deny (outgoing)"
+ip route get 8.8.8.8           # should say "dev tun0"
+pgrep -x openvpn && pgrep -f qbittorrent-nox
+curl -s https://api.ipify.org  # should NOT be your home IP
 ```
+
+The web app (`./start_web.sh`) shows all of this live in one panel.
 
 ### Stop Services
 
@@ -186,7 +191,8 @@ After starting, verify everything is working:
 
 ```bash
 # Check status
-./vpn_status.sh
+sudo ufw status verbose
+ip route get 8.8.8.8
 
 # Check external IP (should be VPN IP)
 curl https://api.ipify.org

@@ -20,7 +20,7 @@ This repository contains Bash and Python scripts to manage a secure VPN-enforced
 ### 🛠️ Usability
 - **Interactive & Non-Interactive Modes** - Manual or automated operation
 - **Configuration File Support** - Customize all settings via config file
-- **Status Dashboard** - Quick status check script (`vpn_status.sh`)
+- **Status Dashboard** - Live status panel in the web app (`start_web.sh`)
 - **Comprehensive Documentation** - Installation, troubleshooting, and enhancement guides
 
 ## Quick Start
@@ -43,7 +43,9 @@ Follow the prompts to install dependencies and configure VPN.
 ./startvpn.sh
 
 # Check status
-./vpn_status.sh
+sudo ufw status verbose        # kill switch: look for "deny (outgoing)"
+ip route get 8.8.8.8           # should say "dev tun0"
+curl -s https://api.ipify.org  # should NOT be your home IP
 
 # Stop everything
 ./stopvpn.sh
@@ -65,8 +67,8 @@ Follow the prompts to install dependencies and configure VPN.
 - **stopvpn.sh** - Stop services, restore system settings, optionally manage files
 - **checkip.sh** - Continuous VPN monitoring with auto-reconnect
 - **vpn_active.py** - VPN verification (process, interface, IP check)
-- **vpn_status.sh** - Display current status of all services
 - **vpn_config.conf** - Configuration file for customizing behavior
+- **remove_killswitch.sh** - Emergency recovery if the kill switch locks you out
 
 ## Web App
 

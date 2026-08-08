@@ -1,8 +1,16 @@
 *.log
 *.log.*.gz
 *.ovpn
+
+# Python build/test artifacts and local virtualenv.
+# venv and pytest write their own self-ignoring .gitignore into these dirs, so
+# they stayed out of git without being listed here. Listing them explicitly
+# means they stay ignored even when recreated by something that does not.
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
+venv/
 
 # VPN runtime logs and state
 vpn_logs/

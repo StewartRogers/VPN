@@ -71,12 +71,13 @@
 
 1. **Check VPN status:**
    ```bash
-   ./vpn_status.sh
+   ip route get 8.8.8.8           # should say "dev tun0"
+   curl -s https://api.ipify.org  # should NOT be your home IP
    ```
 
 2. **Verify kill switch:**
    ```bash
-   sudo iptables -L OUTPUT -n
+   sudo ufw status verbose        # look for "deny (outgoing)"
    ```
 
 3. **Check for DNS leaks:**
@@ -319,7 +320,7 @@
 
 1. **Make scripts executable:**
    ```bash
-   chmod +x startvpn.sh stopvpn.sh checkip.sh vpn_status.sh
+   chmod +x startvpn.sh stopvpn.sh checkip.sh remove_killswitch.sh
    ```
 
 2. **Check sudo access:**
@@ -384,7 +385,10 @@
 
 ```bash
 # Check all status
-./vpn_status.sh
+sudo ufw status verbose
+ip route get 8.8.8.8
+pgrep -x openvpn && pgrep -f qbittorrent-nox
+curl -s https://api.ipify.org
 
 # View VPN log
 sudo tail -f /var/log/openvpn.log
@@ -429,9 +433,11 @@ If you still have issues:
 
 2. **Collect diagnostic information:**
    ```bash
-   ./vpn_status.sh > diagnostic.txt
-   sudo iptables -L -n -v >> diagnostic.txt
+   sudo ufw status verbose > diagnostic.txt
    ip route show >> diagnostic.txt
+   ip route get 8.8.8.8 >> diagnostic.txt
+   pgrep -ax openvpn >> diagnostic.txt
+   curl -s https://api.ipify.org >> diagnostic.txt
    cat /etc/resolv.conf >> diagnostic.txt
    ```
 

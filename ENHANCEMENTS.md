@@ -21,7 +21,7 @@ All items below are complete and in production.
 
 ### Usability
 - **Non-interactive mode** — `--non-interactive`, `--ovpn-url` flags on `startvpn.sh`
-- **Status script** — `vpn_status.sh` shows OpenVPN, tun0, qBittorrent, monitor, and iptables state
+- **Status panel** — the web app shows OpenVPN, tun0, default route, kill switch, exit IP, and qBittorrent live
 - **Web dashboard** — Flask app (`webapp/`) with live log streaming, one-click VPN/qBittorrent control, and a video file organiser
 
 ### Code quality
