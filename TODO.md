@@ -1,190 +1,173 @@
 # TODO
 
-From the full-repo review (2026-08-08). Fixes applied 2026-08-08, **uncommitted**.
+Open items, known gaps, and things deliberately left alone. What is *already
+implemented* is described in `ENHANCEMENTS.md`, not here.
 
-> **None of the Python changes have been run.** No interpreter on the dev
-> machine has pytest and package installs are blocked there, so the suite could
-> not be executed. Everything below is byte-compile-clean and shell-syntax-clean
-> only. Run `python -m pytest -v` on the Pi before trusting any of it.
-
----
-
-# Done
-
-## 1. `stop_web.sh` removed the kill switch but left torrents running — LEAK
-
-`stop_web.sh` did two things: `pkill -f webapp/app.py`, then `ufw_base.sh`
-(which restores `default allow outgoing`). Neither qBittorrent nor OpenVPN was
-stopped, and since qBittorrent is a child of Flask, killing Flask **orphaned**
-it. End state: kill switch off, torrents running, no monitor.
-
-`pkill` also skipped the app's `restore_dns()` / `restore_ipv6()`, leaving
-`/etc/resolv.conf` pinned to 1.1.1.1 with the immutable bit set.
-
-**Fixed:** rewritten as an ordered teardown mirroring `stopvpn.sh` —
-qBittorrent → OpenVPN → web app → DNS/IPv6 restore → **UFW reset last**. Does
-not depend on the API, so it works even if Flask is wedged.
-
-## 3. Kill switch opened a fail-open window every time it was applied
-
-`ufw_killswitch.sh` called `ufw_base.sh`, which did `reset` →
-`default allow outgoing` → `enable`, and only then flipped to
-`default deny outgoing`. UFW was live with outgoing unrestricted in between —
-on every kill switch application, including every reconnect.
-
-**Fixed:** `ufw_base.sh` takes `UFW_OUT_POLICY` (default `allow`) and applies it
-*before* `ufw --force enable`; `ufw_killswitch.sh` passes `deny`. Worst case is
-now a brief total outage (fail-closed) rather than brief exposure (fail-open).
-
-`attempt_reconnect()` also now stops qBittorrent before touching the kill
-switch — it previously reset UFW with the client still running.
-
-## 4. `remove_killswitch.sh` was dead code
-
-Entirely iptables-based; restored `~/.vpn_backups/iptables.backup`, which
-nothing has created since the UFW rewrite, and never called `ufw_base.sh`.
-
-**Fixed:** rewritten for UFW. Stops the torrent client *first* (the script's
-whole job is to reopen outbound traffic), restores base state, falls back to
-`ufw --force disable` if that fails, then restores DNS and IPv6. `--disable`
-forces the last-resort path.
-
-## 5. Documented sudoers template could not run the kill switch
-
-`CLAUDE.md` granted three **iptables** entries and no `ufw` entry, so
-`setup_killswitch()` failed and `check_killswitch_active()` returned `False`.
-
-**Fixed:** iptables entries replaced with `/usr/sbin/ufw` and the two
-`bash ufw_*.sh` entries, plus a copy-paste verification snippet.
-
-## 6. `detect_external_ip()` failed open on an HTTP error body
-
-No `raise_for_status()`, and `ipv4.icanhazip.com` is parsed as
-`r.text.strip()` — so a 502 HTML page became "the external IP", never matched
-`home_ip`, and the leak check passed permanently.
-
-**Fixed:** `raise_for_status()` plus `ipaddress.IPv4Address()` validation in
-`webapp/monitor.py`. The same validation added to `vpn_active.py`, which also
-fixes the dual-stack `api64.ipify.org` problem (item 12) — an IPv6 reply is now
-rejected and falls through instead of always reading as "secure".
-
-## 8. Kill switch was verified once and never rechecked
-
-**Fixed** in `VPNMonitor._run()` — re-checked on the IP-check cadence (not the
-2s fast cadence, to avoid a `sudo` call every two seconds). A UFW reset from
-another terminal now stops everything.
-
-Not done in `checkip.sh` — see *Deliberately skipped*.
-
-## 12. Smaller items
-
-- `_fetch_pinned` now passes `proxies={"http": None, "https": None}` — `requests`
-  honours `HTTPS_PROXY` and a proxy resolves the hostname itself, bypassing the
-  DNS pin. Also capped at 1 MB and returns `bytes` rather than a streamed
-  response.
-- `download_ovpn` rejects a payload with no `remote` line, so an error page
-  saved as `.ovpn` fails at download time instead of as a tunnel that won't come
-  up.
-- `_openvpn_start` picks the newest `.ovpn` by mtime, matching `startvpn.sh`,
-  instead of an arbitrary `glob` entry.
-
-## Web path parity (raised separately)
-
-The web UI required three separate clicks with nothing tying them together, and
-the qBittorrent gate was **client-side only**:
-
-```js
-document.getElementById('btn-qbt-start').disabled = !(s.running && s.secure);
-```
-
-`POST /api/qbt/start` itself had no checks at all. `curl`, a stale tab, or a VPN
-drop between status polls would start torrents with the tunnel down.
-
-**Fixed:**
-- New `VPNMonitor.torrent_start_blocked()` — one gate checking OpenVPN process,
-  tun0, default route, kill switch, and exit-IP ≠ home-IP. Enforced inside
-  `start_qbittorrent()`, so *every* path goes through it, and called by
-  `/api/qbt/start` to return a 409 with the reason.
-- `_openvpn_start()` no longer reports success when tun0 merely exists — it now
-  requires the default route to be on tun0 and the exit IP to differ from the
-  home IP.
-- `start_vpn()` chains: OpenVPN → monitor → qBittorrent, matching
-  `startvpn.sh` → `checkip.sh`. Nothing downstream runs on an unverified tunnel.
-
-**Behaviour change worth knowing:** qBittorrent will now refuse to start if the
-external-IP lookup fails, even with a healthy tunnel (~9s of timeouts first).
-Starting is strict; the running monitor still tolerates 3 consecutive IP
-failures before shutting down.
+> **Testing status of the `fix/vpn-leak-paths` branch:** the Python suite passes
+> on the Pi (68 tests). The shell changes are syntax-clean but have had only
+> limited end-to-end testing. Exercise `stopvpn.sh`, `stop_web.sh`, and
+> `remove_killswitch.sh` on real hardware before trusting them in anger.
 
 ---
 
-# Deliberately skipped
+## Open — security relevant
 
-**Item 2 — network-namespace migration.** Reverted at your request. Not
-reattempted.
+### 1. Only the first `remote` line is whitelisted, resolved once
 
-**Item 9 — DNS narrowing.** `ufw_killswitch.sh:75-76` still allows plaintext DNS
-to any server over the physical NIC, so the ISP still sees every tracker
-hostname. Commit `a6c29db` shows narrowing this broke systemd-resolved once
-already. Needs testing on the Pi against the pre-tunnel window, not a blind edit.
+`ufw_killswitch.sh`. A config with several `remote` lines, or a hostname behind
+a rotating pool, gets one pinned IP. If the provider hands OpenVPN a different
+address the connection is denied until the kill switch is re-applied.
 
-**Items 7, 11, and the `checkip.sh` half of 8 and 12** — all live in
-`checkip.sh`, the shell monitor `startvpn.sh` launches. You said not to change
-`startvpn.sh`; `checkip.sh` is the same flow, so I left it alone. Still open:
+### 2. DNS narrowing (`ufw_killswitch.sh:94-95`)
 
-- `checkip.sh:216-220` starts qBittorrent when the IP check returns "error".
-- `checkip.sh:66-68` checks the kill switch only at startup.
-- `checkip.sh:95` traps `EXIT` only — an untrapped `SIGTERM` skips cleanup and
-  leaves qBittorrent running.
-- `vpn_active.py` is only used by `checkip.sh`; its IPv4 validation is in, but
-  the shell path still has no `torrent_start_blocked()` equivalent.
+Plaintext DNS to any server is still allowed out over the physical NIC, so the
+ISP still sees every tracker hostname. Commit `a6c29db` shows narrowing this
+broke systemd-resolved once already. Needs testing against the pre-tunnel
+window, not a blind edit.
 
-**Item 11 — leak detection rests on a dynamic IP.** Both paths only test
-`external_ip != home_ip`. If your ISP rotates your address while the tunnel is
-up and the tunnel then drops, neither monitor notices. Fixing it properly means
-asserting the exit IP *matches the VPN server* rather than *differs from home* —
-a design decision, not a patch.
+### 3. Leak detection rests on a dynamic IP
 
----
+Both paths only test `external_ip != home_ip`. If the ISP rotates your address
+while the tunnel is up and the tunnel then drops, neither monitor notices.
+Fixing it properly means asserting the exit IP *matches the VPN server* rather
+than *differs from home* — a design decision, not a patch.
 
-# Still open (unchanged)
+### 4. `/api/files/scan` takes an arbitrary `dir`
 
-**Item 10 — the two paths have drifted.** Partly closed (stop paths now match,
-config selection now matches). Still differing: the web path disables IPv6 and
-rewrites `resolv.conf`; the shell path only checks IPv6 and leaves DNS alone.
-The web path binds qBittorrent to tun0 via `apply_qbittorrent_config()`; the
-shell path does not.
-
-**Item 12 leftovers:**
-- ~~`vpn_status.sh`~~ — deleted. Nothing called it, and it reported the kill
-  switch by grepping `iptables -L OUTPUT`, which never matches under UFW. Doc
-  references replaced with the equivalent `ufw`/`ip route` commands.
-- Torrent port mismatch: `qBittorrent.conf:4` uses `56422`, `ufw_base.sh:44-45`
-  opens `19806`.
-- LAN hardcoded to `10.0.0.0/24` (`ufw_killswitch.sh:77-78`).
-- `ufw_killswitch.sh:28` whitelists only the first `remote` line, resolved once.
-- `webapp/app.py:289` `/api/files/scan` takes an arbitrary `dir`. Low risk on a
-  LAN-only box with no inbound access.
-- CI runs flake8 and pytest but no `shellcheck`, on a mostly-bash project. No
-  coverage for `checkip.sh`, `ufw_killswitch.sh`, or `ufw_base.sh`.
-
-## Ideas (migrated from ENHANCEMENTS.md)
-
-- **`qBittorrent.conf` in the repo** — tracked as a template, which is
-  confusing. Document it in `INSTALL.md` or move it to `examples/`. Note only
-  the web path installs it (`monitor.py:apply_qbittorrent_config`); the shell
-  path never does.
-- **Systemd service file** — auto-start on boot without manual intervention.
-- **Lockfile for `requirements.txt`** — `pip freeze > requirements-lock.txt`
-  for reproducible installs.
-- **Flask API documentation** — no formal docs for the 20 endpoints in
-  `app.py`.
+`webapp/app.py:311`. Low risk on a LAN-only box with no inbound access, and it
+only reads, but it is an unbounded filesystem read for anyone who can reach the
+port. Bounding it to a configured root would cost little.
 
 ---
 
-# Not a defect
+## Open — `checkip.sh` gaps
 
-`--script-security 0` (`webapp/monitor.py:392`): commit `4c165a2` claimed it
-breaks the tunnel. The confirmed-working tree reverted *to* still contains it,
-so the theory does not hold — on OpenVPN 2.6 interface setup goes through
-netlink, not external `ip` calls. Keep it.
+These all live in the shell monitor. The web monitor has the equivalent fixes;
+`checkip.sh` was left alone because it is the flow `startvpn.sh` drives and you
+asked not to change `startvpn.sh`.
+
+- **`checkip.sh:59-73` checks the kill switch only at startup.** A UFW reset
+  from another terminal goes unnoticed while it carries on reporting healthy.
+  The web monitor re-checks on the IP-check cadence.
+- **`checkip.sh:101` traps `EXIT` only.** An untrapped `SIGTERM` skips
+  `_exit_handler`, leaving qBittorrent running. Add `trap _exit_handler EXIT
+  TERM INT`.
+- **No `torrent_start_blocked()` equivalent.** Startup verification is inline
+  and correct, but there is no single gate the way the web path has one.
+
+---
+
+## Open — housekeeping
+
+- **Dead config keys.** `vpn_config.conf` ships `SETUP_KILLSWITCH`,
+  `PREVENT_DNS_LEAK`, `DISABLE_IPV6`, `BIND_TO_VPN_INTERFACE`,
+  `DEFAULT_VIDEO_DEST`, and `VPN_HOME`, none of which are read by any script.
+  `SETUP_KILLSWITCH=false` and its comment about an "iptables-based killswitch"
+  are worse than dead — they describe the opposite of current behaviour. Delete
+  them from the file.
+- **`BACKUP_DIR` is honoured inconsistently.** `vpn_config.conf` sets
+  `$HOME/.vpn_backups`; `stopvpn.sh:23` defaults to `/tmp/vpn_backups` if unset;
+  `webapp/monitor.py:28` and `stop_web.sh:29` hardcode `~/.vpn_backups` and
+  ignore the config entirely. Pick one source of truth.
+- **`qBittorrent.conf` tracked in the repo root** is a template, which reads as
+  confusing. Move it to `examples/` or document it in place. Both paths install
+  from it (`monitor.py:apply_qbittorrent_config`,
+  `checkip.sh:apply_qbittorrent_config`).
+- **Stale `checkvpn.log` in the repo root.** Nothing writes it anymore — session
+  logs go to `vpn_logs/`. Delete it and add it to `.gitignore`.
+- **No `shellcheck` in CI** on a mostly-bash project. No coverage at all for
+  `checkip.sh`, `ufw_killswitch.sh`, or `ufw_base.sh`.
+- **No lockfile.** `pip freeze > requirements-lock.txt` for reproducible
+  installs.
+- **No API documentation** for the 21 endpoints in `webapp/app.py`.
+
+---
+
+## Path drift (item 10, partly closed)
+
+Closed: stop paths now match, qBittorrent `tun0` binding now matches, IPv4
+validation now matches, and all three config selections now take the newest
+`.ovpn` by mtime.
+
+Still differing:
+
+- The web path disables IPv6 and rewrites `/etc/resolv.conf`; the shell path
+  only *checks* IPv6 and leaves DNS alone.
+- The web path fail-stops OpenVPN too; `checkip.sh` leaves it running.
+
+---
+
+## Deliberately not doing
+
+- **Network-namespace migration.** Reverted at your request. Not reattempted.
+- **A systemd unit for auto-start on boot.** This tool is meant to be
+  started and stopped manually.
+- **Auto-reconnect in the monitors.** Fail-stop is the design. See `CLAUDE.md`.
+- **Removing `--script-security 0`.** Commit `4c165a2` claimed it breaks the
+  tunnel; the confirmed-working tree still contains it, so the theory does not
+  hold. On OpenVPN 2.6 interface setup goes through netlink, not external `ip`
+  calls.
+
+---
+
+## Resolved on this branch
+
+Kept for context on why the code looks the way it does.
+
+- **`stop_web.sh` removed the kill switch but left torrents running.** It did
+  `pkill -f webapp/app.py` then `ufw_base.sh`. Neither qBittorrent nor OpenVPN
+  was stopped, and since qBittorrent was a child of Flask, killing Flask
+  *orphaned* it. End state: kill switch off, torrents running, no monitor. It
+  also skipped `restore_dns()`/`restore_ipv6()`, leaving `/etc/resolv.conf`
+  pinned and immutable. Rewritten as an ordered teardown mirroring `stopvpn.sh`,
+  independent of the API so it works even if Flask is wedged.
+- **The kill switch opened a fail-open window every time it was applied.**
+  `ufw_base.sh` did `reset` → `default allow outgoing` → `enable`, and only then
+  flipped to `deny`. UFW was live with outgoing unrestricted in between, on
+  every application. Now `UFW_OUT_POLICY` is applied *before* `enable`; worst
+  case is a brief outage rather than brief exposure.
+- **`remove_killswitch.sh` was dead code.** Entirely iptables-based, restoring a
+  backup nothing had created since the UFW rewrite. Rewritten for UFW, stops the
+  torrent client first, `--disable` forces the last-resort path.
+- **The documented sudoers template could not run the kill switch.** It granted
+  three *iptables* entries and no `ufw` entry. Replaced with `/usr/sbin/ufw` and
+  the two `bash ufw_*.sh` entries, plus a verification snippet.
+- **`detect_external_ip()` failed open on an HTTP error body.** No
+  `raise_for_status()`, so a 502 HTML page became "the external IP", never
+  matched the home IP, and the leak check passed permanently. Now validated with
+  `ipaddress.IPv4Address()` in both `webapp/monitor.py` and `vpn_active.py` —
+  which also fixes dual-stack `api64.ipify.org` returning an IPv6 address that
+  always read as "secure".
+- **The qBittorrent gate was client-side only.** `POST /api/qbt/start` had no
+  checks at all. Now `torrent_start_blocked()` is the single gate every path
+  goes through, returning 409 with the reason.
+- **`_openvpn_start()` reported success when `tun0` merely existed.** Now
+  requires the default route on `tun0` and an exit IP that differs from home.
+- **`start_vpn()` chained VPN → monitor → qBittorrent.** Now brings up the
+  tunnel and stops there; steps 3 and 4 are deliberate clicks. The safety
+  chaining provided moved into `torrent_start_blocked()`'s monitor-running
+  check.
+- **`checkip.sh` started qBittorrent on an IP-check *error*.** Startup now
+  aborts on an unverifiable IP rather than proceeding.
+- **The kill switch was verified once and never rechecked** (web monitor only).
+- **`ufw_killswitch.sh` picked the `.ovpn` alphabetically** (`ls | head -1`)
+  while `startvpn.sh` and `monitor.py` both picked the newest by mtime. With
+  more than one config present the firewall whitelisted one server's endpoint
+  while OpenVPN dialled another. Now `ls -t`.
+- **`vpn_status.sh`** — deleted. Nothing called it, and it grepped
+  `iptables -L OUTPUT`, which never matches under UFW.
+- **Torrent port mismatch** — `qBittorrent.conf` now uses `19806`, matching
+  `ufw_base.sh`.
+- **LAN hardcoded to `10.0.0.0/24`** — now all of RFC1918, overridable via
+  `LAN_CIDRS`.
+- **`_fetch_pinned` honoured `HTTPS_PROXY`**, and a proxy resolves the hostname
+  itself, bypassing the DNS pin. Now `proxies={"http": None, "https": None}`,
+  capped at 1 MB, returning `bytes`.
+- **`download_ovpn` accepted any payload.** Now rejects one with no `remote`
+  line, so an error page saved as `.ovpn` fails at download instead of as a
+  tunnel that never comes up.
+- **`QBT_SAVE_PATH` could not be edited once set** — `startvpn.sh` now prefills
+  the current value with `read -e -i`.
+- **The retry loop burned all `MAX_STARTUP_ATTEMPTS` with no way to bail.**
+  `startvpn.sh` now asks "Retry? [y/N]"; the web app gained a cancellable wait,
+  `/api/vpn/cancel-retry`, and a Cancel Retry button.

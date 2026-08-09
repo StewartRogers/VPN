@@ -1,239 +1,210 @@
 # Installation Guide
 
-## System Requirements
+## Requirements
 
-- Ubuntu/Debian-based Linux system
-- Root/sudo access
-- Internet connection
-- OpenVPN compatible VPN provider
+- Debian/Ubuntu-based Linux (developed on Raspberry Pi OS)
+- `sudo` access
+- An OpenVPN provider that issues `.ovpn` config files
 
-## Prerequisites
+Packages: `openvpn`, `qbittorrent-nox`, `ufw`, `python3` (3.9 or newer),
+`python3-pip`, `curl`. The web app additionally needs `flask` and `requests`.
 
-The following packages are required:
-- `openvpn` - VPN client
-- `qbittorrent-nox` - Headless BitTorrent client (or `deluge`)
-- `python3` - Python runtime
-- `python3-pip` - Python package manager
-- `curl` - HTTP client
-- `iptables` - Firewall management
-- `screen` - Terminal multiplexer (optional)
-- `ufw` - Uncomplicated Firewall (optional)
+There is no `iptables` dependency — the firewall is UFW exclusively.
 
-## Quick Installation
-
-### 1. Clone the Repository
+## 1. Clone and make executable
 
 ```bash
 git clone https://github.com/StewartRogers/VPN.git
 cd VPN
+chmod +x *.sh
 ```
 
-### 2. Install Dependencies
+## 2. Install dependencies
 
-Run the startup script with software installation option:
+`startvpn.sh` can do it for you — answer `y` at the
+`Check software installation?` prompt on first run. It installs and updates
+`qbittorrent-nox`, `openvpn`, `ufw`, `python3`, `python3-pip`, and
+`python3-requests`.
 
-```bash
-chmod +x startvpn.sh stopvpn.sh checkip.sh remove_killswitch.sh
-./startvpn.sh
-```
-
-When prompted, choose 'y' to install required software.
-
-Or install manually:
+Or do it by hand:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y openvpn qbittorrent-nox python3 python3-pip curl iptables screen ufw
-pip3 install --user requests
+sudo apt-get install -y openvpn qbittorrent-nox ufw python3 python3-pip \
+                        python3-requests curl
+pip3 install -r webapp/requirements.txt      # web app only
 ```
 
-### 3. Obtain VPN Configuration File
+## 3. First qBittorrent run
 
-You need a `.ovpn` configuration file from your VPN provider:
-
-1. Log into your VPN provider's website
-2. Download an OpenVPN configuration file (`.ovpn`)
-3. Either:
-   - Place it in the project directory, OR
-   - Provide the download URL when prompted by the script
-
-### 4. First Run Configuration (Optional qBittorrent Setup)
-
-If this is your first time running qBittorrent:
+Run it once on its own to accept the legal disclaimer and note the generated
+admin password:
 
 ```bash
 qbittorrent-nox
+# accept the disclaimer, note the temporary password, Ctrl+C to stop
 ```
 
-- Accept the legal disclaimer
-- Note the default credentials (usually username: `admin`, default password shown)
-- Press `Ctrl+C` to stop
-- Access web UI at `http://localhost:8080` to change password
+Then set a permanent password through the WebUI at `http://localhost:8080`.
 
-## Configuration
+This project manages `~/.config/qBittorrent/qBittorrent.conf` at start time —
+it sets the listen port to 19806 (matching the UFW rules), binds the session to
+`tun0` by name and live IP, and applies `QBT_SAVE_PATH`. The tracked
+`qBittorrent.conf` in the repo is the template it installs from.
 
-### Optional Configuration File
+## 4. VPN configuration file
 
-Create `~/.vpn_config.conf` or `./vpn_config.conf`:
+Get an `.ovpn` file from your provider. Any of these work:
+
+- Let `startvpn.sh` download it — answer `y` to `Download a new OVPN file?` and
+  paste the URL
+- Pass `--ovpn-url https://…` on the command line
+- Drop the file in the project directory and let the script install it
+- Place it in `/etc/openvpn/client/` yourself
+
+Both paths select the **newest** `.ovpn` in `/etc/openvpn/client/` by mtime.
+Downloads must be HTTPS and are validated: private, loopback and reserved
+addresses are rejected, the resolved IP is pinned for the fetch, and a payload
+with no `remote` line is refused.
+
+## 5. Configuration file (optional)
+
+`~/.vpn_config.conf` takes precedence over `./vpn_config.conf`. See the
+Configuration section of [README.md](README.md) for the keys that are actually
+read; anything else in the file is inert.
+
+## 6. sudo requirements (web app only)
+
+The CLI path prompts for sudo as needed. The web app cannot, so the user
+running it needs passwordless sudo for these operations. Create
+`/etc/sudoers.d/vpn-webapp` with `sudo visudo -f /etc/sudoers.d/vpn-webapp`,
+substituting your username and the path where you checked this repo out:
+
+```
+# OpenVPN and process control
+pi ALL=(ALL) NOPASSWD: /usr/sbin/openvpn
+pi ALL=(ALL) NOPASSWD: /usr/bin/pkill
+pi ALL=(ALL) NOPASSWD: /bin/mv
+pi ALL=(ALL) NOPASSWD: /bin/rm
+pi ALL=(ALL) NOPASSWD: /bin/chmod
+pi ALL=(ALL) NOPASSWD: /bin/chown
+pi ALL=(ALL) NOPASSWD: /bin/cat /var/log/openvpn.log
+pi ALL=(ALL) NOPASSWD: /bin/cat /etc/openvpn/client/*.ovpn
+
+# Kill switch. Both entries are required:
+#   ufw           - check_killswitch_active() runs 'sudo ufw status verbose'
+#   bash <script> - setup_killswitch()/teardown_killswitch() run the ufw_*.sh
+#                   scripts, which must be root to change firewall rules
+pi ALL=(ALL) NOPASSWD: /usr/sbin/ufw
+pi ALL=(ALL) NOPASSWD: /bin/bash /home/pi/VPN/ufw_base.sh
+pi ALL=(ALL) NOPASSWD: /bin/bash /home/pi/VPN/ufw_killswitch.sh
+
+# IPv6 disable/restore
+pi ALL=(ALL) NOPASSWD: /sbin/sysctl
+
+# DNS leak prevention
+pi ALL=(ALL) NOPASSWD: /usr/bin/tee /etc/resolv.conf
+pi ALL=(ALL) NOPASSWD: /usr/bin/chattr
+pi ALL=(ALL) NOPASSWD: /bin/cp /etc/resolv.conf *
+```
+
+Without the `ufw` and `bash` entries the web app cannot apply the kill switch:
+`setup_killswitch()` fails, `check_killswitch_active()` returns `False`, and the
+monitor refuses to start.
+
+Verify:
 
 ```bash
-# Monitoring intervals (seconds)
-FAST_CHECK_INTERVAL=2
-IP_CHECK_INTERVAL=10
-MAX_RECONNECT_ATTEMPTS=3
-
-# Network security settings
-# Note: Killswitch disabled by default. Use UFW for firewall management.
-# Set to true to enable iptables-based killswitch (may conflict with UFW)
-SETUP_KILLSWITCH=false
-PREVENT_DNS_LEAK=true
-DISABLE_IPV6=true
-
-# BitTorrent settings
-BIND_TO_VPN_INTERFACE=true
-TORRENT_CLIENT="qbittorrent-nox"  # or "deluge"
-
-# Backup and log locations
-BACKUP_DIR="/tmp/vpn_backups"
-PID_DIR="/tmp/vpn_pids"
-LOG_DIR="$HOME/.vpn_logs"
+sudo -n ufw status verbose >/dev/null && echo "ufw: ok" || echo "ufw: MISSING"
+sudo -n bash /home/pi/VPN/ufw_base.sh --help >/dev/null 2>&1 \
+  && echo "scripts: ok" || echo "scripts: check the bash paths above"
 ```
 
-## Usage
+## Running it
 
-### Interactive Mode (Default)
-
-Start the VPN and BitTorrent client:
+### CLI
 
 ```bash
 ./startvpn.sh
 ```
 
-Follow the prompts to:
-1. Optionally install/update software
-2. Configure firewall rules
-3. Download or select VPN config file
-4. Confirm VPN connection
-5. Start monitoring
+The interactive flow: optional software check → qBittorrent save path →
+download or select a config → apply the kill switch → start OpenVPN → confirm
+the tunnel → hand off to `checkip.sh`, which verifies and then starts
+qBittorrent.
 
-### Non-Interactive Mode (Automation)
+Non-interactive:
 
 ```bash
 ./startvpn.sh --non-interactive --ovpn-url https://example.com/config.ovpn
 ```
 
-Options:
-- `--non-interactive` - Run without prompts
-- `--config FILE` - Use specific config file
-- `--ovpn-url URL` - Download OVPN from URL
-- `--no-killswitch` - Skip killswitch setup
-- `--help` - Show help
+| Flag | Effect |
+| --- | --- |
+| `--non-interactive` | Run without prompts |
+| `--ovpn-url URL` | Download the config from URL |
+| `--no-killswitch` | Skip the kill switch — **the monitor will not start** |
+| `--help` | Usage |
 
-### Check Status
+Stop with `./stopvpn.sh`, which prompts to shut down services and then to run
+the file organiser. `./stopvpn.sh --shutdown-only` does the teardown with no
+prompts at all.
+
+### Web app
+
+```bash
+./start_web.sh
+# open http://<pi-ip>:5000
+```
+
+Configure it with environment variables or `webapp/.env` — see the Web app
+section of [README.md](README.md). Stop it with `bash stop_web.sh`, which runs
+the same ordered teardown as `stopvpn.sh`; do **not** just kill the Flask
+process, or qBittorrent is orphaned with the firewall left open.
+
+## Verifying
 
 ```bash
 sudo ufw status verbose        # kill switch: look for "deny (outgoing)"
 ip route get 8.8.8.8           # should say "dev tun0"
 pgrep -x openvpn && pgrep -f qbittorrent-nox
 curl -s https://api.ipify.org  # should NOT be your home IP
+
+tail -f vpn_logs/latest.log    # monitor session log
 ```
 
-The web app (`./start_web.sh`) shows all of this live in one panel.
+The web app's status panel shows all of this live.
 
-### Stop Services
+**IPv6 note:** every "outgoing is blocked" guarantee above assumes UFW is
+managing IPv6 as well as IPv4. `ufw_base.sh` checks `/etc/default/ufw` on every
+run and corrects `IPV6=no` (or a missing `IPV6=` line) to `IPV6=yes`
+automatically. A firewall with `IPV6=no` silently ignores all IPv6 traffic,
+which is also why IPv6 is disabled at the kernel level before OpenVPN starts.
+
+## Recovery
+
+If the kill switch locks you out and the web app is unreachable:
 
 ```bash
-./stopvpn.sh
+./remove_killswitch.sh             # restore UFW base state (normal recovery)
+./remove_killswitch.sh --disable   # last resort: disable UFW entirely
 ```
 
-Options:
-- Choose to shutdown services only
-- Optionally rename and move video files
+It stops the torrent client first, then restores the base firewall state, DNS,
+and IPv6. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more.
 
-Quick shutdown:
+## Uninstalling
 
 ```bash
 ./stopvpn.sh --shutdown-only
+sudo apt-get remove openvpn qbittorrent-nox      # optional
+rm -rf ~/.vpn_config.conf ~/.vpn_backups ./vpn_logs /tmp/vpn_pids
 ```
 
-## Security Features
-
-When VPN connects, the following security measures are automatically applied:
-
-### 1. Network Kill Switch
-- Blocks all non-VPN internet traffic
-- Allows local network access (192.168.x.x, 10.x.x.x, 172.16.x.x)
-- Allows SSH access
-- **Automatically removed on shutdown**
-
-### 2. DNS Leak Prevention
-- Forces all DNS queries through VPN-safe resolvers
-- Prevents ISP DNS snooping
-- **Original DNS settings restored on shutdown**
-
-### 3. IPv6 Leak Prevention
-- Temporarily disables IPv6 during VPN session
-- **IPv6 restored to original state on shutdown**
-
-### 4. BitTorrent Interface Binding
-- Configures qBittorrent to only use VPN interface (tun0)
-- Prevents accidental torrenting on regular connection
-- **Original config restored on shutdown**
-
-### 5. Auto-Reconnect
-- Automatically attempts to reconnect VPN on failure
-- Configurable number of attempts (default: 3)
-- Emergency shutdown if all attempts fail
-
-## Verification
-
-After starting, verify everything is working:
-
-```bash
-# Check status
-sudo ufw status verbose
-ip route get 8.8.8.8
-
-# Check external IP (should be VPN IP)
-curl https://api.ipify.org
-
-# Check monitoring logs
-tail -f checkvpn.log
-
-# Check application logs (default location)
-tail -f ./vpn_logs/vpn.log
-```
-
-## Troubleshooting
-
-See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues and solutions.
-
-## Uninstallation
-
-1. Stop all services:
-   ```bash
-   ./stopvpn.sh --shutdown-only
-   ```
-
-2. Remove installed packages (optional):
-   ```bash
-   sudo apt-get remove openvpn qbittorrent-nox
-   ```
-
-3. Remove configuration and logs:
-   ```bash
-   rm -rf ~/.vpn_config.conf ./vpn_logs /tmp/vpn_backups /tmp/vpn_pids
-   ```
-
-## Notes
-
-- All security measures are **fully reversible** - your system returns to normal state when you stop the VPN
-- Local network access is **always preserved** - you can access file shares, printers, and SSH while VPN is running
-- The system is designed to be **non-intrusive** - you can use your computer normally while VPN is active
-- Process management uses **PID files** where possible for clean shutdown
+Confirm the firewall is back to normal afterwards with `sudo ufw status verbose` —
+outgoing should read `allow`.
 
 ## Support
 
-For issues, questions, or contributions:
 - GitHub Issues: https://github.com/StewartRogers/VPN/issues
-- Documentation: See TROUBLESHOOTING.md and ENHANCEMENTS.md
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) · [ENHANCEMENTS.md](ENHANCEMENTS.md)
