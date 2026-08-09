@@ -14,6 +14,24 @@ fi
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Every "deny outgoing" guarantee this project makes assumes UFW's rules
+# apply to both IPv4 and IPv6. If /etc/default/ufw has IPV6=no, UFW never
+# touches IPv6 traffic at all, and none of the allow/deny rules below have
+# any effect on an IPv6 leak - correct it here, before rules are (re)applied.
+UFW_DEFAULTS="/etc/default/ufw"
+if [ -f "$UFW_DEFAULTS" ]; then
+    if grep -qE '^IPV6=no' "$UFW_DEFAULTS"; then
+        echo "WARNING: $UFW_DEFAULTS has IPV6=no - UFW would not filter IPv6 at all."
+        echo "         Correcting to IPV6=yes so these rules cover IPv6 too."
+        sed -i 's/^IPV6=no/IPV6=yes/' "$UFW_DEFAULTS"
+    elif ! grep -qE '^IPV6=' "$UFW_DEFAULTS"; then
+        echo "WARNING: $UFW_DEFAULTS has no IPV6 setting - adding IPV6=yes."
+        echo 'IPV6=yes' >> "$UFW_DEFAULTS"
+    fi
+else
+    echo "WARNING: $UFW_DEFAULTS not found - UFW's IPv6 handling could not be verified."
+fi
+
 # Read PORT from webapp/.env (sudo doesn't inherit the caller's shell env),
 # without clobbering an already-exported PORT.
 if [ -z "${PORT+x}" ] && [ -f "$SCRIPT_DIR/webapp/.env" ]; then

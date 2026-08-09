@@ -22,16 +22,6 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Load config for TORRENT_CLIENT, if present.
-if [ -f "$HOME/.vpn_config.conf" ]; then
-    # shellcheck disable=SC1091
-    source "$HOME/.vpn_config.conf"
-elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
-    # shellcheck disable=SC1091
-    source "$SCRIPT_DIR/vpn_config.conf"
-fi
-TORRENT_CLIENT="${TORRENT_CLIENT:-qbittorrent-nox}"
-
 FORCE_DISABLE=false
 [ "${1:-}" = "--disable" ] && FORCE_DISABLE=true
 
@@ -51,17 +41,17 @@ echo ""
 # --- 1. Stop the torrent client first ---
 # This script exists to reopen unrestricted outbound traffic. Anything still
 # torrenting when that happens would egress on the ISP link.
-if pgrep -f "$TORRENT_CLIENT" > /dev/null; then
-    echo "Stopping $TORRENT_CLIENT before reopening outbound traffic..."
-    sudo pkill -f "$TORRENT_CLIENT"
+if pgrep -f "qbittorrent-nox" > /dev/null; then
+    echo "Stopping qbittorrent-nox before reopening outbound traffic..."
+    sudo pkill -f "qbittorrent-nox"
     for _ in $(seq 1 10); do
-        pgrep -f "$TORRENT_CLIENT" > /dev/null || break
+        pgrep -f "qbittorrent-nox" > /dev/null || break
         sleep 0.5
     done
-    pgrep -f "$TORRENT_CLIENT" > /dev/null && sudo pkill -9 -f "$TORRENT_CLIENT"
+    pgrep -f "qbittorrent-nox" > /dev/null && sudo pkill -9 -f "qbittorrent-nox"
     echo "Stopped."
 else
-    echo "$TORRENT_CLIENT is not running."
+    echo "qbittorrent-nox is not running."
 fi
 echo ""
 

@@ -19,16 +19,6 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Load config for TORRENT_CLIENT, if present.
-if [ -f "$HOME/.vpn_config.conf" ]; then
-    # shellcheck disable=SC1091
-    source "$HOME/.vpn_config.conf"
-elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
-    # shellcheck disable=SC1091
-    source "$SCRIPT_DIR/vpn_config.conf"
-fi
-TORRENT_CLIENT="${TORRENT_CLIENT:-qbittorrent-nox}"
-
 # The web app writes its backups under the invoking user's home, so resolve that
 # rather than $HOME, which is /root when this is run under sudo.
 if [ -n "${SUDO_USER:-}" ]; then
@@ -45,17 +35,17 @@ echo "  Shutting down VPN Monitor web app..."
 echo ""
 
 # --- 1. Torrent client, before anything relaxes the firewall ---
-echo "  [ $TORRENT_CLIENT ]"
-if pgrep -f "$TORRENT_CLIENT" > /dev/null; then
-    echo "  Stopping $TORRENT_CLIENT"
-    sudo pkill -f "$TORRENT_CLIENT"
+echo "  [ qbittorrent-nox ]"
+if pgrep -f "qbittorrent-nox" > /dev/null; then
+    echo "  Stopping qbittorrent-nox"
+    sudo pkill -f "qbittorrent-nox"
     for _ in $(seq 1 10); do
-        pgrep -f "$TORRENT_CLIENT" > /dev/null || break
+        pgrep -f "qbittorrent-nox" > /dev/null || break
         sleep 0.5
     done
-    if pgrep -f "$TORRENT_CLIENT" > /dev/null; then
+    if pgrep -f "qbittorrent-nox" > /dev/null; then
         echo "  Still running - sending SIGKILL"
-        sudo pkill -9 -f "$TORRENT_CLIENT"
+        sudo pkill -9 -f "qbittorrent-nox"
     fi
     echo "  Stopped."
 else

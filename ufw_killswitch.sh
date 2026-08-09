@@ -12,13 +12,25 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Load config (for LAN_CIDRS overrides). Mirrors checkip.sh's search order.
+if [ -f "$HOME/.vpn_config.conf" ]; then
+    source "$HOME/.vpn_config.conf"
+elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
+    source "$SCRIPT_DIR/vpn_config.conf"
+fi
+
 if [ "$EUID" -ne 0 ]; then
     echo "Must be run as root: sudo bash $0"
     exit 1
 fi
 
 # --- Find and parse .ovpn config ---
-OVPN=$(ls /etc/openvpn/client/*.ovpn 2>/dev/null | head -1)
+# Newest by mtime, matching startvpn.sh (ls -t) and monitor.py's
+# _openvpn_start(). This used to be a plain `ls | head -1` — alphabetical — so
+# with more than one config present the firewall whitelisted one server's
+# endpoint while OpenVPN dialled another. The tunnel then could not come up,
+# and the wrong endpoint sat allowed out for the duration.
+OVPN=$(ls -t /etc/openvpn/client/*.ovpn 2>/dev/null | head -1)
 if [ -z "$OVPN" ]; then
     echo "ERROR: No .ovpn file found in /etc/openvpn/client/"
     exit 1
@@ -81,7 +93,16 @@ ufw allow out to "$VPN_IP" port "$VPN_PORT" proto "$VPN_PROTO" comment 'VPN serv
 ufw allow out on tun0 comment 'VPN tunnel'                                         > /dev/null 2>&1
 ufw allow out on eth0  to any port 53 comment 'DNS'                                > /dev/null 2>&1
 ufw allow out on wlan0 to any port 53 comment 'DNS'                                > /dev/null 2>&1
-ufw allow out on eth0  to 10.0.0.0/24 comment 'LAN'                               > /dev/null 2>&1
-ufw allow out on wlan0 to 10.0.0.0/24 comment 'LAN'                               > /dev/null 2>&1
+
+# LAN ranges to allow on the physical interfaces. Was hardcoded to 10.0.0.0/24,
+# which is narrower than what INSTALL.md documents ("192.168.x.x, 10.x.x.x,
+# 172.16.x.x") and doesn't cover every RFC1918 network. Override via
+# LAN_CIDRS="10.1.2.0/24 192.168.1.0/24" (space-separated) in vpn_config.conf
+# if you want something narrower than the full private-address space.
+LAN_CIDRS="${LAN_CIDRS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16}"
+for cidr in $LAN_CIDRS; do
+    ufw allow out on eth0  to "$cidr" comment 'LAN' > /dev/null 2>&1
+    ufw allow out on wlan0 to "$cidr" comment 'LAN' > /dev/null 2>&1
+done
 
 echo "  Status:     ACTIVE - all outgoing blocked except VPN tunnel and LAN"
