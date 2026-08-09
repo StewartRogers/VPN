@@ -344,6 +344,7 @@
         <div class="step-btns">
           <button class="btn-vpn-start" id="btn-vpn-start" onclick="vpnAction('start')">Start VPN</button>
           <button class="btn-vpn-stop"  id="btn-vpn-stop"  onclick="vpnAction('stop')">Stop VPN</button>
+          <button class="btn-vpn-stop"  id="btn-vpn-cancel-retry" onclick="cancelRetry()" style="display:none">Cancel Retry</button>
         </div>
       </div>
 
@@ -392,6 +393,12 @@
         <div style="display:flex;gap:5px;align-items:flex-end">
           <button class="btn-save" onclick="saveConfig()">Save &amp; Apply</button>
           <button class="btn-save" onclick="showTokenModal()">Token</button>
+        </div>
+      </div>
+      <div class="cfg-row">
+        <div class="field" style="flex:1">
+          <label>qBittorrent Save Path</label>
+          <input type="text" id="cfg-save-path" value="{{ save_path }}" placeholder="qBittorrent default" style="width:100%">
         </div>
       </div>
     </div>
@@ -492,6 +499,7 @@
 
     document.getElementById('btn-vpn-start').disabled = s.vpn_starting;
     document.getElementById('btn-vpn-stop').disabled  = s.running || s.vpn_starting;
+    document.getElementById('btn-vpn-cancel-retry').style.display = s.vpn_retry_pending ? '' : 'none';
 
     const vpnReady = !s.vpn_starting && s.vpn_process && s.vpn_interface;
     document.getElementById('btn-start').disabled = s.running || !vpnReady;
@@ -531,6 +539,11 @@
 
   async function vpnAction(name) {
     await post(`/api/vpn/${name}`);
+    pollStatus();
+  }
+
+  async function cancelRetry() {
+    await post('/api/vpn/cancel-retry');
     pollStatus();
   }
 
@@ -588,6 +601,7 @@
       home_ip:       document.getElementById('cfg-home-ip').value.trim(),
       fast_interval: parseInt(document.getElementById('cfg-fast').value),
       ip_interval:   parseInt(document.getElementById('cfg-ip').value),
+      save_path:     document.getElementById('cfg-save-path').value.trim(),
     };
     const { ok, data } = await post('/api/configure', body);
     if (!ok) { if (data.error) alert(data.error); }

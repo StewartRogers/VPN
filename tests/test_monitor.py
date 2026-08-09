@@ -410,6 +410,7 @@ class TestTorrentStartGate:
     polls all still reach the endpoint."""
 
     def _ready(self, m):
+        m.status["running"] = True
         m.check_openvpn_process = MagicMock(return_value=True)
         m.check_vpn_interface = MagicMock(return_value=True)
         m.check_default_route = MagicMock(return_value=True)
@@ -420,6 +421,13 @@ class TestTorrentStartGate:
     def test_allows_when_everything_is_up(self):
         m = self._ready(make_monitor(home_ip="1.2.3.4"))
         assert m.torrent_start_blocked() is None
+
+    def test_blocks_when_monitor_is_not_running(self):
+        """Starting the VPN no longer starts the monitor, so this is the only
+        thing stopping a torrent from running with nothing watching for leaks."""
+        m = self._ready(make_monitor(home_ip="1.2.3.4"))
+        m.status["running"] = False
+        assert m.torrent_start_blocked() is not None
 
     def test_blocks_when_openvpn_is_down(self):
         m = self._ready(make_monitor(home_ip="1.2.3.4"))

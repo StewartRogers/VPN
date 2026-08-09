@@ -10,7 +10,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 
-from monitor import VPNMonitor, detect_external_ip
+from monitor import VPNMonitor, detect_external_ip, read_config_value
 from organizer import scan_directory, organize_files
 
 load_dotenv()
@@ -61,7 +61,8 @@ def _require_monitor():
 
 @app.route("/")
 def index():
-    return render_template("index.html", home_ip=monitor.home_ip if monitor else "")
+    save_path = monitor.save_path if monitor else read_config_value("QBT_SAVE_PATH", "")
+    return render_template("index.html", home_ip=monitor.home_ip if monitor else "", save_path=save_path)
 
 
 @app.route("/organizer")
@@ -95,6 +96,7 @@ def status():
     live["qbittorrent"] = monitor.is_qbittorrent_running()
     live["vpn_starting"] = monitor.status.get("vpn_starting", False)
     live["kill_switch_active"] = monitor.check_killswitch_active()
+    live["save_path"] = monitor.save_path
     return jsonify(live)
 
 
@@ -182,6 +184,15 @@ def vpn_stop():
         return err
     monitor.stop_vpn_bg()
     return jsonify({"stopped": True})
+
+
+@app.route("/api/vpn/cancel-retry", methods=["POST"])
+def vpn_cancel_retry():
+    err = _auth() or _require_monitor()
+    if err:
+        return err
+    monitor.cancel_retry()
+    return jsonify({"cancelled": True})
 
 
 @app.route("/api/start", methods=["POST"])
@@ -275,6 +286,14 @@ def configure():
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid interval value"}), 400
 
+    save_path = (data.get("save_path") or "").strip()
+    if save_path:
+        save_path = os.path.expanduser(save_path)
+        try:
+            os.makedirs(save_path, exist_ok=True)
+        except Exception as e:
+            return jsonify({"error": f"Could not create save path: {e}"}), 400
+
     if monitor and monitor.status["running"]:
         monitor.stop()
 
@@ -283,7 +302,8 @@ def configure():
         fast_interval=fast_interval,
         ip_interval=ip_interval,
     )
-    return jsonify({"configured": True, "home_ip": home_ip})
+    monitor.set_save_path(save_path)
+    return jsonify({"configured": True, "home_ip": home_ip, "save_path": save_path})
 
 
 # ------------------------------------------------------------------ file organizer
