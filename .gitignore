@@ -24,6 +24,11 @@ qBittorrent-data.conf
 # Secrets
 .env
 
+# Claude Code per-machine permission allowlist. Machine-specific by design —
+# it was accumulating entries for paths that only exist on one checkout.
+# .claude/settings.json (shared project settings) stays tracked.
+.claude/settings.local.json
+
 # IDE and system files
 .vscode/
 .idea/
