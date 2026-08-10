@@ -2,6 +2,7 @@
 # Copyright (c) 2022-2025 Stewart Rogers
 # SPDX-License-Identifier: MIT
 
+import ipaddress
 import sys
 import requests
 import subprocess
@@ -21,6 +22,10 @@ def check_vpn_interface():
         return False
 
 def get_external_ip():
+    # api64.ipify.org is dual-stack and answers with IPv6 when it can. An IPv6
+    # address can never equal the (IPv4) home IP, so before the IPv4Address
+    # check below it would always read as "secure". The validation rejects such
+    # a reply and falls through to the next service.
     services = [
         ("https://api.ipify.org?format=json", "ip"),
         ("https://api64.ipify.org?format=json", "ip"),
@@ -31,8 +36,10 @@ def get_external_ip():
             response = requests.get(url, timeout=3)
             response.raise_for_status()
             ip = response.json().get(key, "").split(",")[0].strip()
-            if ip:
-                return ip
+            if not ip:
+                continue
+            ipaddress.IPv4Address(ip)
+            return ip
         except Exception:
             continue
     return None

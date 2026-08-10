@@ -1,31 +1,44 @@
 # VPN BitTorrent Scripts
 
-This repository contains Bash and Python scripts to manage a secure VPN-enforced BitTorrent setup with continuous monitoring and automatic security measures.
+Bash and Python tooling to run qBittorrent behind an OpenVPN tunnel on a
+Raspberry Pi, with a UFW kill switch and a monitor that shuts torrenting down
+the moment the tunnel stops carrying traffic.
 
-## Features
+There are two front ends over the same machinery:
 
-### 🔒 Security
-- **Network Kill Switch** - Blocks all non-VPN traffic while preserving local network access
-- **DNS Leak Prevention** - Forces all DNS queries through VPN resolvers
-- **IPv6 Leak Prevention** - Temporarily disables IPv6 during VPN session
-- **BitTorrent Interface Binding** - Ensures torrent traffic only uses VPN interface
-- **Fully Reversible** - All security measures automatically removed on shutdown
+- **CLI** — `startvpn.sh` brings up the tunnel and hands off to `checkip.sh`
+- **Web** — `start_web.sh` serves a dashboard at `http://<pi-ip>:5000`
 
-### 🔄 Reliability
-- **Auto-Reconnect** - Automatically reconnects VPN on failure (configurable attempts)
-- **Continuous Monitoring** - Fast process/interface checks + periodic IP verification
-- **PID-Based Process Management** - Clean, reliable service shutdown
-- **Structured Logging** - Detailed logs with automatic rotation
+## How it protects you
 
-### 🛠️ Usability
-- **Interactive & Non-Interactive Modes** - Manual or automated operation
-- **Configuration File Support** - Customize all settings via config file
-- **Status Dashboard** - Quick status check script (`vpn_status.sh`)
-- **Comprehensive Documentation** - Installation, troubleshooting, and enhancement guides
+- **UFW kill switch** — outgoing traffic defaults to `deny`; only the tunnel,
+  the VPN server's endpoint, and your LAN are allowed out. Applied *before*
+  OpenVPN starts and left up if anything fails, so a drop is a blackout rather
+  than a leak.
+- **DNS leak prevention** — `/etc/resolv.conf` is replaced with Cloudflare
+  resolvers and locked with `chattr +i` (web path).
+- **IPv6 leak prevention** — IPv6 is disabled at the kernel level before
+  OpenVPN starts, and `ufw_base.sh` forces `IPV6=yes` in `/etc/default/ufw` so
+  the firewall rules cover IPv6 too.
+- **Interface binding** — qBittorrent is bound to `tun0` by name *and* by live
+  IP, so it cannot fall back to the physical NIC.
+- **Verified start** — torrenting only begins once the tunnel exists, carries
+  the default route, and exits on an IP that is not your home IP.
 
-## Quick Start
+### Failure behaviour: fail-stop, not auto-reconnect
 
-### Installation
+Neither monitor reconnects on its own. On VPN process death, `tun0` going away,
+the default route leaving the tunnel, a new global IPv6 address, an exit IP
+matching your home IP, or three consecutive failed IP lookups, the monitor
+**stops qBittorrent and exits with the kill switch still active**. The web
+monitor also stops OpenVPN. You are offline until you intervene — deliberately,
+because a silent reconnect loop is exactly when leaks happen.
+
+The web UI has a **Force Reconnect** button for a manual retry. There is no
+`MAX_RECONNECT_ATTEMPTS` setting; retries at *startup* are governed by
+`MAX_STARTUP_ATTEMPTS`.
+
+## Quick start
 
 ```bash
 git clone https://github.com/StewartRogers/VPN.git
@@ -34,130 +47,165 @@ chmod +x *.sh
 ./startvpn.sh
 ```
 
-Follow the prompts to install dependencies and configure VPN.
+Follow the prompts to install dependencies and select or download a `.ovpn`
+config. See [INSTALL.md](INSTALL.md) for the full walkthrough.
 
-### Basic Usage
+### CLI usage
 
 ```bash
-# Start VPN and BitTorrent client
-./startvpn.sh
-
-# Check status
-./vpn_status.sh
-
-# Stop everything
-./stopvpn.sh
+./startvpn.sh                    # interactive: config, kill switch, VPN, monitor
+./stopvpn.sh                     # stop everything, restore base state
+./stopvpn.sh --shutdown-only     # non-interactive: tear down, no prompts
 ```
 
-### Non-Interactive Mode
+Non-interactive:
 
 ```bash
-# Automated startup
 ./startvpn.sh --non-interactive --ovpn-url https://example.com/config.ovpn
-
-# Quick shutdown
-./stopvpn.sh --shutdown-only
 ```
 
-## Scripts
+Flags: `--non-interactive`, `--ovpn-url URL`, `--no-killswitch`, `--help`.
+`--no-killswitch` starts the VPN but **not** the monitor — `checkip.sh` refuses
+to run without an active kill switch.
 
-- **startvpn.sh** - Start VPN and qbittorrent-nox with security measures
-- **stopvpn.sh** - Stop services, restore system settings, optionally manage files
-- **checkip.sh** - Continuous VPN monitoring with auto-reconnect
-- **vpn_active.py** - VPN verification (process, interface, IP check)
-- **vpn_status.sh** - Display current status of all services
-- **vpn_config.conf** - Configuration file for customizing behavior
-
-## Web App
-
-A browser-based dashboard is available as an alternative to the CLI scripts.
-
-### Start the web app
+### Checking state by hand
 
 ```bash
-cd VPN
-python3 webapp/app.py
-# Open http://<pi-ip>:5000
+sudo ufw status verbose        # kill switch: look for "deny (outgoing)"
+ip route get 8.8.8.8           # should say "dev tun0"
+curl -s https://api.ipify.org  # should NOT be your home IP
+pgrep -x openvpn && pgrep -f qbittorrent-nox
 ```
 
-Install Python dependencies first if needed:
+## Web app
 
 ```bash
-pip install -r webapp/requirements.txt
+pip3 install -r webapp/requirements.txt
+./start_web.sh
+# open http://<pi-ip>:5000
 ```
 
-### Optional: enable API authentication
+`start_web.sh` reads `webapp/.env` and `vpn_config.conf`, then honours these
+environment variables:
 
-By default the web app is unauthenticated — fine for a trusted LAN, but set a token if you want access control:
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `VPN_API_TOKEN` | unset | Require `Authorization: Bearer <token>` on every API call |
+| `BIND_HOST` | `0.0.0.0` | Interface to bind; set to your LAN IP to narrow exposure |
+| `PORT` | `5000` | Listen port |
+| `HOME_IP` | unset | Pre-configure the monitor's home IP at startup |
+| `ACCESS_LOG` | off | Set to `1` to log every HTTP request |
+
+Unauthenticated by default — fine on a trusted LAN, but set a token if the box
+is reachable from anywhere else:
 
 ```bash
-VPN_API_TOKEN=your-secret-token python3 webapp/app.py
+python3 -c "import secrets; print(secrets.token_hex(32))"   # generate one
+VPN_API_TOKEN=<token> ./start_web.sh
 ```
-
-All API requests must then include `Authorization: Bearer your-secret-token`.
 
 ### Workflow
 
-1. **Page load** — home IP is auto-detected and the monitor is auto-configured
-2. **Step 1 — VPN** — paste a `.ovpn` URL to download a config, then click Start VPN
-3. **Step 2 — Monitor** — start the monitoring daemon (watches for IP leaks, auto-reconnects)
-4. **Step 3 — qBittorrent** — start qBittorrent (button is disabled until monitor is running and VPN is secure)
+Each step is a separate, deliberate click. Starting the VPN does **not** start
+anything else.
 
-Live OpenVPN logs stream directly in the dashboard. The organizer tab (`/organizer`) provides a file-rename and move tool for downloaded video files.
+1. **Step 1 — VPN Config** — download a `.ovpn` by URL, or upload one
+2. **Step 2 — VPN** — apply the kill switch and bring up the tunnel
+3. **Step 3 — Monitor** — start the leak monitor
+4. **Step 4 — qBittorrent** — start the client
 
-### sudo requirements for the web app
+The Step 4 button is disabled until the monitor is running and the tunnel is
+verified, and `POST /api/qbt/start` enforces the same conditions server-side —
+so a stale tab or a stray `curl` cannot start torrents early. Live OpenVPN logs
+stream into the dashboard. **Stop All** tears down in reverse order.
 
-The `pi` user needs passwordless sudo for several system operations. See [INSTALL.md](INSTALL.md) and [CLAUDE.md](CLAUDE.md) for the full sudoers template.
+`/organizer` is a separate tab for renaming and moving downloaded video files.
 
-## Documentation
+Stop the web app with `bash stop_web.sh`, which performs the same ordered
+teardown as `stopvpn.sh` (torrents → OpenVPN → app → DNS/IPv6 → UFW last).
 
-- **[INSTALL.md](INSTALL.md)** - Detailed installation and setup guide
-- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** - Common issues and solutions
-- **[ENHANCEMENTS.md](ENHANCEMENTS.md)** - Technical implementation details
+## Files
 
-## System Requirements
+| File | Purpose |
+| --- | --- |
+| `startvpn.sh` | Interactive/automated startup; hands off to `checkip.sh` |
+| `checkip.sh` | Shell monitor — fast process/interface checks + periodic IP checks |
+| `stopvpn.sh` | Ordered teardown and system restore |
+| `vpn_active.py` | One-shot leak check used by `checkip.sh` |
+| `ufw_base.sh` | Base UFW state; `UFW_OUT_POLICY` selects the outgoing default |
+| `ufw_killswitch.sh` | Kill switch — calls `ufw_base.sh deny`, then allows the tunnel and LAN |
+| `remove_killswitch.sh` | Emergency recovery if the kill switch locks you out |
+| `start_web.sh` / `stop_web.sh` | Web app lifecycle |
+| `webapp/` | Flask dashboard (`app.py`, `monitor.py`, `organizer.py`) |
+| `vpn_config.conf` | Optional settings, also readable from `~/.vpn_config.conf` |
 
-- Ubuntu/Debian-based Linux
-- OpenVPN
-- qbittorrent-nox (or deluge)
-- Python 3
-- Root/sudo access
+The firewall is **UFW exclusively** — `ufw_base.sh` and `ufw_killswitch.sh` are
+the only things that touch it. There are no `iptables` calls in this project.
 
 ## Configuration
 
-Create `~/.vpn_config.conf` or `./vpn_config.conf`:
+`~/.vpn_config.conf` takes precedence over `./vpn_config.conf`. Every key below
+is read by something; anything else in the file is inert.
 
 ```bash
-# Monitoring
-FAST_CHECK_INTERVAL=2
-IP_CHECK_INTERVAL=10
-MAX_RECONNECT_ATTEMPTS=3
+FAST_CHECK_INTERVAL=2        # seconds between process/interface/route checks
+IP_CHECK_INTERVAL=10         # seconds between external-IP leak checks
+MAX_STARTUP_ATTEMPTS=3       # connection attempts before giving up (both paths)
+MAX_SESSIONS=20              # session logs kept in LOG_DIR
 
-# Security
-# Note: Killswitch disabled by default. Use UFW for firewall management.
-SETUP_KILLSWITCH=false
-PREVENT_DNS_LEAK=true
-DISABLE_IPV6=true
-BIND_TO_VPN_INTERFACE=true
+VPN_CLIENT_HOME="/etc/openvpn/client/"
+VPN_LOG_FILE="/var/log/openvpn.log"
+PID_DIR="/tmp/vpn_pids"
+LOG_DIR="$SCRIPT_DIR/vpn_logs"
+BACKUP_DIR="$HOME/.vpn_backups"
+
+QBT_SAVE_PATH="/mnt/hdddisk/"   # blank = qBittorrent's own default
+
+# LAN ranges the kill switch allows out on the physical NIC.
+# Default is all of RFC1918; narrow it if you want.
+# LAN_CIDRS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 ```
 
-## Design Principles
+## Logs
 
-✅ **Reversible** - All changes automatically reverted on shutdown  
-✅ **Non-Intrusive** - Local network and SSH access always preserved  
-✅ **User-Friendly** - Works for both manual and automated workflows  
-✅ **Fail-Safe** - Emergency shutdown if VPN cannot be secured  
+| Path | Contents |
+| --- | --- |
+| `vpn_logs/session_<timestamp>.log` | One `checkip.sh` run; `vpn_logs/latest.log` symlinks the newest |
+| `vpn_logs/vpn.log` | `startvpn.sh` / `stopvpn.sh` events, rotated to `vpn.log.1` |
+| `/var/log/openvpn.log` | OpenVPN daemon |
+| `qbit.log` | qBittorrent stdout |
+
+The web app keeps its log in memory and streams it to the browser.
+
+## Requirements
+
+Debian/Ubuntu (developed on Raspberry Pi OS), `openvpn`, `qbittorrent-nox`,
+`ufw`, `python3` (3.9+) with `requests` and `flask`, plus `curl`, `pgrep`, `ip`,
+and `ss`. The web app needs passwordless sudo for several operations — see
+[INSTALL.md](INSTALL.md).
+
+## Tests
+
+```bash
+python3 -m pytest -q
+```
+
+68 tests covering the monitor loop, the kill-switch state machine, leak
+detection, the SSRF guard on `.ovpn` downloads, and the torrent start gate. CI
+runs `flake8 --select=E9,F` and pytest on every push and PR to `master`.
+
+## Documentation
+
+- **[INSTALL.md](INSTALL.md)** — installation, sudoers, first run
+- **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** — diagnosis and recovery
+- **[ENHANCEMENTS.md](ENHANCEMENTS.md)** — what is implemented, and why
+- **[TODO.md](TODO.md)** — open items and known gaps
+- **[CLAUDE.md](CLAUDE.md)** — orientation for AI-assisted work
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) for details
-
-## Contributing
-
-Issues and pull requests welcome! See [ENHANCEMENTS.md](ENHANCEMENTS.md) for implementation details.
+MIT — see [LICENSE](LICENSE).
 
 ## Author
 
-Stewart Rogers
-
-Copyright (c) 2022-2025
+Stewart Rogers · Copyright (c) 2022-2026

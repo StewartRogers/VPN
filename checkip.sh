@@ -26,6 +26,11 @@ if [ -z "$YIP_HOMEIP" ]; then
 fi
 
 # --- Pre-flight checks (run before log redirect so errors appear in terminal) ---
+disable_ipv6() {
+    sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1     > /dev/null 2>&1
+    sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 > /dev/null 2>&1
+}
+
 check_ipv6_disabled() {
     # Check for global-scope IPv6 addresses - these can route to the internet and cause leaks.
     # Handles all disable methods: kernel param (ipv6.disable=1), sysctl, or simply no addresses.
@@ -46,6 +51,7 @@ check_ipv6_disabled() {
     return 0
 }
 
+disable_ipv6
 if ! check_ipv6_disabled; then
     exit 1
 fi
@@ -106,6 +112,14 @@ check_openvpn_process() {
 check_vpn_interface() {
     if ! ip link show tun0 &>/dev/null; then
         log "CRITICAL" "VPN interface (tun0) is down"
+        return 1
+    fi
+    return 0
+}
+
+check_no_ipv6_leak() {
+    if ip -6 addr show 2>/dev/null | grep "inet6" | grep -q "scope global"; then
+        log "CRITICAL" "Global IPv6 address detected - leak risk (bypasses the IPv4-only firewall rules)"
         return 1
     fi
     return 0
@@ -177,11 +191,52 @@ stop_qbittorrent() {
     fi
 }
 
+apply_qbittorrent_config() {
+    local src="$SCRIPT_DIR/qBittorrent.conf"
+    local dst="$HOME/.config/qBittorrent/qBittorrent.conf"
+    if [ ! -f "$src" ]; then
+        log "WARN" "No qBittorrent.conf in repo - skipping config install"
+        return
+    fi
+    mkdir -p "$(dirname "$dst")"
+    if ! cp "$src" "$dst" 2>/dev/null; then
+        log "WARN" "Could not install qBittorrent config"
+        return
+    fi
+
+    # Inject the live tun0 IP so qBittorrent uses a hard IP-level socket bind,
+    # matching webapp/monitor.py:apply_qbittorrent_config.
+    local tun0_ip
+    tun0_ip=$(ip -4 addr show tun0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+    if [ -n "$tun0_ip" ]; then
+        if grep -q 'Session\\InterfaceAddress' "$dst"; then
+            sed -i "s/Session\\\\InterfaceAddress=.*/Session\\\\InterfaceAddress=$tun0_ip/" "$dst"
+        else
+            sed -i "s/Session\\\\InterfaceName=tun0/Session\\\\InterfaceName=tun0\nSession\\\\InterfaceAddress=$tun0_ip/" "$dst"
+        fi
+        log "INFO" "Applied qBittorrent config - bound to tun0 ($tun0_ip)"
+    else
+        log "WARN" "Applied qBittorrent config - tun0 IP unavailable, bound by name only"
+    fi
+
+    # Apply the configured download location, if set (vpn_config.conf: QBT_SAVE_PATH)
+    if [ -n "$QBT_SAVE_PATH" ]; then
+        mkdir -p "$QBT_SAVE_PATH" 2>/dev/null
+        if grep -q 'Session\\DefaultSavePath' "$dst"; then
+            sed -i "s|Session\\\\DefaultSavePath=.*|Session\\\\DefaultSavePath=$QBT_SAVE_PATH|" "$dst"
+        else
+            sed -i "s|^\[BitTorrent\]|[BitTorrent]\nSession\\\\DefaultSavePath=$QBT_SAVE_PATH|" "$dst"
+        fi
+        log "INFO" "Applied qBittorrent config - save path: $QBT_SAVE_PATH"
+    fi
+}
+
 start_qbittorrent() {
     if is_qbittorrent_running; then
         log "INFO" "qBittorrent already running"
         return 0
     fi
+    apply_qbittorrent_config
     log "INFO" "Starting qBittorrent"
     nohup qbittorrent-nox > "$SCRIPT_DIR/qbit.log" 2>&1 &
     local qpid=$!
@@ -210,11 +265,18 @@ fi
 
 perform_ip_check
 ip_rc=$?
+if [ $ip_rc -eq 2 ]; then
+    log "WARN" "Could not verify IP at startup - retrying once..."
+    sleep 3
+    perform_ip_check
+    ip_rc=$?
+fi
 if [ $ip_rc -eq 1 ]; then
     log "CRITICAL" "IP leak detected at startup - aborting"
     exit 1
 elif [ $ip_rc -eq 2 ]; then
-    log "WARN" "Could not verify IP at startup - continuing, will recheck"
+    log "CRITICAL" "Could not verify external IP at startup - aborting (refusing to start qBittorrent without positive verification)"
+    exit 1
 fi
 
 start_qbittorrent
@@ -227,8 +289,8 @@ while true; do
     sleep "$FAST_CHECK_INTERVAL"
     current_time=$(date +%s)
 
-    # Fast check: process + interface + routing
-    if ! check_openvpn_process || ! check_vpn_interface || ! check_routing; then
+    # Fast check: process + interface + routing + no newly-appeared global IPv6
+    if ! check_openvpn_process || ! check_vpn_interface || ! check_routing || ! check_no_ipv6_leak; then
         log "CRITICAL" "VPN failure detected - shutting down"
         # trap handles stop_qbittorrent and UFW reset
         exit 1

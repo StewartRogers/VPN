@@ -1,44 +1,105 @@
-# VPN BitTorrent Project — Enhancements
+# Implemented behaviour
 
-## Implemented
+What this project does and why it does it that way. Open items and future ideas
+live in `TODO.md`, not here.
 
-All items below are complete and in production.
+## Security
 
-### Security
-- **UFW kill switch** — blocks all outgoing traffic except the VPN tunnel and LAN; applied before OpenVPN starts, torn down only on user-initiated Stop VPN (`ufw_killswitch.sh` / `ufw_base.sh`)
-- **DNS leak prevention** — replaces `/etc/resolv.conf` with Cloudflare 1.1.1.1/1.0.0.1 and locks it with `chattr +i`; restored on shutdown
-- **IPv6 leak prevention** — disables IPv6 system-wide via `sysctl` during VPN session
-- **qBittorrent interface binding** — binds to `tun0` by name and by live IP address at start time (hard socket-level bind via `Session\InterfaceAddress`)
-- **SSRF protection** — `.ovpn` download rejects non-HTTPS URLs, private/loopback/reserved IPs, and unresolvable hosts
+- **UFW kill switch** — `ufw_killswitch.sh` calls `ufw_base.sh` with
+  `UFW_OUT_POLICY=deny`, so the deny-outgoing default is set *before* UFW is
+  enabled. It then allows the VPN server endpoint (parsed from the `.ovpn`
+  `remote` line), `out on tun0`, DNS on the physical NIC, and the LAN. Applied
+  before OpenVPN starts; torn down only by an explicit Stop VPN, `stopvpn.sh`,
+  `stop_web.sh`, or `remove_killswitch.sh`.
+- **Fail-closed ordering** — every teardown path stops qBittorrent and OpenVPN
+  *before* relaxing the firewall, and every startup path raises the firewall
+  before starting OpenVPN. There is no window where traffic can egress on the
+  ISP link.
+- **DNS leak prevention** — `/etc/resolv.conf` replaced with Cloudflare
+  1.1.1.1/1.0.0.1 and locked with `chattr +i`; the original is backed up to
+  `~/.vpn_backups/resolv.conf.backup` and restored on shutdown. Web path only.
+- **IPv6 leak prevention** — disabled via `sysctl` before OpenVPN starts.
+  `ufw_base.sh` also checks `/etc/default/ufw` on every run and corrects
+  `IPV6=no` to `IPV6=yes`, because UFW silently ignores IPv6 otherwise — every
+  kill-switch guarantee in this project depends on that one line.
+- **qBittorrent interface binding** — bound to `tun0` by name and by its live
+  IP at start time (`Session\InterfaceAddress`), a hard socket-level bind.
+- **SSRF protection** — `.ovpn` download rejects non-HTTPS URLs, private,
+  loopback and reserved addresses, and unresolvable hosts. The resolved IP is
+  pinned for the duration of the fetch, proxies are disabled (a proxy would
+  re-resolve the hostname and defeat the pin), redirects are re-validated, and
+  the body is capped at 1 MB.
+- **Payload validation** — a downloaded config with no `remote` line is
+  rejected at download time rather than becoming a tunnel that never comes up.
 
-### Reliability
-- **Auto-reconnect** — up to 3 attempts on VPN failure before emergency shutdown; configurable via `MAX_RECONNECT_ATTEMPTS`
-- **Two-tier monitoring loop** — fast process/interface checks (2s) + periodic external IP checks (10s) with 3-consecutive-failure tolerance before shutdown
-- **Kill switch on failure** — kill switch stays active when the monitor exits due to VPN failure (traffic cannot leak while waiting for user to intervene)
+## The torrent start gate
 
-### Configuration
-- **Config file** — `vpn_config.conf` / `~/.vpn_config.conf` for intervals, paths, and feature flags
+`VPNMonitor.torrent_start_blocked()` is the single choke point. It requires, in
+order: the monitor running, the OpenVPN process alive, `tun0` up, the default
+route on `tun0`, the kill switch active, and an external IP that resolves and
+differs from the home IP. `start_qbittorrent()` calls it, so *every* path goes
+through it, and `POST /api/qbt/start` calls it to return a 409 with the reason.
 
-### Usability
-- **Non-interactive mode** — `--non-interactive`, `--ovpn-url` flags on `startvpn.sh`
-- **Status script** — `vpn_status.sh` shows OpenVPN, tun0, qBittorrent, monitor, and iptables state
-- **Web dashboard** — Flask app (`webapp/`) with live log streaming, one-click VPN/qBittorrent control, and a video file organiser
+The UI disables its Start button on the same conditions, but a disabled button
+is a hint and not a control — `curl`, a stale browser tab, or a VPN drop
+between status polls all still reach the endpoint.
 
-### Code quality
-- **Test suite** — 58 pytest unit tests covering the monitoring loop, kill-switch state machine, IP leak detection, SSRF guard, and logging
-- **CI** — GitHub Actions runs flake8 (`E9,F`) and pytest on every push and PR
+Consequence worth knowing: qBittorrent refuses to start if the external-IP
+lookup fails, even on a healthy tunnel (~9s of timeouts first). Starting is
+strict; a *running* monitor tolerates three consecutive IP failures before
+shutting down.
 
-### Documentation
-- `README.md` — quick-start, CLI and web app usage
-- `INSTALL.md` — full installation guide including sudoers config
-- `TROUBLESHOOTING.md` — common issues
-- `CLAUDE.md` — developer guide for AI-assisted work
+## Fail-stop, not auto-reconnect
 
----
+Neither monitor reconnects on its own. Both watch for VPN process death, `tun0`
+disappearing, the default route leaving the tunnel, a newly appeared global
+IPv6 address, an exit IP matching the home IP, and three consecutive failed IP
+lookups. On any of those they stop qBittorrent and exit **with the kill switch
+still active** — the web monitor also stops OpenVPN. The machine goes offline
+rather than silently reconnecting, which is precisely when leaks slip through.
 
-## Open / Future
+`attempt_reconnect()` exists in `webapp/monitor.py` but only runs when you press
+**Force Reconnect**. There is no `MAX_RECONNECT_ATTEMPTS`; `MAX_STARTUP_ATTEMPTS`
+governs retries during initial connection in both paths, and both offer a way
+out early (an interactive prompt in `startvpn.sh`, a Cancel Retry button and
+`/api/vpn/cancel-retry` in the web app).
 
-- **`qBittorrent.conf` in repo** — currently tracked as a template; consider documenting this explicitly in `INSTALL.md` or moving it to an `examples/` directory to avoid confusion
-- **Systemd service file** — would allow auto-start on boot without manual intervention
-- **Lockfile for `requirements.txt`** — `pip freeze > requirements-lock.txt` for reproducible installs
-- **Flask API documentation** — no formal docs for the 20+ endpoints in `app.py`
+The kill switch is re-verified on the IP-check cadence in the web monitor, so a
+UFW reset from another terminal stops everything. `checkip.sh` still checks it
+only at startup — see `TODO.md`.
+
+## Manual step ordering (web path)
+
+In the web app, starting the VPN starts *only* the VPN. The monitor (step 3)
+and qBittorrent (step 4) are separate, deliberate clicks. An earlier revision
+chained all three off one click; that took the ordering away from the operator,
+which matters when the tunnel comes up on the wrong exit or a config needs
+swapping. The safety chaining was there to provide now lives in the start gate
+above, which refuses a torrent start unless the monitor is already running.
+
+The CLI path is unchanged and still chains: `startvpn.sh` launches `checkip.sh`
+once the tunnel verifies, and `checkip.sh` starts qBittorrent after its own
+startup verification. That flow is a single foreground session where the
+operator is watching the output, so the ordering is visible as it happens.
+
+## Configuration
+
+`~/.vpn_config.conf` takes precedence over `./vpn_config.conf`. Both paths use
+the same search order. See README.md for the live keys.
+
+## Code quality
+
+- **Test suite** — 68 pytest unit tests covering the monitor loop, kill-switch
+  state machine, IP leak detection, the SSRF guard, logging, and the torrent
+  start gate.
+- **CI** — GitHub Actions runs `flake8 --select=E9,F` and pytest on every push
+  and PR to `master`. No `shellcheck` yet, on a mostly-bash project — see
+  `TODO.md`.
+
+## Documentation map
+
+- `README.md` — overview, both front ends, configuration, logs
+- `INSTALL.md` — installation, sudoers, first run
+- `TROUBLESHOOTING.md` — diagnosis and recovery
+- `TODO.md` — open items, known gaps, deliberate omissions
+- `CLAUDE.md` — orientation for AI-assisted work

@@ -1,466 +1,360 @@
 # Troubleshooting Guide
 
-## Common Issues and Solutions
+The firewall is **UFW exclusively**. If you find yourself reaching for
+`iptables` here, you are in the wrong place — UFW keeps its rules in the
+`ufw-user-output` chain, so `iptables -L OUTPUT` shows nothing useful and
+flushing it breaks UFW without disabling it.
 
-### VPN Connection Issues
+## Emergency recovery
 
-#### VPN Won't Connect
+Kill switch on, no internet, web app unreachable:
 
-**Symptoms:** OpenVPN fails to establish connection
+```bash
+./remove_killswitch.sh             # normal recovery: restore UFW base state
+./remove_killswitch.sh --disable   # last resort: disable UFW entirely
+```
 
-**Solutions:**
+It stops the torrent client first, restores the base firewall state, then
+restores DNS and IPv6. If even that fails:
 
-1. **Check VPN config file:**
+```bash
+sudo pkill -f qbittorrent-nox
+sudo pkill -f openvpn
+sudo pkill -f checkip.sh
+sudo ufw --force disable
+sudo chattr -i /etc/resolv.conf
+sudo cp ~/.vpn_backups/resolv.conf.backup /etc/resolv.conf   # if it exists
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0
+```
+
+Re-enable the firewall afterwards with `sudo bash ufw_base.sh`.
+
+## First-line diagnosis
+
+```bash
+sudo ufw status verbose        # "deny (outgoing)" = kill switch on
+ip route get 8.8.8.8           # should say "dev tun0"
+ip addr show tun0              # tunnel interface and its IP
+curl -s https://api.ipify.org  # should NOT be your home IP
+pgrep -x openvpn && pgrep -f qbittorrent-nox && pgrep -f checkip.sh
+cat /etc/resolv.conf && lsattr /etc/resolv.conf   # 'i' flag = locked
+```
+
+Logs:
+
+| Path | Contents |
+| --- | --- |
+| `vpn_logs/latest.log` | Newest `checkip.sh` session (symlink) |
+| `vpn_logs/vpn.log` | `startvpn.sh` / `stopvpn.sh` events |
+| `/var/log/openvpn.log` | OpenVPN daemon (`sudo tail -f`) |
+| `qbit.log` | qBittorrent stdout |
+
+The web app streams its own log to the browser and keeps it in memory only.
+
+---
+
+## VPN connection
+
+### VPN won't connect
+
+1. **Read the OpenVPN log — it almost always says why:**
    ```bash
-   ls /etc/openvpn/client/*.ovpn
-   sudo cat /var/log/openvpn.log
+   sudo tail -50 /var/log/openvpn.log
+   ```
+2. **Check the config was installed:**
+   ```bash
+   ls -lt /etc/openvpn/client/*.ovpn
+   ```
+   Both paths use the **newest** file by mtime. If you have several, an old one
+   is not the problem, but a stale one you thought you replaced might be.
+3. **Verify credentials** with your provider. `--auth-nocache` means they are
+   never cached, so a bad credential fails every attempt identically.
+4. **Try a different server** — download another `.ovpn`. During the startup
+   retry loop, both paths let you swap the config between attempts.
+5. **Test the plain internet path** with the kill switch down:
+   ```bash
+   sudo bash ufw_base.sh
+   ping -c3 1.1.1.1
    ```
 
-2. **Verify credentials:** Ensure your VPN provider credentials are correct
+### Kill switch blocks the connection itself
 
-3. **Check firewall:** Temporarily disable UFW to test
+`ufw_killswitch.sh` allows out only to the VPN server IP/port parsed from the
+`remote` line of the config it picks. Two things break this:
+
+- **A hostname that resolves to a rotating pool.** The rule pins one IP,
+  resolved once. If the provider hands OpenVPN a different address, the
+  connection is denied. Re-run `ufw_killswitch.sh` to re-resolve.
+- **A config with multiple `remote` lines.** Only the first is whitelisted.
+
+Check what was actually allowed:
+
+```bash
+sudo ufw status verbose | grep "VPN server"
+grep "^remote " /etc/openvpn/client/*.ovpn
+```
+
+### Connected, but no internet
+
+1. **Is the default route on the tunnel?**
    ```bash
-   sudo ufw disable
-   ./startvpn.sh
+   ip route get 8.8.8.8      # want "dev tun0"
    ```
-
-4. **Try different server:** Download a different .ovpn file from your VPN provider
-
-5. **Check internet connection:**
+   `tun0` existing is not enough — the monitor requires the route too, and so
+   should you.
+2. **DNS:**
    ```bash
-   ping 8.8.8.8
-   ```
-
-#### VPN Connects But No Internet
-
-**Symptoms:** VPN connects but can't browse internet
-
-**Solutions:**
-
-1. **Check tun0 interface:**
-   ```bash
-   ip addr show tun0
-   ip route show
-   ```
-
-2. **Verify DNS:**
-   ```bash
-   cat /etc/resolv.conf
+   cat /etc/resolv.conf       # web path pins 1.1.1.1 / 1.0.0.1
    nslookup google.com
    ```
-
-3. **Test connectivity:**
+   If `/etc/resolv.conf` is empty or wrong and locked, unlock it first:
+   `sudo chattr -i /etc/resolv.conf`.
+3. **Is the kill switch allowing the tunnel out?**
    ```bash
-   ping 1.1.1.1  # Cloudflare DNS
-   curl https://api.ipify.org  # Should show VPN IP
+   sudo ufw status verbose | grep tun0    # want "ALLOW OUT ... on tun0"
    ```
 
-4. **Restart with DNS fix:**
-   ```bash
-   ./stopvpn.sh --shutdown-only
-   # Manually set DNS
-   echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-   ./startvpn.sh
-   ```
+### IP leak detected
 
-#### IP Leak Detected
+The monitor reports this when the external IP equals the home IP it was given.
+Before assuming the worst, check the home IP is still correct — if your ISP
+rotated your address, the comparison is meaningless in both directions.
 
-**Symptoms:** External IP matches home IP instead of VPN IP
+```bash
+ip route get 8.8.8.8
+curl -s https://api.ipify.org
+dig +short myip.opendns.com @resolver1.opendns.com   # DNS-level check
+```
 
-**Solutions:**
+Also test at https://dnsleaktest.com from a browser on the same box.
 
-1. **Check VPN status:**
-   ```bash
-   ./vpn_status.sh
-   ```
+To restart cleanly:
 
-2. **Verify kill switch:**
-   ```bash
-   sudo iptables -L OUTPUT -n
-   ```
+```bash
+./stopvpn.sh --shutdown-only
+sleep 5
+./startvpn.sh
+```
 
-3. **Check for DNS leaks:**
-   ```bash
-   # Visit https://dnsleaktest.com in browser
-   # OR
-   dig +short myip.opendns.com @resolver1.opendns.com
-   ```
+---
 
-4. **Manual reconnection:**
-   ```bash
-   ./stopvpn.sh --shutdown-only
-   sleep 5
-   ./startvpn.sh
-   ```
+## Monitoring
 
-### BitTorrent Client Issues
+### The monitor keeps shutting everything down
 
-#### qBittorrent Won't Start
+**This is the designed behaviour, not a fault.** Neither monitor reconnects on
+its own. Any of the following stops qBittorrent and exits with the kill switch
+left active:
 
-**Symptoms:** Torrent client fails to start
+- OpenVPN process gone
+- `tun0` gone
+- default route no longer on `tun0`
+- a global IPv6 address appeared
+- external IP matches the home IP
+- three consecutive failed external-IP lookups
 
-**Solutions:**
+Read `vpn_logs/latest.log` — the `CRITICAL` line names which one fired. There
+is no `MAX_RECONNECT_ATTEMPTS` setting to raise; it does not exist in this
+codebase. `MAX_STARTUP_ATTEMPTS` only governs retries during initial connection.
 
-1. **Check if already running:**
+If the trigger is repeated IP-lookup failures on an otherwise healthy tunnel,
+the lookup services are being blocked or are slow. Widen the check interval:
+
+```bash
+# vpn_config.conf
+IP_CHECK_INTERVAL=30
+```
+
+### Monitor won't start
+
+`checkip.sh` refuses to run unless the kill switch is active and IPv6 is
+disabled. It says so and exits:
+
+```bash
+sudo ufw status verbose | grep "deny (outgoing)"   # must match
+sudo bash ufw_killswitch.sh                        # if not
+./checkip.sh <your_home_ip>
+```
+
+If you started with `--no-killswitch`, the monitor is intentionally not started.
+
+### Web app: "Refusing to start qBittorrent"
+
+`POST /api/qbt/start` returns 409 with the reason. Each maps to one
+precondition:
+
+| Reason | Fix |
+| --- | --- |
+| the monitor is not running | Start step 3 before step 4 |
+| OpenVPN is not running | Start the VPN (step 2) |
+| VPN interface (tun0) is down | Tunnel did not come up — check the OpenVPN log |
+| Traffic is not routing through tun0 | Route did not move; restart the VPN |
+| Kill switch is not active | Check sudoers, then re-apply |
+| Could not confirm the external IP | IP services unreachable; retry |
+| External IP … is the home IP | Tunnel is not carrying traffic — do not override |
+
+The last one is a real leak indication. Everything else is a precondition.
+
+### Web app can't apply the kill switch
+
+Almost always missing sudoers entries. Verify:
+
+```bash
+sudo -n ufw status verbose >/dev/null && echo "ufw: ok" || echo "ufw: MISSING"
+sudo -n bash /home/pi/VPN/ufw_base.sh --help >/dev/null 2>&1 \
+  && echo "scripts: ok" || echo "scripts: MISSING"
+```
+
+The `bash` paths in `/etc/sudoers.d/vpn-webapp` must be the **absolute paths to
+this checkout**. See [INSTALL.md](INSTALL.md).
+
+---
+
+## qBittorrent
+
+### Won't start
+
+1. **Already running?**
    ```bash
    pgrep -f qbittorrent-nox
-   killall qbittorrent-nox
    ```
-
-2. **Run manually to see errors:**
+   Both paths treat an already-running client as success and will not start a
+   second one.
+2. **Run it in the foreground to see the error:**
    ```bash
-   qbittorrent-nox
-   # Look for error messages
-   # Press Ctrl+C to stop
+   qbittorrent-nox     # Ctrl+C to stop
    ```
-
-3. **Check port availability:**
+3. **WebUI port taken?**
    ```bash
-   sudo netstat -tulpn | grep 8080
+   sudo ss -tulpn | grep 8080
    ```
-
-4. **Reset configuration:**
+4. **Reset its config** (this project rewrites it on every start anyway):
    ```bash
    mv ~/.config/qBittorrent ~/.config/qBittorrent.backup
    ```
 
-#### BitTorrent Traffic Not Through VPN
+### Traffic might not be going through the tunnel
 
-**Symptoms:** Torrents downloading but concerned about binding
-
-**Solutions:**
-
-1. **Verify binding in qBittorrent web UI:**
-   - Access http://localhost:8080
-   - Go to Settings → Advanced → Network Interface
-   - Ensure "tun0" is selected
-
-2. **Check active connections:**
-   ```bash
-   sudo netstat -tulpn | grep qbittorrent
-   # Should show tun0 or VPN IP
-   ```
-
-3. **Force rebind:**
-   ```bash
-   ./stopvpn.sh --shutdown-only
-   rm -f ~/.config/qBittorrent/qBittorrent.conf
-   ./startvpn.sh
-   ```
-
-### Monitoring Issues
-
-#### Monitoring Script Not Running
-
-**Symptoms:** checkip.sh not active
-
-**Solutions:**
-
-1. **Check if running:**
-   ```bash
-   pgrep -f checkip.sh
-   cat /tmp/vpn_pids/checkip.pid
-   ```
-
-2. **Check logs:**
-   ```bash
-   cat checkvpn.log
-   tail -f ~/.vpn_logs/vpn.log
-   ```
-
-3. **Restart monitoring:**
-   ```bash
-   ./checkip.sh YOUR_HOME_IP &
-   ```
-
-#### False Positive Disconnections
-
-**Symptoms:** VPN keeps reconnecting unnecessarily
-
-**Solutions:**
-
-1. **Adjust monitoring intervals:**
-   Edit `vpn_config.conf`:
-   ```bash
-   FAST_CHECK_INTERVAL=5
-   IP_CHECK_INTERVAL=30
-   ```
-
-2. **Check network stability:**
-   ```bash
-   ping -c 100 8.8.8.8
-   ```
-
-3. **Increase reconnect attempts:**
-   ```bash
-   MAX_RECONNECT_ATTEMPTS=5
-   ```
-
-### Security Issues
-
-#### Kill Switch Not Working
-
-**Symptoms:** Internet accessible when VPN drops
-
-**Solutions:**
-
-1. **Verify iptables rules:**
-   ```bash
-   sudo iptables -L OUTPUT -n -v
-   ```
-
-2. **Manual kill switch setup:**
-   ```bash
-   sudo iptables -A OUTPUT -o lo -j ACCEPT
-   sudo iptables -A OUTPUT -d 192.168.0.0/16 -j ACCEPT
-   sudo iptables -A OUTPUT -o tun+ -j ACCEPT
-   sudo iptables -A OUTPUT -j DROP
-   ```
-
-3. **Check for conflicting rules:**
-   ```bash
-   sudo iptables -L OUTPUT -n --line-numbers
-   # Remove conflicting rules if needed
-   sudo iptables -D OUTPUT <line-number>
-   ```
-
-#### DNS Leaks Persist
-
-**Symptoms:** DNS queries going to ISP
-
-**Solutions:**
-
-1. **Check DNS configuration:**
-   ```bash
-   cat /etc/resolv.conf
-   ```
-
-2. **Verify immutability:**
-   ```bash
-   lsattr /etc/resolv.conf
-   # Should show 'i' flag
-   ```
-
-3. **Manual DNS lock:**
-   ```bash
-   echo "nameserver 1.1.1.1" | sudo tee /etc/resolv.conf
-   echo "nameserver 1.0.0.1" | sudo tee -a /etc/resolv.conf
-   sudo chattr +i /etc/resolv.conf
-   ```
-
-### System Issues
-
-#### Can't Access Local Network
-
-**Symptoms:** Can't reach file shares, printers, or SSH
-
-**Solutions:**
-
-1. **Verify local network exceptions:**
-   ```bash
-   sudo iptables -L OUTPUT -n | grep "192.168\|10.0\|172.16"
-   ```
-
-2. **Add missing rules:**
-   ```bash
-   sudo iptables -I OUTPUT -d 192.168.0.0/16 -j ACCEPT
-   sudo iptables -I OUTPUT -d 10.0.0.0/8 -j ACCEPT
-   sudo iptables -I OUTPUT -d 172.16.0.0/12 -j ACCEPT
-   ```
-
-3. **Restart without kill switch:**
-   ```bash
-   ./stopvpn.sh --shutdown-only
-   ./startvpn.sh --no-killswitch
-   ```
-
-#### System Won't Return to Normal After Shutdown
-
-**Symptoms:** Internet not working after stopping VPN
-
-**Solutions:**
-
-1. **Check if backups exist:**
-   ```bash
-   ls -la /tmp/vpn_backups/
-   ```
-
-2. **Manual restore:**
-   ```bash
-   # Restore iptables
-   if [ -f /tmp/vpn_backups/iptables.backup ]; then
-       sudo iptables-restore < /tmp/vpn_backups/iptables.backup
-   else
-       sudo iptables -F OUTPUT
-       sudo iptables -P OUTPUT ACCEPT
-   fi
-   
-   # Restore DNS
-   sudo chattr -i /etc/resolv.conf
-   if [ -f /tmp/vpn_backups/resolv.conf.backup ]; then
-       sudo mv /tmp/vpn_backups/resolv.conf.backup /etc/resolv.conf
-   fi
-   
-   # Restore IPv6
-   sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0
-   sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0
-   ```
-
-3. **Reboot system:**
-   ```bash
-   sudo reboot
-   ```
-
-#### Permission Denied Errors
-
-**Symptoms:** Script fails with permission errors
-
-**Solutions:**
-
-1. **Make scripts executable:**
-   ```bash
-   chmod +x startvpn.sh stopvpn.sh checkip.sh vpn_status.sh
-   ```
-
-2. **Check sudo access:**
-   ```bash
-   sudo -v
-   ```
-
-3. **Fix ownership:**
-   ```bash
-   sudo chown $USER:$USER *.sh *.py *.conf
-   ```
-
-### Performance Issues
-
-#### High CPU Usage
-
-**Symptoms:** System slow, high CPU from monitoring
-
-**Solutions:**
-
-1. **Increase check intervals:**
-   ```bash
-   # Edit vpn_config.conf
-   FAST_CHECK_INTERVAL=5
-   IP_CHECK_INTERVAL=30
-   ```
-
-2. **Check for runaway processes:**
-   ```bash
-   top
-   # Look for multiple checkip.sh or qbittorrent processes
-   ```
-
-#### Slow VPN Speed
-
-**Symptoms:** Downloads very slow through VPN
-
-**Solutions:**
-
-1. **Try different VPN server:** Use different .ovpn file
-
-2. **Disable IPv6 leak prevention:**
-   ```bash
-   # Edit vpn_config.conf
-   DISABLE_IPV6=false
-   ```
-
-3. **Check qBittorrent settings:**
-   - Reduce number of connections
-   - Disable uTP in qBittorrent settings
-
-## Logs and Diagnostics
-
-### Important Log Locations
-
-- VPN connection log: `/var/log/openvpn.log`
-- Application log: `./vpn_logs/vpn.log`
-- Monitoring log: `./checkvpn.log`
-- qBittorrent log: `./qbit.log`
-
-### Diagnostic Commands
+The session is bound to `tun0` by name *and* by its live IP. Confirm:
 
 ```bash
-# Check all status
-./vpn_status.sh
+grep -E "Interface|InterfaceAddress|Session.Port" ~/.config/qBittorrent/qBittorrent.conf
+sudo ss -tunp | grep qbittorrent    # source addresses should be the tun0 IP
+ip addr show tun0
+```
 
-# View VPN log
-sudo tail -f /var/log/openvpn.log
+The listen port is 19806, matching the UFW rules. If you change one, change the
+other — `qBittorrent.conf` and `ufw_base.sh`.
 
-# View monitoring log
-tail -f checkvpn.log
+If the binding is stale after a reconnect (tun0 got a new IP), restart the
+client; the bind is applied at start time from the address live at that moment.
 
-# View application log
-tail -f ./vpn_logs/vpn.log
+---
 
-# Check network interfaces
-ip addr show
+## System
 
-# Check routing table
-ip route show
+### Can't reach the LAN
 
-# Check iptables rules
-sudo iptables -L -n -v
+The kill switch allows all of RFC1918 out on `eth0`/`wlan0` by default. Check
+what is actually allowed and narrow or widen it via config, not by hand:
 
-# Check DNS
+```bash
+sudo ufw status verbose | grep -E "10\.|172\.|192\.168"
+```
+
+```bash
+# vpn_config.conf
+LAN_CIDRS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
+```
+
+Re-apply with `sudo bash ufw_killswitch.sh`. Rules added by hand are wiped the
+next time the kill switch is applied — it resets UFW first.
+
+### Internet still broken after shutdown
+
+```bash
+sudo ufw status verbose        # outgoing should read "allow"
+lsattr /etc/resolv.conf        # 'i' means still locked
 cat /etc/resolv.conf
-nslookup google.com
-
-# Check processes
-pgrep -a openvpn
-pgrep -a qbittorrent
-pgrep -a checkip
-
-# Test external IP
-curl https://api.ipify.org
 ```
 
-## Getting More Help
-
-If you still have issues:
-
-1. **Enable debug mode:**
-   ```bash
-   # Run with more verbose output
-   sudo tail -f /var/log/openvpn.log
-   ```
-
-2. **Collect diagnostic information:**
-   ```bash
-   ./vpn_status.sh > diagnostic.txt
-   sudo iptables -L -n -v >> diagnostic.txt
-   ip route show >> diagnostic.txt
-   cat /etc/resolv.conf >> diagnostic.txt
-   ```
-
-3. **Report issue on GitHub:**
-   - Include diagnostic output
-   - Describe expected vs actual behavior
-   - Include relevant log snippets
-
-## Emergency Recovery
-
-If something goes wrong and you need to restore system immediately:
+Restore:
 
 ```bash
-# Kill all VPN processes
-sudo pkill -f openvpn
-sudo pkill -f qbittorrent
-sudo pkill -f checkip
-
-# Flush iptables
-sudo iptables -F OUTPUT
-sudo iptables -P OUTPUT ACCEPT
-
-# Restore DNS
+sudo bash ufw_base.sh
 sudo chattr -i /etc/resolv.conf
-echo "nameserver 8.8.8.8" | sudo tee /etc/resolv.conf
-
-# Enable IPv6
+sudo cp ~/.vpn_backups/resolv.conf.backup /etc/resolv.conf
 sudo sysctl -w net.ipv6.conf.all.disable_ipv6=0
-
-# Reboot if needed
-sudo reboot
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=0
 ```
+
+The usual cause is killing the web app directly instead of running
+`bash stop_web.sh` — `pkill` skips the app's `restore_dns()` and
+`restore_ipv6()` and orphans qBittorrent.
+
+### IPv6 concerns
+
+```bash
+grep IPV6 /etc/default/ufw           # must be IPV6=yes
+sysctl net.ipv6.conf.all.disable_ipv6  # 1 while the VPN is up
+ip -6 addr show scope global         # should be empty while the VPN is up
+```
+
+`ufw_base.sh` corrects `IPV6=no` automatically on every run. If a global IPv6
+address appears while the monitor is running, that is one of its shutdown
+triggers.
+
+### Permission denied
+
+```bash
+chmod +x *.sh
+sudo -v
+```
+
+---
+
+## Performance
+
+### High CPU from monitoring
+
+Widen the intervals in `vpn_config.conf`:
+
+```bash
+FAST_CHECK_INTERVAL=5
+IP_CHECK_INTERVAL=30
+```
+
+Also check for duplicates — a stale monitor from a previous session:
+
+```bash
+pgrep -af checkip.sh
+pgrep -af qbittorrent-nox
+```
+
+### Slow throughput
+
+Try a different VPN server first; it is the usual answer. Then reduce
+qBittorrent's connection limits and try disabling µTP. Do **not** disable the
+IPv6 or DNS protections to chase speed — they are not the bottleneck.
+
+---
+
+## Reporting a problem
+
+```bash
+{
+  sudo ufw status verbose
+  ip route show
+  ip route get 8.8.8.8
+  ip addr show tun0
+  pgrep -ax openvpn
+  curl -s https://api.ipify.org; echo
+  cat /etc/resolv.conf
+  sudo tail -30 /var/log/openvpn.log
+  tail -30 vpn_logs/latest.log
+} > diagnostic.txt 2>&1
+```
+
+Redact your home IP and the VPN server address before posting. Open an issue at
+https://github.com/StewartRogers/VPN/issues with expected vs actual behaviour.

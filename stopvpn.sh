@@ -55,7 +55,6 @@ rotate_logs() {
 #
 # VARIABLES
 #
-SSERVICE="q"
 TEMP_DEST=""  # Will be set to SOURCE_DIR during file processing
 
 reset_ufw() {
@@ -114,30 +113,9 @@ shutdown_services() {
     echo "  Shutting down services..."
     echo ""
 
-    if [[ "$SSERVICE" == "q" ]]; then
-        echo "  [ qBittorrent ]"
-        stop_service_by_pid "qbittorrent"
-        sleep 1
-    else
-        echo "  [ Deluge ]"
-        for SERVICE in deluge-web deluged; do
-            if [[ "$SERVICE" == "deluge-web" ]]; then
-                echo "  Stopping Deluge Web Server"
-                log_message "INFO" "Stopping Deluge Web Server"
-            else
-                echo "  Stopping Deluge Daemon"
-                log_message "INFO" "Stopping Deluge Server"
-            fi
-            if pgrep -x "$SERVICE" >/dev/null; then
-                if [[ "$SERVICE" == "deluged" ]]; then
-                    xDELUGE="$(deluge-console "connect 127.0.0.1:58846 ; pause * ; halt ; quit")"
-                    log_message "INFO" "$xDELUGE"
-                fi
-                sudo pkill -f "$SERVICE"
-            fi
-            sleep 1
-        done
-    fi
+    echo "  [ qBittorrent ]"
+    stop_service_by_pid "qbittorrent"
+    sleep 1
 
     echo ""
     echo "  [ Monitoring ]"

@@ -14,21 +14,23 @@
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Load config
+CONFIG_FILE=""
 if [ -f "$HOME/.vpn_config.conf" ]; then
-    source "$HOME/.vpn_config.conf"
+    CONFIG_FILE="$HOME/.vpn_config.conf"
+    source "$CONFIG_FILE"
 elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
-    source "$SCRIPT_DIR/vpn_config.conf"
+    CONFIG_FILE="$SCRIPT_DIR/vpn_config.conf"
+    source "$CONFIG_FILE"
 fi
 
 # Defaults
-BACKUP_DIR="${BACKUP_DIR:-/tmp/vpn_backups}"
 PID_DIR="${PID_DIR:-/tmp/vpn_pids}"
 LOG_DIR="${LOG_DIR:-$SCRIPT_DIR/vpn_logs}"
-XVPNHOME="${VPN_HOME:-/etc/openvpn/}"
 XVPNCHOME="${VPN_CLIENT_HOME:-/etc/openvpn/client/}"
 XVPNLOGFILE="${VPN_LOG_FILE:-/var/log/openvpn.log}"
+MAX_STARTUP_ATTEMPTS="${MAX_STARTUP_ATTEMPTS:-3}"
 
-mkdir -p "$BACKUP_DIR" "$PID_DIR" "$LOG_DIR"
+mkdir -p "$PID_DIR" "$LOG_DIR"
 
 #
 # Parse arguments
@@ -44,6 +46,14 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --ovpn-url)
+            # $2 must be checked before `shift 2`. With no argument following,
+            # `shift 2` has nothing to shift, fails, and leaves $# unchanged —
+            # so `while [[ $# -gt 0 ]]` spins forever on the same argument.
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --ovpn-url requires a URL argument"
+                echo "Use --help for usage information"
+                exit 1
+            fi
             CUSTOM_OVPN_URL="$2"
             shift 2
             ;;
@@ -110,8 +120,62 @@ validate_ip() {
 }
 
 ##
+# Config persistence - update or append a KEY="value" line in CONFIG_FILE.
+# Falls back to the repo's vpn_config.conf if no config file was loaded yet.
+##
+persist_config_value() {
+    local key=$1
+    local value=$2
+    local file="${CONFIG_FILE:-$SCRIPT_DIR/vpn_config.conf}"
+    local quoted
+
+    if [ ! -f "$file" ]; then
+        echo "# VPN Configuration File" > "$file"
+    fi
+
+    # Single-quote the value, escaping any embedded single quotes as '\''.
+    # This file is `source`d on the next run, so a double-quoted value would
+    # let $(...), `...` and $VAR in a path the user typed at a prompt execute
+    # as shell code. Single quotes suppress all of it.
+    quoted="'${value//\'/\'\\\'\'}'"
+
+    if grep -q "^${key}=" "$file"; then
+        # Rewritten in bash rather than `sed -i "s|...|${key}=\"${value}\"|"`.
+        # sed expands & in the replacement to the whole match, so a path like
+        # /mnt/a&b wrote a mangled line back into a file that is then sourced;
+        # a | in the value broke it too, since | was the delimiter.
+        local tmp line replaced=false
+        tmp=$(mktemp "${file}.XXXXXX") || return 1
+        while IFS= read -r line || [ -n "$line" ]; do
+            if [ "$replaced" = false ] && [[ "$line" == "${key}="* ]]; then
+                printf '%s=%s\n' "$key" "$quoted"
+                replaced=true
+            else
+                printf '%s\n' "$line"
+            fi
+        done < "$file" > "$tmp"
+        # Copy contents rather than mv, so the original file's ownership and
+        # permissions survive (mktemp creates 0600).
+        if cat "$tmp" > "$file"; then
+            rm -f "$tmp"
+        else
+            rm -f "$tmp"
+            return 1
+        fi
+    else
+        printf '%s=%s\n' "$key" "$quoted" >> "$file"
+    fi
+    CONFIG_FILE="$file"
+}
+
+##
 # Pre-flight: IPv6 must be disabled before proceeding
 ##
+disable_ipv6() {
+    sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1     > /dev/null 2>&1
+    sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1 > /dev/null 2>&1
+}
+
 check_ipv6_disabled() {
     # Check for global-scope IPv6 addresses - these can route to the internet and cause leaks.
     # Handles all disable methods: kernel param (ipv6.disable=1), sysctl, or simply no addresses.
@@ -132,6 +196,7 @@ check_ipv6_disabled() {
     return 0
 }
 
+disable_ipv6
 if ! check_ipv6_disabled; then
     exit 1
 fi
@@ -158,6 +223,20 @@ trap 'log_message "WARN" "Script interrupted by user"; exit 130' INT TERM
 rotate_logs
 
 divider() { echo "------------------------------------------------------------"; }
+
+# Ask before burning another attempt out of MAX_STARTUP_ATTEMPTS. Only asks
+# when interactive and an attempt is actually still available - non-interactive
+# runs keep auto-retrying (nobody is there to answer), and there's nothing to
+# ask on the last attempt since the loop ends either way.
+confirm_retry() {
+    if [ "$NON_INTERACTIVE" = true ] || [ "$ATTEMPT" -ge "$MAX_STARTUP_ATTEMPTS" ]; then
+        return 0
+    fi
+    local reply
+    read -p "  Retry? [y/N]: " reply
+    reply=$(echo "$reply" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+    [ "$reply" = "y" ]
+}
 
 clear
 echo ""
@@ -232,210 +311,306 @@ if [ "$SWCHECK" = "y" ]; then
 fi
 
 #
-# OVPN Configuration: download or select existing
+# qBittorrent download location (asked once, then remembered in config).
+# If already set, offer to confirm/edit it in place rather than only
+# printing it - press Enter to keep, edit and Enter to change, or clear
+# the line to fall back to qBittorrent's own default.
 #
-divider
-echo ""
-if [ -n "$CUSTOM_OVPN_URL" ]; then
-    GETOVPN="y"
-    OVPNURL="$CUSTOM_OVPN_URL"
-elif [ "$NON_INTERACTIVE" = true ]; then
-    GETOVPN="n"
-else
-    read -p "  Download a new OVPN file? [y/n]: " GETOVPN
-    GETOVPN=$(echo "$GETOVPN" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+if [ "$NON_INTERACTIVE" != true ]; then
+    divider
+    echo ""
+    if [ -n "$QBT_SAVE_PATH" ]; then
+        echo "  Current qBittorrent save path: $QBT_SAVE_PATH"
+        read -e -i "$QBT_SAVE_PATH" -p "  Press Enter to keep, or edit the path: " QBT_SAVE_PATH_NEW
+    else
+        read -e -p "  Where should qBittorrent save downloaded files? [qBittorrent default]: " QBT_SAVE_PATH_NEW
+    fi
+    QBT_SAVE_PATH_NEW="${QBT_SAVE_PATH_NEW/#\~/$HOME}"
+
+    if [ "$QBT_SAVE_PATH_NEW" = "$QBT_SAVE_PATH" ]; then
+        [ -n "$QBT_SAVE_PATH" ] && echo "  Keeping: $QBT_SAVE_PATH"
+    elif [ -n "$QBT_SAVE_PATH_NEW" ]; then
+        if mkdir -p "$QBT_SAVE_PATH_NEW" 2>/dev/null; then
+            QBT_SAVE_PATH="$QBT_SAVE_PATH_NEW"
+            persist_config_value "QBT_SAVE_PATH" "$QBT_SAVE_PATH"
+            log_message "INFO" "qBittorrent save path set: $QBT_SAVE_PATH"
+            echo "  Saved. qBittorrent will download to: $QBT_SAVE_PATH"
+        else
+            echo "  Could not create '$QBT_SAVE_PATH_NEW' - keeping previous setting."
+            log_message "WARN" "Could not create QBT_SAVE_PATH: $QBT_SAVE_PATH_NEW"
+        fi
+    else
+        QBT_SAVE_PATH=""
+        persist_config_value "QBT_SAVE_PATH" ""
+        log_message "INFO" "qBittorrent save path cleared - using qBittorrent's own default"
+        echo "  Cleared. qBittorrent will use its own default save location."
+    fi
+    echo ""
+elif [ -n "$QBT_SAVE_PATH" ]; then
+    echo "  qBittorrent save path: $QBT_SAVE_PATH"
+    echo ""
 fi
 
-if [ "$GETOVPN" = "y" ]; then
-    # Clean out old configs
-    log_message "INFO" "Cleaning $XVPNCHOME for new OVPN file..."
-    sudo rm -f "$XVPNCHOME"*.ovpn
-    rm -f "$SCRIPT_DIR"/*.ovpn
-
-    if [ -z "$OVPNURL" ]; then
-        read -p "Paste URL to download OVPN file: " OVPNURL
-    fi
-
-    if ! validate_url "$OVPNURL"; then
-        log_message "ERROR" "Invalid OVPN URL"
-        ERROR_HANDLED=true
-        exit 1
-    fi
-
-    log_message "INFO" "Downloading OVPN from: $OVPNURL"
-
-    OVPN_FILENAME=$(basename "$OVPNURL" | sed 's/[?&].*//')
-    if [[ ! "$OVPN_FILENAME" =~ \.ovpn$ ]] || [[ "$OVPN_FILENAME" =~ \.aspx ]]; then
-        OVPN_FILENAME=$(echo "$OVPNURL" | grep -oP '/[^/]*\.ovpn' | tail -1 | sed 's|^/||')
-        if [ -z "$OVPN_FILENAME" ] || [[ ! "$OVPN_FILENAME" =~ \.ovpn$ ]]; then
-            OVPN_FILENAME="config_$(date +%Y%m%d_%H%M%S).ovpn"
+#
+# Connect to VPN, retrying with a fresh or re-selected .ovpn on failure.
+# Nothing sensitive is running yet at any point in this loop - qBittorrent
+# only ever starts later, inside checkip.sh, after its own independent
+# verification. That's what makes it safe to relax the firewall between
+# attempts here (a retry needs outgoing open again to download a new .ovpn).
+#
+STARTUP_OK=false
+for ATTEMPT in $(seq 1 "$MAX_STARTUP_ATTEMPTS"); do
+    if [ "$ATTEMPT" -gt 1 ]; then
+        divider
+        echo ""
+        echo "  Retry attempt $ATTEMPT of $MAX_STARTUP_ATTEMPTS"
+        echo ""
+        if [ "$KILLSWITCH_APPLIED" = true ]; then
+            sudo bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1 || true
+            KILLSWITCH_APPLIED=false
         fi
     fi
 
-    curl -s -L -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"
-    if [ $? -ne 0 ] || [ ! -s "$SCRIPT_DIR/$OVPN_FILENAME" ]; then
-        log_message "ERROR" "Failed to download OVPN file"
-        rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
-        ERROR_HANDLED=true
-        exit 1
+    #
+    # OVPN Configuration: download or select existing
+    #
+    divider
+    echo ""
+    OVPNURL=""
+    if [ -n "$CUSTOM_OVPN_URL" ]; then
+        GETOVPN="y"
+        OVPNURL="$CUSTOM_OVPN_URL"
+    elif [ "$NON_INTERACTIVE" = true ]; then
+        GETOVPN="n"
+    else
+        read -p "  Download a new OVPN file? [y/n]: " GETOVPN
+        GETOVPN=$(echo "$GETOVPN" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
     fi
 
-    for XFILE in "$SCRIPT_DIR"/*.ovpn; do
-        log_message "INFO" "Moving $(basename "$XFILE") to $XVPNCHOME"
-        sudo mv "$XFILE" "$XVPNCHOME"
-        sudo chmod 600 "$XVPNCHOME$(basename "$XFILE")"
-        sudo chown root:root "$XVPNCHOME$(basename "$XFILE")"
-    done
+    ATTEMPT_FAILED=false
+    if [ "$GETOVPN" = "y" ]; then
+        # Clean out old configs
+        log_message "INFO" "Cleaning $XVPNCHOME for new OVPN file..."
+        sudo rm -f "$XVPNCHOME"*.ovpn
+        rm -f "$SCRIPT_DIR"/*.ovpn
 
-    XCONFIGFILE=$(sudo ls -t "$XVPNCHOME"*.ovpn 2>/dev/null | head -1)
-else
-    XCONFIGFILE=$(sudo ls -t "$XVPNCHOME"*.ovpn 2>/dev/null | head -1)
-    if [ -z "$XCONFIGFILE" ]; then
-        # Check current directory as fallback
-        if ls "$SCRIPT_DIR"/*.ovpn 1>/dev/null 2>&1; then
-            log_message "INFO" "Moving .ovpn file(s) from script directory to $XVPNCHOME"
-            for XFILE in "$SCRIPT_DIR"/*.ovpn; do
-                sudo mv "$XFILE" "$XVPNCHOME"
-                sudo chmod 600 "$XVPNCHOME$(basename "$XFILE")"
-                sudo chown root:root "$XVPNCHOME$(basename "$XFILE")"
-            done
-            XCONFIGFILE=$(sudo ls -t "$XVPNCHOME"*.ovpn 2>/dev/null | head -1)
+        if [ -z "$OVPNURL" ]; then
+            read -p "Paste URL to download OVPN file: " OVPNURL
         fi
-    fi
-    if [ -z "$XCONFIGFILE" ]; then
-        log_message "ERROR" "No .ovpn file found in $XVPNCHOME"
-        ERROR_HANDLED=true
-        exit 1
-    fi
-fi
 
-OVPN_COUNT=$(sudo find "$XVPNCHOME" -maxdepth 1 -name "*.ovpn" -type f 2>/dev/null | wc -l)
-if [ "$OVPN_COUNT" -gt 1 ]; then
-    echo "  Config (newest of $OVPN_COUNT): $(basename "$XCONFIGFILE")"
-    log_message "INFO" "Multiple OVPN files - using newest: $(basename "$XCONFIGFILE")"
-else
-    echo "  Config: $(basename "$XCONFIGFILE")"
-    log_message "INFO" "OVPN config: $(basename "$XCONFIGFILE")"
-fi
-echo ""
+        if ! validate_url "$OVPNURL"; then
+            log_message "ERROR" "Invalid OVPN URL"
+            echo "  ERROR: Invalid OVPN URL"
+            ATTEMPT_FAILED=true
+        else
+            log_message "INFO" "Downloading OVPN from: $OVPNURL"
 
-#
-# Apply UFW kill switch before starting OpenVPN
-#
-divider
-echo ""
-if [ "$SKIP_KILLSWITCH" != true ]; then
-    echo "  Applying UFW kill switch..."
-    echo ""
-    sudo bash "$SCRIPT_DIR/ufw_killswitch.sh"
-    KS_RC=$?
-    echo ""
-    if [ $KS_RC -eq 0 ]; then
-        KILLSWITCH_APPLIED=true
-        log_message "INFO" "UFW kill switch active"
-    else
-        echo "  ERROR: Failed to apply UFW kill switch"
-        log_message "ERROR" "Failed to apply UFW kill switch - aborting"
-        ERROR_HANDLED=true
-        exit 1
-    fi
-else
-    echo "  Kill switch skipped (--no-killswitch)"
-    log_message "WARN" "Kill switch skipped"
-fi
-echo ""
-
-#
-# Kill any existing OpenVPN (ensures tun0 is used, not tun1/tun2)
-#
-if pgrep -x openvpn > /dev/null; then
-    echo "  Stopping existing OpenVPN process..."
-    sudo pkill -x openvpn
-    sleep 2
-fi
-
-#
-# Start OpenVPN
-#
-divider
-echo ""
-echo "  Starting OpenVPN..."
-log_message "INFO" "Starting OpenVPN: $(basename "$XCONFIGFILE")"
-sudo rm -f "$XVPNLOGFILE"
-sudo openvpn \
-    --config "$XCONFIGFILE" \
-    --log "$XVPNLOGFILE" \
-    --daemon \
-    --ping 10 \
-    --ping-exit 60 \
-    --auth-nocache \
-    --mute-replay-warnings \
-    --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC \
-    --data-ciphers-fallback AES-128-CBC \
-    --verb 3
-
-sleep 7
-echo ""
-
-# Check for success indicator in log
-if sudo grep -q "Initialization Sequence Completed" "$XVPNLOGFILE" 2>/dev/null; then
-    echo "  ** VPN connected - Initialization Sequence Completed **"
-    echo ""
-else
-    echo "  OpenVPN log (last 5 lines):"
-    echo ""
-    sudo tail -5 "$XVPNLOGFILE" 2>/dev/null | sed 's/^/    /'
-    echo ""
-fi
-
-#
-# Wait for VPN confirmation
-#
-divider
-echo ""
-iStart=""
-if [ "$NON_INTERACTIVE" = true ]; then
-    log_message "INFO" "Waiting for VPN connection (non-interactive)..."
-    sleep 10
-    if ip link show tun0 &>/dev/null; then
-        iStart="y"
-        log_message "INFO" "VPN interface detected (tun0)"
-    else
-        iStart="f"
-        log_message "ERROR" "VPN interface not detected"
-    fi
-else
-    while true; do
-        read -p "  Has VPN started? [Y/N/F - F=failed]: " iStart
-        iStart=$(echo "$iStart" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
-        case "$iStart" in
-            y) break ;;
-            f) break ;;
-            n)
-                for i in $(seq 10 -1 0); do
-                    echo -ne "  Rechecking in $i seconds...\r"
-                    sleep 1
-                done
-                echo ""
-                if sudo grep -q "Initialization Sequence Completed" "$XVPNLOGFILE" 2>/dev/null; then
-                    echo "  ** VPN connected - Initialization Sequence Completed **"
-                else
-                    sudo tail -5 "$XVPNLOGFILE" 2>/dev/null | sed 's/^/    /'
+            OVPN_FILENAME=$(basename "$OVPNURL" | sed 's/[?&].*//')
+            if [[ ! "$OVPN_FILENAME" =~ \.ovpn$ ]] || [[ "$OVPN_FILENAME" =~ \.aspx ]]; then
+                OVPN_FILENAME=$(echo "$OVPNURL" | grep -oP '/[^/]*\.ovpn' | tail -1 | sed 's|^/||')
+                if [ -z "$OVPN_FILENAME" ] || [[ ! "$OVPN_FILENAME" =~ \.ovpn$ ]]; then
+                    OVPN_FILENAME="config_$(date +%Y%m%d_%H%M%S).ovpn"
                 fi
-                echo ""
-                ;;
-            *) echo "  Please enter Y, N, or F" ;;
-        esac
-    done
-fi
+            fi
+
+            curl -s -L -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"
+            if [ $? -ne 0 ] || [ ! -s "$SCRIPT_DIR/$OVPN_FILENAME" ]; then
+                log_message "ERROR" "Failed to download OVPN file"
+                echo "  ERROR: Failed to download OVPN file"
+                rm -f "$SCRIPT_DIR/$OVPN_FILENAME"
+                ATTEMPT_FAILED=true
+            else
+                for XFILE in "$SCRIPT_DIR"/*.ovpn; do
+                    log_message "INFO" "Moving $(basename "$XFILE") to $XVPNCHOME"
+                    sudo mv "$XFILE" "$XVPNCHOME"
+                    sudo chmod 600 "$XVPNCHOME$(basename "$XFILE")"
+                    sudo chown root:root "$XVPNCHOME$(basename "$XFILE")"
+                done
+                XCONFIGFILE=$(sudo ls -t "$XVPNCHOME"*.ovpn 2>/dev/null | head -1)
+            fi
+        fi
+    else
+        XCONFIGFILE=$(sudo ls -t "$XVPNCHOME"*.ovpn 2>/dev/null | head -1)
+        if [ -z "$XCONFIGFILE" ]; then
+            # Check current directory as fallback
+            if ls "$SCRIPT_DIR"/*.ovpn 1>/dev/null 2>&1; then
+                log_message "INFO" "Moving .ovpn file(s) from script directory to $XVPNCHOME"
+                for XFILE in "$SCRIPT_DIR"/*.ovpn; do
+                    sudo mv "$XFILE" "$XVPNCHOME"
+                    sudo chmod 600 "$XVPNCHOME$(basename "$XFILE")"
+                    sudo chown root:root "$XVPNCHOME$(basename "$XFILE")"
+                done
+                XCONFIGFILE=$(sudo ls -t "$XVPNCHOME"*.ovpn 2>/dev/null | head -1)
+            fi
+        fi
+        if [ -z "$XCONFIGFILE" ]; then
+            log_message "ERROR" "No .ovpn file found in $XVPNCHOME"
+            echo "  ERROR: No .ovpn file found in $XVPNCHOME"
+            ATTEMPT_FAILED=true
+        fi
+    fi
+
+    if [ "$ATTEMPT_FAILED" = true ]; then
+        if [ "$ATTEMPT" -lt "$MAX_STARTUP_ATTEMPTS" ]; then
+            echo "  ($((MAX_STARTUP_ATTEMPTS - ATTEMPT)) attempt(s) left.)"
+            if ! confirm_retry; then
+                log_message "INFO" "User declined to retry after attempt $ATTEMPT"
+                break
+            fi
+            echo ""
+        fi
+        continue
+    fi
+
+    OVPN_COUNT=$(sudo find "$XVPNCHOME" -maxdepth 1 -name "*.ovpn" -type f 2>/dev/null | wc -l)
+    if [ "$OVPN_COUNT" -gt 1 ]; then
+        echo "  Config (newest of $OVPN_COUNT): $(basename "$XCONFIGFILE")"
+        log_message "INFO" "Multiple OVPN files - using newest: $(basename "$XCONFIGFILE")"
+    else
+        echo "  Config: $(basename "$XCONFIGFILE")"
+        log_message "INFO" "OVPN config: $(basename "$XCONFIGFILE")"
+    fi
+    echo ""
+
+    #
+    # Apply UFW kill switch before starting OpenVPN
+    #
+    divider
+    echo ""
+    if [ "$SKIP_KILLSWITCH" != true ]; then
+        echo "  Applying UFW kill switch..."
+        echo ""
+        sudo bash "$SCRIPT_DIR/ufw_killswitch.sh"
+        KS_RC=$?
+        echo ""
+        if [ $KS_RC -eq 0 ]; then
+            KILLSWITCH_APPLIED=true
+            log_message "INFO" "UFW kill switch active"
+        else
+            # A kill-switch failure is an environment/permissions problem, not
+            # a bad .ovpn - retrying the same way would not help, so this is
+            # the one failure in this loop that aborts immediately.
+            echo "  ERROR: Failed to apply UFW kill switch"
+            log_message "ERROR" "Failed to apply UFW kill switch - aborting"
+            ERROR_HANDLED=true
+            exit 1
+        fi
+    else
+        echo "  Kill switch skipped (--no-killswitch)"
+        log_message "WARN" "Kill switch skipped"
+    fi
+    echo ""
+
+    #
+    # Kill any existing OpenVPN (ensures tun0 is used, not tun1/tun2)
+    #
+    if pgrep -x openvpn > /dev/null; then
+        echo "  Stopping existing OpenVPN process..."
+        sudo pkill -x openvpn
+        sleep 2
+    fi
+
+    #
+    # Start OpenVPN
+    #
+    divider
+    echo ""
+    echo "  Starting OpenVPN..."
+    log_message "INFO" "Starting OpenVPN: $(basename "$XCONFIGFILE")"
+    sudo rm -f "$XVPNLOGFILE"
+    sudo openvpn \
+        --config "$XCONFIGFILE" \
+        --log "$XVPNLOGFILE" \
+        --daemon \
+        --ping 10 \
+        --ping-exit 60 \
+        --auth-nocache \
+        --mute-replay-warnings \
+        --data-ciphers AES-256-GCM:AES-128-GCM:CHACHA20-POLY1305:AES-128-CBC \
+        --data-ciphers-fallback AES-128-CBC \
+        --verb 3
+
+    sleep 7
+    echo ""
+
+    # Check for success indicator in log
+    if sudo grep -q "Initialization Sequence Completed" "$XVPNLOGFILE" 2>/dev/null; then
+        echo "  ** VPN connected - Initialization Sequence Completed **"
+        echo ""
+    else
+        echo "  OpenVPN log (last 5 lines):"
+        echo ""
+        sudo tail -5 "$XVPNLOGFILE" 2>/dev/null | sed 's/^/    /'
+        echo ""
+    fi
+
+    #
+    # Wait for VPN confirmation
+    #
+    divider
+    echo ""
+    iStart=""
+    if [ "$NON_INTERACTIVE" = true ]; then
+        log_message "INFO" "Waiting for VPN connection (non-interactive)..."
+        sleep 10
+        if ip link show tun0 &>/dev/null; then
+            iStart="y"
+            log_message "INFO" "VPN interface detected (tun0)"
+        else
+            iStart="f"
+            log_message "ERROR" "VPN interface not detected"
+        fi
+    else
+        while true; do
+            read -p "  Has VPN started? [Y/N/F - F=failed]: " iStart
+            iStart=$(echo "$iStart" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
+            case "$iStart" in
+                y) break ;;
+                f) break ;;
+                n)
+                    for i in $(seq 10 -1 0); do
+                        echo -ne "  Rechecking in $i seconds...\r"
+                        sleep 1
+                    done
+                    echo ""
+                    if sudo grep -q "Initialization Sequence Completed" "$XVPNLOGFILE" 2>/dev/null; then
+                        echo "  ** VPN connected - Initialization Sequence Completed **"
+                    else
+                        sudo tail -5 "$XVPNLOGFILE" 2>/dev/null | sed 's/^/    /'
+                    fi
+                    echo ""
+                    ;;
+                *) echo "  Please enter Y, N, or F" ;;
+            esac
+        done
+    fi
+
+    if [ "$iStart" = "y" ]; then
+        STARTUP_OK=true
+        break
+    fi
+
+    log_message "WARN" "Connection attempt $ATTEMPT failed"
+    if [ "$KILLSWITCH_APPLIED" = true ]; then
+        sudo bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1 || true
+        KILLSWITCH_APPLIED=false
+    fi
+    if [ "$ATTEMPT" -lt "$MAX_STARTUP_ATTEMPTS" ]; then
+        echo "  Attempt $ATTEMPT failed. ($((MAX_STARTUP_ATTEMPTS - ATTEMPT)) attempt(s) left.)"
+        if ! confirm_retry; then
+            log_message "INFO" "User declined to retry after attempt $ATTEMPT"
+            break
+        fi
+    fi
+done
 
 #
-# Launch monitoring if VPN confirmed
+# Launch monitoring if VPN confirmed, otherwise report final failure
 #
 echo ""
 divider
 echo ""
-if [ "$iStart" = "y" ]; then
+if [ "$STARTUP_OK" = true ]; then
     if [ -z "$YHOMEIP" ]; then
         echo "  ERROR: Home IP not captured - cannot start monitor"
         echo "  Run manually: ./checkip.sh <your_home_ip>"
@@ -454,8 +629,9 @@ if [ "$iStart" = "y" ]; then
         echo "  Monitor log:  tail -f $LOG_DIR/latest.log"
         echo "  To stop:      ./stopvpn.sh"
     fi
-elif [ "$iStart" = "f" ]; then
-    log_message "ERROR" "VPN startup failed"
+else
+    log_message "ERROR" "VPN startup failed after $MAX_STARTUP_ATTEMPTS attempt(s)"
+    echo "  VPN startup failed after $MAX_STARTUP_ATTEMPTS attempt(s). Giving up."
     echo "  Resetting UFW..."
     if [ "$KILLSWITCH_APPLIED" = true ]; then
         sudo bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1 || true

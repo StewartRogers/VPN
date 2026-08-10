@@ -5,8 +5,10 @@ Interactive video file renamer / mover.
 Usage:  python3 organize.py
 """
 
+import glob
 import os
 import re
+import readline
 import shutil
 import sys
 from collections import defaultdict
@@ -40,9 +42,31 @@ def clean_filename(filename: str) -> str:
     return f"{name}{ext.lower()}"
 
 
+def _complete_dir(text: str, state: int):
+    """Tab-complete filesystem directories, expanding ~ as it's typed."""
+    expanded = os.path.expanduser(text)
+    matches = [p + "/" for p in glob.glob(expanded + "*") if os.path.isdir(p)]
+    if text.startswith("~") and not expanded.startswith("~"):
+        home = os.path.expanduser("~")
+        matches = [m.replace(home, "~", 1) if m.startswith(home) else m for m in matches]
+    try:
+        return matches[state]
+    except IndexError:
+        return None
+
+
 def _prompt(label: str, default: str = "") -> str:
     suffix = f" [{default}]" if default else ""
-    value = input(f"  {label}{suffix}: ").strip()
+    old_completer = readline.get_completer()
+    old_delims = readline.get_completer_delims()
+    readline.set_completer_delims(" \t\n")
+    readline.set_completer(_complete_dir)
+    readline.parse_and_bind("tab: complete")
+    try:
+        value = input(f"  {label}{suffix}: ").strip()
+    finally:
+        readline.set_completer(old_completer)
+        readline.set_completer_delims(old_delims)
     return value if value else default
 
 
@@ -118,7 +142,7 @@ def process_file(
     tv_dir: str,
     counter: str,
 ) -> str:
-    """Process one file interactively. Returns 'moved', 'skipped', or 'error'."""
+    """Process one file interactively. Returns 'moved', 'duplicate', 'skipped', or 'error'."""
     print(f"  {counter}  {f['rel']}")
 
     # Rename
@@ -150,7 +174,7 @@ def process_file(
         if os.path.getsize(final) == f["size"]:
             print("  Skipped: identical file already at destination.")
             print()
-            return "skipped"
+            return "duplicate"
         print("  Warning: file already exists at destination with a different size.")
         if not _yn("  Overwrite?", default=False):
             print("  Skipped.")
@@ -210,7 +234,7 @@ def main() -> None:
         sys.exit(0)
 
     print()
-    moved = skipped = errors = 0
+    moved = duplicates = skipped = errors = 0
     counter = 0
 
     # Subdirectories — one accept/deny prompt per top-level subdir
@@ -223,24 +247,36 @@ def main() -> None:
             print("  Skipped.\n")
             continue
         print()
-        subdir_moved = 0
+        subdir_moved = subdir_duplicate = subdir_kept = subdir_errors = 0
         for f in files:
             counter += 1
             result = process_file(f, source_dir, movies_dir, tv_dir, f"[{counter}/{total}]")
             moved += result == "moved"
-            skipped += result == "skipped"
+            duplicates += result == "duplicate"
+            skipped += result in ("skipped", "duplicate")
             errors += result == "error"
             subdir_moved += result == "moved"
+            subdir_duplicate += result == "duplicate"
+            subdir_kept += result == "skipped"
+            subdir_errors += result == "error"
 
-        if subdir_moved:
+        # Every file is accounted for either this run (moved) or a prior one
+        # (duplicate already at destination) — the folder is safe to clear,
+        # as long as nothing in it failed to move or was deliberately kept.
+        if (subdir_moved or subdir_duplicate) and not subdir_errors:
             full_subdir = os.path.join(source_dir, rel_dir)
             if os.path.exists(full_subdir):
-                if _yn(f"  Delete '{rel_dir}' and all remaining files?", default=True):
+                prompt = f"  Delete '{rel_dir}'?"
+                if subdir_kept:
+                    prompt = f"  Delete '{rel_dir}' and the {subdir_kept} file(s) you kept in it?"
+                if _yn(prompt, default=not subdir_kept):
                     try:
                         shutil.rmtree(full_subdir)
                         print(f"  Done. Deleted '{rel_dir}'.")
                     except Exception as exc:
                         print(f"  ERROR deleting '{rel_dir}': {exc}")
+        elif subdir_errors:
+            print(f"  '{rel_dir}' left in place - {subdir_errors} file(s) failed to move.")
         print()
 
     # Root-level files (no directory prompt — already in the download root)
@@ -251,11 +287,12 @@ def main() -> None:
             counter += 1
             result = process_file(f, source_dir, movies_dir, tv_dir, f"[{counter}/{total}]")
             moved += result == "moved"
-            skipped += result == "skipped"
+            duplicates += result == "duplicate"
+            skipped += result in ("skipped", "duplicate")
             errors += result == "error"
 
     print("  " + "-" * 40)
-    print(f"  Moved: {moved}   Skipped: {skipped}   Errors: {errors}")
+    print(f"  Moved: {moved}   Duplicates: {duplicates}   Skipped: {skipped - duplicates}   Errors: {errors}")
     print()
 
 
