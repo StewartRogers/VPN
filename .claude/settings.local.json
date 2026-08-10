@@ -54,7 +54,8 @@
       "Bash(bash /tmp/pcv_test.sh)",
       "Bash(bash /tmp/pcv_test2.sh)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }
