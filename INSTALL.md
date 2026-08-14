@@ -47,10 +47,18 @@ qbittorrent-nox
 
 Then set a permanent password through the WebUI at `http://localhost:8080`.
 
-This project manages `~/.config/qBittorrent/qBittorrent.conf` at start time —
-it sets the listen port to 19806 (matching the UFW rules), binds the session to
-`tun0` by name and live IP, and applies `QBT_SAVE_PATH`. The tracked
-`qBittorrent.conf` in the repo is the template it installs from.
+This project manages `~/.config/qBittorrent/qBittorrent.conf` at start time
+through `qbt_config.py`, which both start paths call. It owns exactly four
+things: the `tun0` bind (by name and live IP), `QBT_SAVE_PATH`, the
+`QBT_MAX_ACTIVE_DOWNLOADS` queue limit, and the listen port 19806 that matches
+the UFW rules. Everything else in that file is left alone — it is a merge, not
+an overwrite, so WebUI credentials, categories and speed limits survive. The
+tracked `qBittorrent.conf` in the repo is only a seed for a first run, when no
+config exists yet.
+
+qBittorrent reads this file **once at startup** and rewrites all of it on exit,
+so settings only take effect on the next start — and editing it underneath a
+running client achieves nothing. Stop qBittorrent before changing them.
 
 ## 4. VPN configuration file
 

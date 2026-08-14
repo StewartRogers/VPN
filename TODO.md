@@ -4,7 +4,7 @@ Open items, known gaps, and things deliberately left alone. What is *already
 implemented* is described in `ENHANCEMENTS.md`, not here.
 
 > **Testing status of the `fix/vpn-leak-paths` branch:** the Python suite passes
-> on the Pi (68 tests). The shell changes are syntax-clean but have had only
+> on the Pi (79 tests). The shell changes are syntax-clean but have had only
 > limited end-to-end testing. Exercise `stopvpn.sh`, `stop_web.sh`, and
 > `remove_killswitch.sh` on real hardware before trusting them in anger.
 
@@ -69,10 +69,10 @@ asked not to change `startvpn.sh`.
   `$HOME/.vpn_backups`; `stopvpn.sh:23` defaults to `/tmp/vpn_backups` if unset;
   `webapp/monitor.py:28` and `stop_web.sh:29` hardcode `~/.vpn_backups` and
   ignore the config entirely. Pick one source of truth.
-- **`qBittorrent.conf` tracked in the repo root** is a template, which reads as
-  confusing. Move it to `examples/` or document it in place. Both paths install
-  from it (`monitor.py:apply_qbittorrent_config`,
-  `checkip.sh:apply_qbittorrent_config`).
+- **`qBittorrent.conf` tracked in the repo root** is a seed config, which reads
+  as confusing. Move it to `examples/` or document it in place. It is now only
+  used on a first run, when no `~/.config/qBittorrent/qBittorrent.conf` exists;
+  after that `qbt_config.py` merges into the live file.
 - **Stale `checkvpn.log` in the repo root.** Nothing writes it anymore — session
   logs go to `vpn_logs/`. Delete it and add it to `.gitignore`.
 - **No `shellcheck` in CI** on a mostly-bash project. No coverage at all for
@@ -85,9 +85,10 @@ asked not to change `startvpn.sh`.
 
 ## Path drift (item 10, partly closed)
 
-Closed: stop paths now match, qBittorrent `tun0` binding now matches, IPv4
-validation now matches, and all three config selections now take the newest
-`.ovpn` by mtime.
+Closed: stop paths now match, IPv4 validation now matches, all three config
+selections now take the newest `.ovpn` by mtime, and the whole qBittorrent
+config step is now *shared* rather than mirrored - both paths call
+`qbt_config.py`, so the tun0 bind, save path and queue limit cannot drift.
 
 Still differing:
 
@@ -114,6 +115,24 @@ Still differing:
 
 Kept for context on why the code looks the way it does.
 
+- **The qBittorrent config was installed by copying the repo template over
+  `~/.config/qBittorrent/qBittorrent.conf`**, then patching it with `sed` /
+  `re.sub`. That wiped everything qBittorrent owns (WebUI credentials,
+  categories, speed limits) on every single start, since the client rewrites
+  that whole file when it exits. Replaced by `qbt_config.py`, which merges only
+  the keys this project owns and leaves the rest byte-for-byte.
+- **No concurrent-download limit existed, and could not be set.** The template
+  shipped `Session\QueueingSystemEnabled=false`, which disables qBittorrent's
+  queue outright, so no max-active value could take effect. Now driven by
+  `QBT_MAX_ACTIVE_DOWNLOADS`, which also raises `Session\MaxActiveTorrents` -
+  that cap counts seeds as well, so leaving it at the default would keep the
+  download limit permanently out of reach.
+- **`stop_vpn()` tore down the kill switch without confirming anything had
+  stopped.** It fired `pkill -f openvpn` and logged "OpenVPN stopped"
+  unconditionally, then reset UFW. A qBittorrent that survived SIGTERM would
+  find the ISP link wide open. Both processes are now polled to exit with a
+  SIGKILL escalation, and teardown is skipped entirely (kill switch left up,
+  CRITICAL logged) if qBittorrent is still alive.
 - **`stop_web.sh` removed the kill switch but left torrents running.** It did
   `pkill -f webapp/app.py` then `ufw_base.sh`. Neither qBittorrent nor OpenVPN
   was stopped, and since qBittorrent was a child of Flask, killing Flask

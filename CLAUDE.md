@@ -20,6 +20,7 @@ usually means checking the other.
 | Monitor | `checkip.sh` (bash) | `VPNMonitor._run()` in `webapp/monitor.py` |
 | Leak check | `vpn_active.py` | `VPNMonitor.get_external_ip()` |
 | Teardown | `stopvpn.sh` | `stop_web.sh` |
+| qBittorrent config | `qbt_config.py` | `qbt_config.py` |
 
 Known drift between them is tracked in `TODO.md` — read it before assuming a
 difference is a bug you just found.
@@ -32,7 +33,8 @@ difference is a bug you just found.
 ./checkip.sh <home_ip>         # monitor alone (requires kill switch already up)
 python3 vpn_active.py <home_ip>   # one-shot check; exit 1 = secure, 0 = not
 
-python3 -m pytest -q           # 68 tests
+python3 qbt_config.py          # apply the qBittorrent settings by hand
+python3 -m pytest -q           # 79 tests
 ```
 
 Live state, without any of the above:
@@ -78,7 +80,12 @@ is a leak:
 1. **The kill switch goes up before OpenVPN starts** and comes down only after
    qBittorrent and OpenVPN are confirmed stopped. Every teardown path
    (`stopvpn.sh`, `stop_web.sh`, `remove_killswitch.sh`, `stop_vpn()`) stops
-   clients first, relaxes the firewall last.
+   clients first, relaxes the firewall last. *Confirmed* is the operative word:
+   issuing the stops in the right order is not the same as them having worked,
+   so `stop_vpn()` polls both processes to exit (escalating to SIGKILL) and
+   skips `teardown_killswitch()` entirely if qBittorrent is still alive —
+   opening UFW under a live client hands it the ISP link. It logs CRITICAL and
+   leaves the kill switch up instead.
 2. **`ufw_base.sh` applies its outgoing policy before `ufw --force enable`.**
    `UFW_OUT_POLICY=deny` (passed by `ufw_killswitch.sh`) must never be applied
    after enabling — that was a fail-open window on every kill-switch
@@ -105,6 +112,36 @@ There is no status script. `vpn_status.sh` was removed — nothing called it, an
 it reported the kill switch by grepping `iptables -L OUTPUT`, which never
 matches because UFW keeps its rules in `ufw-user-output`.
 
+## qBittorrent configuration
+
+`qbt_config.py` is the one place either path touches
+`~/.config/qBittorrent/qBittorrent.conf`, and it is shared rather than
+duplicated — this is the only part of the two-path split that does not drift.
+
+It **merges**; it does not install the repo template over the live file. That
+matters for two reasons: qBittorrent rewrites its entire config on exit, so
+everything set through its WebUI (credentials, categories, limits) exists only
+in that file; and the client reads the file *once at startup*, so a write under
+a running instance is ignored now and discarded later. Apply before launching,
+never after. `qbt_config.py` warns when the client is already running.
+
+The keys it owns, and nothing else:
+
+- `Session\Interface`, `Session\InterfaceName`, `Session\InterfaceAddress` —
+  the tunnel bind. The address bind is the load-bearing one: a name bind is a
+  preference, an address bind is enforced by the kernel. When tun0 has no
+  address the stale key is removed rather than left pointing at a dead IP.
+- `Session\DefaultSavePath` — from `QBT_SAVE_PATH`.
+- `Session\QueueingSystemEnabled`, `Session\MaxActiveDownloads`,
+  `Session\MaxActiveTorrents` — from `QBT_MAX_ACTIVE_DOWNLOADS`. `MaxActiveTorrents`
+  caps downloads *and* seeds together, so it is raised to downloads + the
+  existing upload slots; it is never lowered. With no configured value,
+  queueing is left untouched — no limit is hardcoded here.
+
+The `[Preferences] Queueing\*` and `Downloads\SavePath` entries in older config
+files are pre-4.0 leftovers that qBittorrent migrated once and no longer reads.
+Leave them alone; writing there does nothing.
+
 ## Firewall
 
 **UFW exclusively.** There are no `iptables` calls in this project;
@@ -130,7 +167,7 @@ describes the opposite of current behaviour: the kill switch is mandatory.
 
 Live keys: `FAST_CHECK_INTERVAL`, `IP_CHECK_INTERVAL`, `MAX_STARTUP_ATTEMPTS`,
 `MAX_SESSIONS`, `VPN_CLIENT_HOME`, `VPN_LOG_FILE`, `PID_DIR`, `LOG_DIR`,
-`BACKUP_DIR`, `QBT_SAVE_PATH`, `LAN_CIDRS`.
+`BACKUP_DIR`, `QBT_SAVE_PATH`, `QBT_MAX_ACTIVE_DOWNLOADS`, `LAN_CIDRS`.
 
 ## Logs
 

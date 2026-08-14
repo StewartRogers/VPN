@@ -229,7 +229,8 @@ this checkout**. See [INSTALL.md](INSTALL.md).
    ```bash
    sudo ss -tulpn | grep 8080
    ```
-4. **Reset its config** (this project rewrites it on every start anyway):
+4. **Reset its config** (the settings this project owns are re-applied on the
+   next start; anything you set in the WebUI is not):
    ```bash
    mv ~/.config/qBittorrent ~/.config/qBittorrent.backup
    ```
@@ -249,6 +250,30 @@ other — `qBittorrent.conf` and `ufw_base.sh`.
 
 If the binding is stale after a reconnect (tun0 got a new IP), restart the
 client; the bind is applied at start time from the address live at that moment.
+
+### The settings in the file are right, but qBittorrent's UI disagrees
+
+If the config says `Session\Interface=tun0` while **Tools → Options → Advanced**
+shows *Network Interface: Any* and *Optional IP address to bind to: All
+addresses*, the running client never read that file. qBittorrent loads its
+config **once at startup** and rewrites the whole thing on exit, so:
+
+- a client started before the config was applied keeps the old settings in
+  memory, ignores the file, and overwrites it on shutdown;
+- a client started while `tun0` was down cannot bind to it and falls back to
+  listening on everything — the kill switch is what keeps that contained.
+
+Either way it is not bound to the tunnel. Stop qBittorrent, then start it again
+through the web app's qBittorrent step (or `checkip.sh`), which applies the
+config *before* launching the process:
+
+```bash
+sudo pkill -f qbittorrent-nox
+python3 qbt_config.py          # apply now; prints what it set
+```
+
+`qbt_config.py` warns on stderr if qBittorrent is already running, precisely
+because that write would be ignored and then discarded.
 
 ---
 

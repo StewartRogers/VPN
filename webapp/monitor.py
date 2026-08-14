@@ -2,9 +2,9 @@ import glob
 import ipaddress
 import os
 import re
-import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -21,6 +21,11 @@ MAX_LOGS = 500
 
 # Absolute path to the VPN project root (one level above this file's webapp/ dir)
 _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# qbt_config.py lives in the project root and is shared with the CLI path
+if _VPN_DIR not in sys.path:
+    sys.path.insert(0, _VPN_DIR)
+import qbt_config
 
 # Directory used to store iptables / DNS / IPv6 backups across VPN start/stop.
 # Stored under the user's home directory — not in /tmp — to prevent other local
@@ -119,6 +124,7 @@ class VPNMonitor:
         self.fast_interval = fast_interval
         self.ip_interval = ip_interval
         self.save_path = read_config_value("QBT_SAVE_PATH", "")
+        self.max_active_downloads = qbt_config.configured_max_active()
 
         self.status = {
             "running": False,
@@ -256,21 +262,6 @@ class VPNMonitor:
     def get_external_ip(self):
         return detect_external_ip()
 
-    def _get_tun0_ip(self):
-        """Return the current IPv4 address assigned to tun0, or None."""
-        try:
-            r = subprocess.run(
-                ["ip", "-4", "addr", "show", "tun0"],
-                capture_output=True, text=True, timeout=2,
-            )
-            for line in r.stdout.splitlines():
-                line = line.strip()
-                if line.startswith("inet "):
-                    return line.split()[1].split("/")[0]
-        except Exception:
-            pass
-        return None
-
     def is_qbittorrent_running(self):
         try:
             r = subprocess.run(["pgrep", "-f", "qbittorrent-nox"], capture_output=True, timeout=2)
@@ -304,71 +295,33 @@ class VPNMonitor:
         self.status["qbittorrent"] = False
 
     def apply_qbittorrent_config(self):
-        """Install the repo's qBittorrent.conf before starting, injecting the
-        current tun0 IP as Session\\InterfaceAddress for a hard socket-level bind.
-        Binding by name alone is a soft preference; binding by IP is enforced at
-        the OS level — the kernel will reject sends if the source IP is invalid.
+        """Apply the settings this project owns to the live qBittorrent config.
+
+        Shared with the CLI path via qbt_config.py, so the two implementations
+        cannot drift: the tun0 bind (by name and by live address — an address
+        bind is enforced by the kernel, a name bind is only a preference), the
+        save path, and the concurrent-download limit.
+
+        This merges rather than overwriting. qBittorrent rewrites its whole
+        config on exit, so anything set from its Web UI lives only in that
+        file; copying the repo template over it reset those settings on every
+        start.
         """
-        src = os.path.join(_VPN_DIR, "qBittorrent.conf")
-        dst = os.path.expanduser("~/.config/qBittorrent/qBittorrent.conf")
-        if not os.path.exists(src):
-            self.log("No qBittorrent.conf in repo — skipping config install", source="QBIT", level="WARNING")
-            return
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        cmd = [sys.executable, os.path.join(_VPN_DIR, "qbt_config.py"),
+               "--save-path", self.save_path or ""]
+        if self.max_active_downloads is not None:
+            cmd += ["--max-active", str(self.max_active_downloads)]
         try:
-            shutil.copy2(src, dst)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
         except Exception as e:
-            self.log(f"Could not install qBittorrent config — {e}", source="QBIT", level="WARNING")
+            self.log(f"Could not apply qBittorrent config — {e}", source="QBIT", level="WARNING")
             return
-
-        # Inject the live tun0 IP so qBittorrent uses a hard IP-level socket bind
-        tun0_ip = self._get_tun0_ip()
-        if tun0_ip:
-            try:
-                with open(dst, "r") as f:
-                    content = f.read()
-                # Replace existing InterfaceAddress or insert after InterfaceName line
-                if r"Session\InterfaceAddress" in content:
-                    content = re.sub(
-                        r"Session\\InterfaceAddress=.*",
-                        f"Session\\\\InterfaceAddress={tun0_ip}",
-                        content,
-                    )
-                else:
-                    content = content.replace(
-                        r"Session\InterfaceName=tun0",
-                        f"Session\\InterfaceName=tun0\nSession\\InterfaceAddress={tun0_ip}",
-                    )
-                with open(dst, "w") as f:
-                    f.write(content)
-                self.log(f"Applied qBittorrent config — bound to tun0 ({tun0_ip})", source="QBIT")
-            except Exception as e:
-                self.log(f"Could not inject InterfaceAddress — {e}", source="QBIT", level="WARNING")
-        else:
-            self.log("Applied qBittorrent config — tun0 IP unavailable, bound by name only", source="QBIT", level="WARNING")
-
-        # Apply the configured download location, if set
-        if self.save_path:
-            try:
-                os.makedirs(self.save_path, exist_ok=True)
-                with open(dst, "r") as f:
-                    content = f.read()
-                if r"Session\DefaultSavePath" in content:
-                    content = re.sub(
-                        r"Session\\DefaultSavePath=.*",
-                        f"Session\\\\DefaultSavePath={self.save_path}",
-                        content,
-                    )
-                else:
-                    content = content.replace(
-                        "[BitTorrent]",
-                        f"[BitTorrent]\nSession\\DefaultSavePath={self.save_path}",
-                    )
-                with open(dst, "w") as f:
-                    f.write(content)
-                self.log(f"Applied qBittorrent config — save path: {self.save_path}", source="QBIT")
-            except Exception as e:
-                self.log(f"Could not set qBittorrent save path — {e}", source="QBIT", level="WARNING")
+        for line in result.stdout.splitlines():
+            if line.strip():
+                self.log(f"Applied qBittorrent config — {line.strip()}", source="QBIT")
+        for line in result.stderr.splitlines():
+            if line.strip():
+                self.log(f"qBittorrent config — {line.strip()}", source="QBIT", level="WARNING")
 
     def set_save_path(self, path):
         """Update and persist the qBittorrent download location for future starts."""
@@ -847,14 +800,38 @@ class VPNMonitor:
         self._retry_cancel.set()
 
     def stop_vpn(self):
-        # qBittorrent must be confirmed stopped before the kill switch is
+        # qBittorrent must be *confirmed* stopped before the kill switch is
         # touched — teardown_killswitch() sets outgoing to unrestricted, and
         # anything still running at that point would egress on the ISP link.
         if self.is_qbittorrent_running():
             self.stop_qbittorrent()
+
         self.log("Stopping OpenVPN...", source="OPENVPN")
         subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
-        self.log("OpenVPN stopped", source="OPENVPN")
+        for _ in range(10):
+            if not self.check_openvpn_process():
+                break
+            time.sleep(0.5)
+        else:
+            self.log("OpenVPN still running - sending SIGKILL", source="OPENVPN", level="WARNING")
+            subprocess.run(["sudo", "pkill", "-9", "-f", "openvpn"], capture_output=True)
+            time.sleep(0.5)
+        if self.check_openvpn_process():
+            self.log("OpenVPN did not stop", source="OPENVPN", level="WARNING")
+        else:
+            self.log("OpenVPN stopped", source="OPENVPN")
+
+        # Last gate before the firewall opens. Issuing the stops in the right
+        # order is not the same as them having worked: if a client survived
+        # both SIGTERM and SIGKILL, relaxing UFW hands it the ISP link. Leave
+        # the kill switch up instead and say so.
+        if self.is_qbittorrent_running():
+            self.log(
+                "Kill switch left ACTIVE — qBittorrent is still running and would "
+                "egress unprotected. Kill it, then run ./remove_killswitch.sh.",
+                level="CRITICAL",
+            )
+            return
         self.teardown_killswitch()
         self.restore_ipv6()
         self.restore_dns()

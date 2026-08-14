@@ -14,7 +14,10 @@ live in `TODO.md`, not here.
 - **Fail-closed ordering** — every teardown path stops qBittorrent and OpenVPN
   *before* relaxing the firewall, and every startup path raises the firewall
   before starting OpenVPN. There is no window where traffic can egress on the
-  ISP link.
+  ISP link. Both stops are polled to confirmation with a SIGKILL escalation
+  rather than assumed: if qBittorrent outlives both signals the firewall is
+  left locked down and the operator is told, since opening UFW under a live
+  client is the leak the ordering exists to prevent.
 - **DNS leak prevention** — `/etc/resolv.conf` replaced with Cloudflare
   1.1.1.1/1.0.0.1 and locked with `chattr +i`; the original is backed up to
   `~/.vpn_backups/resolv.conf.backup` and restored on shutdown. Web path only.
@@ -23,7 +26,17 @@ live in `TODO.md`, not here.
   `IPV6=no` to `IPV6=yes`, because UFW silently ignores IPv6 otherwise — every
   kill-switch guarantee in this project depends on that one line.
 - **qBittorrent interface binding** — bound to `tun0` by name and by its live
-  IP at start time (`Session\InterfaceAddress`), a hard socket-level bind.
+  IP at start time (`Session\InterfaceAddress`), a hard socket-level bind. A
+  name bind is a preference; an address bind is enforced by the kernel, which
+  refuses the send once that address is gone. If tun0 has no address the stale
+  key is removed rather than left pointing at an IP the tunnel no longer holds.
+- **One qBittorrent config step for both paths** — `qbt_config.py` is called by
+  `checkip.sh` and `webapp/monitor.py` alike, so the bind, the save path
+  (`QBT_SAVE_PATH`) and the concurrent-download limit
+  (`QBT_MAX_ACTIVE_DOWNLOADS`) cannot drift between them. It merges those keys
+  into the live config and leaves everything qBittorrent owns untouched, and it
+  warns rather than reporting success if the client is already running — a
+  write under a running client is ignored at once and overwritten on exit.
 - **SSRF protection** — `.ovpn` download rejects non-HTTPS URLs, private,
   loopback and reserved addresses, and unresolvable hosts. The resolved IP is
   pinned for the duration of the fetch, proxies are disabled (a proxy would
@@ -89,9 +102,9 @@ the same search order. See README.md for the live keys.
 
 ## Code quality
 
-- **Test suite** — 68 pytest unit tests covering the monitor loop, kill-switch
-  state machine, IP leak detection, the SSRF guard, logging, and the torrent
-  start gate.
+- **Test suite** — 79 pytest unit tests covering the monitor loop, kill-switch
+  state machine, IP leak detection, the SSRF guard, logging, the torrent start
+  gate, and the qBittorrent config merge.
 - **CI** — GitHub Actions runs `flake8 --select=E9,F` and pytest on every push
   and PR to `master`. No `shellcheck` yet, on a mostly-bash project — see
   `TODO.md`.

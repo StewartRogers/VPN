@@ -117,7 +117,10 @@ anything else.
 The Step 4 button is disabled until the monitor is running and the tunnel is
 verified, and `POST /api/qbt/start` enforces the same conditions server-side —
 so a stale tab or a stray `curl` cannot start torrents early. Live OpenVPN logs
-stream into the dashboard. **Stop All** tears down in reverse order.
+stream into the dashboard. **Stop All** tears down in reverse order —
+qBittorrent, monitor, OpenVPN, then the kill switch — and each process is
+confirmed stopped before the next step; if qBittorrent will not die, the kill
+switch stays up rather than opening the ISP link under a live client.
 
 `/organizer` is a separate tab for renaming and moving downloaded video files.
 
@@ -132,6 +135,7 @@ teardown as `stopvpn.sh` (torrents → OpenVPN → app → DNS/IPv6 → UFW last
 | `checkip.sh` | Shell monitor — fast process/interface checks + periodic IP checks |
 | `stopvpn.sh` | Ordered teardown and system restore |
 | `vpn_active.py` | One-shot leak check used by `checkip.sh` |
+| `qbt_config.py` | Applies the tun0 bind, save path and download limit to qBittorrent's config (both paths) |
 | `ufw_base.sh` | Base UFW state; `UFW_OUT_POLICY` selects the outgoing default |
 | `ufw_killswitch.sh` | Kill switch — calls `ufw_base.sh deny`, then allows the tunnel and LAN |
 | `remove_killswitch.sh` | Emergency recovery if the kill switch locks you out |
@@ -160,6 +164,8 @@ LOG_DIR="$SCRIPT_DIR/vpn_logs"
 BACKUP_DIR="$HOME/.vpn_backups"
 
 QBT_SAVE_PATH="/mnt/hdddisk/"   # blank = qBittorrent's own default
+QBT_MAX_ACTIVE_DOWNLOADS=5      # torrents downloading at once; unset = leave
+                                # qBittorrent's own queue settings alone
 
 # LAN ranges the kill switch allows out on the physical NIC.
 # Default is all of RFC1918; narrow it if you want.

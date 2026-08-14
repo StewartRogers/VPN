@@ -192,43 +192,16 @@ stop_qbittorrent() {
 }
 
 apply_qbittorrent_config() {
-    local src="$SCRIPT_DIR/qBittorrent.conf"
-    local dst="$HOME/.config/qBittorrent/qBittorrent.conf"
-    if [ ! -f "$src" ]; then
-        log "WARN" "No qBittorrent.conf in repo - skipping config install"
-        return
+    # Shared with the web path: qbt_config.py merges the settings this project
+    # owns (tun0 bind, save path, concurrent-download limit) into the live
+    # qBittorrent config without clobbering anything qBittorrent wrote itself.
+    local out
+    if ! out=$(python3 "$SCRIPT_DIR/qbt_config.py" 2>&1); then
+        log "WARN" "Could not apply qBittorrent config"
     fi
-    mkdir -p "$(dirname "$dst")"
-    if ! cp "$src" "$dst" 2>/dev/null; then
-        log "WARN" "Could not install qBittorrent config"
-        return
-    fi
-
-    # Inject the live tun0 IP so qBittorrent uses a hard IP-level socket bind,
-    # matching webapp/monitor.py:apply_qbittorrent_config.
-    local tun0_ip
-    tun0_ip=$(ip -4 addr show tun0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
-    if [ -n "$tun0_ip" ]; then
-        if grep -q 'Session\\InterfaceAddress' "$dst"; then
-            sed -i "s/Session\\\\InterfaceAddress=.*/Session\\\\InterfaceAddress=$tun0_ip/" "$dst"
-        else
-            sed -i "s/Session\\\\InterfaceName=tun0/Session\\\\InterfaceName=tun0\nSession\\\\InterfaceAddress=$tun0_ip/" "$dst"
-        fi
-        log "INFO" "Applied qBittorrent config - bound to tun0 ($tun0_ip)"
-    else
-        log "WARN" "Applied qBittorrent config - tun0 IP unavailable, bound by name only"
-    fi
-
-    # Apply the configured download location, if set (vpn_config.conf: QBT_SAVE_PATH)
-    if [ -n "$QBT_SAVE_PATH" ]; then
-        mkdir -p "$QBT_SAVE_PATH" 2>/dev/null
-        if grep -q 'Session\\DefaultSavePath' "$dst"; then
-            sed -i "s|Session\\\\DefaultSavePath=.*|Session\\\\DefaultSavePath=$QBT_SAVE_PATH|" "$dst"
-        else
-            sed -i "s|^\[BitTorrent\]|[BitTorrent]\nSession\\\\DefaultSavePath=$QBT_SAVE_PATH|" "$dst"
-        fi
-        log "INFO" "Applied qBittorrent config - save path: $QBT_SAVE_PATH"
-    fi
+    while IFS= read -r line; do
+        [ -n "$line" ] && log "INFO" "qBittorrent config - $line"
+    done <<< "$out"
 }
 
 start_qbittorrent() {
