@@ -94,7 +94,12 @@ log() {
 # This ensures outgoing stays blocked if checkip exits unexpectedly.
 _exit_handler() {
     log "INFO" "Stopping qBittorrent before exit..."
-    stop_qbittorrent
+    if ! stop_qbittorrent; then
+        log "CRITICAL" "qBittorrent could not be stopped - do NOT run stopvpn.sh until"
+        log "CRITICAL" "it is dead; opening UFW now would hand it the ISP link."
+        log "INFO" "=== Session ended ==="
+        return
+    fi
     log "INFO" "Kill switch remains active - run stopvpn.sh to restore base state"
     log "INFO" "=== Session ended ==="
 }
@@ -172,23 +177,58 @@ is_qbittorrent_running() {
     pgrep -f "qbittorrent-nox" >/dev/null
 }
 
+# Grace period for a clean qBittorrent exit. Mirrors QBT_STOP_GRACE in
+# webapp/monitor.py — keep the two in step.
+#
+# qBittorrent rewrites qBittorrent.conf and flushes resume data on exit, and
+# that takes seconds, not milliseconds. The old 1s window here (and a 5s one on
+# the web side) killed it mid-write. Waiting is safe: the kill switch is up for
+# the whole of this function, so UFW is denying all outgoing traffic.
+QBT_STOP_GRACE="${QBT_STOP_GRACE:-30}"
+
+# Returns 0 only when qBittorrent is *confirmed* gone, so callers can gate the
+# next teardown step on it rather than assuming the signal worked.
 stop_qbittorrent() {
     local pid_file="$PID_DIR/qbittorrent.pid"
-    if [ -f "$pid_file" ]; then
-        local pid
-        pid=$(cat "$pid_file" 2>/dev/null)
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            log "INFO" "Stopping qBittorrent (PID: $pid)"
-            kill "$pid" 2>/dev/null || true
-            sleep 1
-            kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
-        fi
+    local pid="" waited=0
+
+    if ! is_qbittorrent_running; then
         rm -f "$pid_file"
+        return 0
     fi
-    if pgrep -f "qbittorrent-nox" >/dev/null; then
+
+    [ -f "$pid_file" ] && pid=$(cat "$pid_file" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        log "INFO" "Stopping qBittorrent (PID: $pid)"
+        kill "$pid" 2>/dev/null || true
+    else
         log "INFO" "Stopping qBittorrent (pkill fallback)"
         sudo pkill -f "qbittorrent-nox" 2>/dev/null || true
     fi
+
+    while [ "$waited" -lt "$QBT_STOP_GRACE" ]; do
+        if ! is_qbittorrent_running; then
+            rm -f "$pid_file"
+            log "INFO" "qBittorrent stopped"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+        if [ $((waited % 5)) -eq 0 ]; then
+            log "INFO" "Still waiting for qBittorrent to shut down (${waited}s/${QBT_STOP_GRACE}s)"
+        fi
+    done
+
+    log "WARN" "qBittorrent has not exited after ${QBT_STOP_GRACE}s - sending SIGKILL"
+    sudo pkill -9 -f "qbittorrent-nox" 2>/dev/null || true
+    sleep 1
+    if is_qbittorrent_running; then
+        log "CRITICAL" "qBittorrent is STILL RUNNING after SIGKILL - kill switch stays active"
+        return 1
+    fi
+    rm -f "$pid_file"
+    log "INFO" "qBittorrent stopped"
+    return 0
 }
 
 apply_qbittorrent_config() {

@@ -48,21 +48,32 @@ def clean_filename(filename: str) -> str:
     return f"{name}.{ext}"
 
 
-def scan_directory(source_dir: str, exclude_dirs: set = None) -> list:
+def scan_directory(source_dir: str, exclude_dirs: set = None,
+                   skip_junk: bool = True) -> list:
     """Walk source_dir and return metadata for every video file found.
 
     exclude_dirs: directory basenames to skip, matched case-insensitively
     at any depth (e.g. {"Samples", ".stfolder"}).
+
+    skip_junk: leave out sample media and sample/proof/screenshot folders.
+    These are the same things the delete step treats as junk, so including
+    them here would move a 30-second sample into the output folder and then
+    delete the folder it came from — the two steps have to agree on what
+    counts as a real file.
     """
     source_dir = os.path.realpath(source_dir)
     exclude_lower = {d.lower() for d in (exclude_dirs or ())}
     results = []
 
     for root, dirs, files in os.walk(source_dir):
-        dirs[:] = sorted(d for d in dirs if d.lower() not in exclude_lower)
+        dirs[:] = sorted(d for d in dirs
+                         if d.lower() not in exclude_lower
+                         and not (skip_junk and d.lower() in _JUNK_DIRS))
         for fname in sorted(files):
             _, ext = os.path.splitext(fname)
             if ext.lower() not in _VIDEO_EXTS:
+                continue
+            if skip_junk and is_junk_file(os.path.join(root, fname)):
                 continue
             full_path = os.path.join(root, fname)
             rel_path = os.path.relpath(full_path, source_dir)
@@ -150,3 +161,171 @@ def organize_files(source_dir: str, operations: list) -> list:
                              "message": str(exc)})
 
     return results
+
+
+# ---------------------------------------------------------------- output moves
+
+# Leftovers the delete step is allowed to remove so a source folder can be
+# cleared. Everything here is matched case-insensitively. Keep this list
+# explicit — it is the difference between clearing a release folder and
+# destroying something that was not backed up.
+_JUNK_EXTS = {
+    ".nfo", ".sfv", ".md5", ".txt", ".url", ".diz",   # metadata sidecars
+    ".torrent", ".pad", ".exe",                        # torrent/scene admin
+    ".jpg", ".jpeg", ".png", ".gif",                   # artwork/screenshots
+}
+_JUNK_DIRS = {"sample", "samples", "proof", "screens", "screenshots", "subs.sample"}
+_JUNK_NAME_RE = re.compile(r"(^|[\s._-])sample([\s._-]|$)|^rarbg", re.IGNORECASE)
+
+
+def is_junk_file(path: str) -> bool:
+    """True if `path` is a leftover the delete step may remove."""
+    name = os.path.basename(path)
+    ext = os.path.splitext(name)[1].lower()
+    if ext in _JUNK_EXTS:
+        return True
+    # Sample *media* — real video files, so only by explicit name match.
+    if ext in _VIDEO_EXTS and _JUNK_NAME_RE.search(os.path.splitext(name)[0]):
+        return True
+    return False
+
+
+def is_junk_dir(path: str) -> bool:
+    return os.path.basename(path).lower() in _JUNK_DIRS
+
+
+def move_file(src: str, dst: str, chunk_cb=None) -> dict:
+    """Move one file to `dst`, returning a result dict.
+
+    os.rename cannot cross filesystems (EXDEV), and an output folder on a
+    different mount is the normal case here — /mnt/hdddisk to /mnt/bluedrive.
+    So this falls back to a copy-then-verify-then-unlink: the source is only
+    unlinked once the destination exists at the full expected size. A partial
+    copy therefore leaves the source intact rather than destroying the only
+    good copy, which matters because the delete step runs after this.
+
+    chunk_cb(bytes_done, total) is called during the slow path so callers can
+    report progress and tell when the move is genuinely finished.
+    """
+    if os.path.exists(dst):
+        if os.path.getsize(src) == os.path.getsize(dst):
+            return {"status": "skipped", "message": "Duplicate already at destination"}
+        return {"status": "error", "message": "Destination exists with different size"}
+
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    total = os.path.getsize(src)
+
+    try:
+        os.rename(src, dst)
+        if chunk_cb:
+            chunk_cb(total, total)
+        return {"status": "moved", "message": "Moved (same filesystem)", "bytes": total}
+    except OSError:
+        pass  # cross-device — fall through to copy
+
+    done = 0
+    try:
+        with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+            while True:
+                buf = fsrc.read(4 * 1024 * 1024)
+                if not buf:
+                    break
+                fdst.write(buf)
+                done += len(buf)
+                if chunk_cb:
+                    chunk_cb(done, total)
+            fdst.flush()
+            os.fsync(fdst.fileno())
+    except Exception as exc:
+        if os.path.exists(dst):
+            try:
+                os.unlink(dst)      # never leave a truncated file behind
+            except OSError:
+                pass
+        return {"status": "error", "message": f"Copy failed: {exc}"}
+
+    # Only now is the move complete. Verify before touching the source.
+    if not os.path.exists(dst) or os.path.getsize(dst) != total:
+        return {"status": "error", "message": "Copy incomplete — source kept"}
+    try:
+        os.unlink(src)
+    except OSError as exc:
+        return {"status": "error", "message": f"Copied but could not remove source: {exc}"}
+    return {"status": "moved", "message": "Moved (copied across filesystems)", "bytes": total}
+
+
+def cleanup_source(folder: str, source_root: str) -> list:
+    """Remove junk leftovers in `folder`, then the folder itself if it empties.
+
+    Only ever descends inside `source_root`, and never removes source_root
+    itself. Returns a list of {path, status, message} describing what happened.
+    """
+    source_root = os.path.realpath(source_root)
+    folder = os.path.realpath(folder)
+    results = []
+    if folder == source_root or not folder.startswith(source_root + os.sep):
+        return [{"path": folder, "status": "error",
+                 "message": "Refusing to clean outside the source directory"}]
+    if not os.path.isdir(folder):
+        return results
+
+    for root, dirs, files in os.walk(folder, topdown=False):
+        for fname in files:
+            fpath = os.path.join(root, fname)
+            if is_junk_file(fpath):
+                try:
+                    os.unlink(fpath)
+                    results.append({"path": os.path.relpath(fpath, source_root),
+                                    "status": "deleted", "message": "junk file"})
+                except OSError as exc:
+                    results.append({"path": os.path.relpath(fpath, source_root),
+                                    "status": "error", "message": str(exc)})
+        for dname in dirs:
+            dpath = os.path.join(root, dname)
+            try:
+                if is_junk_dir(dpath) and not os.listdir(dpath):
+                    os.rmdir(dpath)
+                    results.append({"path": os.path.relpath(dpath, source_root),
+                                    "status": "deleted", "message": "junk folder"})
+                elif not os.listdir(dpath):
+                    os.rmdir(dpath)
+                    results.append({"path": os.path.relpath(dpath, source_root),
+                                    "status": "deleted", "message": "empty folder"})
+            except OSError:
+                pass
+
+    try:
+        if not os.listdir(folder):
+            os.rmdir(folder)
+            results.append({"path": os.path.relpath(folder, source_root),
+                            "status": "deleted", "message": "source folder"})
+        else:
+            remaining = len(os.listdir(folder))
+            results.append({"path": os.path.relpath(folder, source_root),
+                            "status": "kept",
+                            "message": f"{remaining} unrecognised item(s) left"})
+    except OSError as exc:
+        results.append({"path": os.path.relpath(folder, source_root),
+                        "status": "error", "message": str(exc)})
+    return results
+
+
+def browse(path: str) -> dict:
+    """List subdirectories of `path` for the folder picker."""
+    path = os.path.realpath(os.path.expanduser(path or "/"))
+    if not os.path.isdir(path):
+        raise NotADirectoryError(path)
+    entries = []
+    with os.scandir(path) as it:
+        for e in it:
+            try:
+                if e.is_dir(follow_symlinks=False):
+                    entries.append({"name": e.name,
+                                    "path": os.path.join(path, e.name)})
+            except OSError:
+                continue
+    entries.sort(key=lambda d: d["name"].lower())
+    parent = os.path.dirname(path)
+    return {"path": path,
+            "parent": parent if parent != path else None,
+            "dirs": entries}

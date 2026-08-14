@@ -1,5 +1,6 @@
 import glob
 import ipaddress
+import json
 import os
 import re
 import socket
@@ -18,6 +19,53 @@ _OVPN_TS = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+")
 import requests
 
 MAX_LOGS = 500
+
+# Kill-switch probe tuning.
+#
+# `ufw status verbose` is a Python program that shells out to iptables; it costs
+# ~0.5s on an idle Pi and gets slower under load.  Both the monitor's slow tier
+# and every /api/status poll (every 3s from the browser) ask for it, and
+# concurrent invocations contend on the xtables lock.  On 2026-08-14 that
+# combination stretched the call past the old 3s timeout while qBittorrent was
+# running; the timeout was caught and reported as "kill switch gone", which
+# fail-stopped a healthy session.  Hence: one shared cached result, a timeout
+# with real headroom, and a distinction between "UFW says no" (trip now) and
+# "UFW did not answer" (retry first).
+KILLSWITCH_CACHE_TTL = 5
+KILLSWITCH_TIMEOUT = 10
+KILLSWITCH_MAX_UNKNOWN = 3
+
+# qBittorrent shutdown budget.
+#
+# A clean qBittorrent exit is not instant: it flushes resume data and rewrites
+# qBittorrent.conf, which is the only copy of everything set through its WebUI.
+# On 2026-08-14 the client caught SIGTERM and was still writing 4.3s later when
+# a 5s window expired and SIGKILL landed — the config was never rewritten. The
+# grace period exists to let that finish.
+#
+# Waiting is safe precisely because the kill switch is still up on every
+# fail-stop path: UFW is denying all outgoing traffic, so nothing egresses
+# while we wait. The one exception is a *confirmed* inactive kill switch, where
+# UFW is passing traffic and a live client is leaking right now — that path
+# passes urgent=True and goes straight to SIGKILL.
+QBT_STOP_GRACE = 30
+QBT_KILL_CONFIRM = 5
+QBT_POLL_INTERVAL = 0.5
+
+# How long to wait for libtorrent to open its peer socket before deciding the
+# tunnel bind failed. Judging too early flags a client that is merely still
+# starting and kills a healthy session.
+QBT_BIND_CONFIRM = 15
+
+# Timeout for the fast-tier local checks. These are cheap commands, but the Pi
+# is also saturating its disk and NIC while torrenting, and the old 2s budget
+# was tight enough that a slow answer read as "the tunnel is gone".
+FAST_CHECK_TIMEOUT = 5
+
+# Consecutive unanswered fast-tier probes tolerated before stopping. Same
+# asymmetry as the kill switch: a definite "tun0 is gone" trips at once, an
+# unanswered question gets retried.
+FAST_MAX_UNKNOWN = 3
 
 # Absolute path to the VPN project root (one level above this file's webapp/ dir)
 _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,6 +195,13 @@ class VPNMonitor:
         self._stop_event = threading.Event()
         self._retry_cancel = threading.Event()
 
+        # Shared kill-switch probe result: (monotonic_timestamp, state).
+        # The lock is held across the subprocess call on purpose — a second
+        # caller waits for the in-flight probe and reuses its answer instead of
+        # starting a competing `ufw` process.
+        self._ks_lock = threading.Lock()
+        self._ks_cache = None
+
     # ------------------------------------------------------------------ logging
 
     def log(self, message, source="MONITOR", level=None):
@@ -196,19 +251,42 @@ class VPNMonitor:
 
     # ---------------------------------------------------------- system checks
 
-    def check_openvpn_process(self):
+    def _probe(self, cmd, decide, timeout=FAST_CHECK_TIMEOUT):
+        """Run `cmd` and return True/False, or None when it could not be asked.
+
+        None is the whole point, and it is the same rule as probe_killswitch():
+        a command that timed out or could not run says nothing about the state
+        of the tunnel. Reporting it as False fail-stopped a healthy session on
+        2026-08-14 11:32 — OpenVPN's own log shows tun0 up continuously while
+        the monitor declared "VPN interface down" and tore everything down.
+        These run every FAST_CHECK_INTERVAL on a Pi that is also saturating its
+        disk and NIC with torrent traffic, so slow answers are normal.
+        """
         try:
-            r = subprocess.run(["pgrep", "-x", "openvpn"], capture_output=True, timeout=2)
-            return r.returncode == 0
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         except Exception:
-            return False
+            return None
+        return decide(r)
+
+    def probe_openvpn_process(self):
+        return self._probe(["pgrep", "-x", "openvpn"], lambda r: r.returncode == 0)
+
+    def probe_vpn_interface(self):
+        # `ip link show tun0` exits non-zero only when the device is absent,
+        # which is a real answer; anything else is an unanswered question.
+        return self._probe(["ip", "link", "show", "tun0"], lambda r: r.returncode == 0)
+
+    def probe_default_route(self):
+        return self._probe(["ip", "route", "get", "8.8.8.8"],
+                           lambda r: "tun0" in r.stdout if r.returncode == 0 else None)
+
+    def check_openvpn_process(self):
+        """Bool wrapper — an unanswered probe is treated as not running, so
+        everything gated on this (torrent_start_blocked) fails closed."""
+        return self.probe_openvpn_process() is True
 
     def check_vpn_interface(self):
-        try:
-            r = subprocess.run(["ip", "link", "show", "tun0"], capture_output=True, timeout=2)
-            return r.returncode == 0
-        except Exception:
-            return False
+        return self.probe_vpn_interface() is True
 
     def check_default_route(self):
         """Returns True if internet traffic routes through tun0.
@@ -219,25 +297,65 @@ class VPNMonitor:
         at the physical interface even when the tunnel is correctly carrying all
         traffic.  'ip route get' asks the kernel what it would actually use.
         """
-        try:
-            r = subprocess.run(
-                ["ip", "route", "get", "8.8.8.8"],
-                capture_output=True, text=True, timeout=2,
-            )
-            return "tun0" in r.stdout
-        except Exception:
-            return False
+        return self.probe_default_route() is True
+
+    def _invalidate_killswitch_cache(self):
+        """Drop the cached probe result after a deliberate UFW transition."""
+        with self._ks_lock:
+            self._ks_cache = None
+
+    def probe_killswitch(self, force=False):
+        """Ask UFW whether the kill switch is up. Returns one of:
+
+            "active"    UFW answered, outgoing policy is deny
+            "inactive"  UFW answered, outgoing policy is NOT deny
+            "unknown"   UFW did not answer (timeout, non-zero exit, sudo denied)
+
+        The third state is the point of this method.  Collapsing it into
+        "inactive" — as this check used to — means a slow box is
+        indistinguishable from a torn-down firewall, and the monitor kills a
+        healthy session over it.  Callers that gate an action treat "unknown"
+        as unsafe (see check_killswitch_active); the monitor loop retries it.
+
+        Results are cached for KILLSWITCH_CACHE_TTL seconds and shared between
+        the monitor thread and the /api/status request threads, so UI polling
+        cannot multiply the number of `ufw` processes.
+        """
+        with self._ks_lock:
+            cached = self._ks_cache
+            if not force and cached is not None:
+                ts, state = cached
+                if time.monotonic() - ts < KILLSWITCH_CACHE_TTL:
+                    return state
+
+            try:
+                r = subprocess.run(
+                    ["sudo", "ufw", "status", "verbose"],
+                    capture_output=True, text=True, timeout=KILLSWITCH_TIMEOUT,
+                )
+                if r.returncode != 0:
+                    # ufw itself failed — most often missing passwordless sudo.
+                    # Not evidence either way about the outgoing policy.
+                    state = "unknown"
+                elif "deny (outgoing)" in r.stdout:
+                    state = "active"
+                else:
+                    state = "inactive"
+            except Exception:
+                state = "unknown"
+
+            self._ks_cache = (time.monotonic(), state)
+            return state
 
     def check_killswitch_active(self):
-        """Returns True if UFW is in kill-switch mode (outgoing deny default)."""
-        try:
-            r = subprocess.run(
-                ["sudo", "ufw", "status", "verbose"],
-                capture_output=True, text=True, timeout=3,
-            )
-            return "deny (outgoing)" in r.stdout
-        except Exception:
-            return False
+        """Returns True only if UFW is confirmed to be in kill-switch mode.
+
+        An inconclusive probe returns False, so anything gated on this fails
+        closed (torrent_start_blocked, the monitor's startup check). The
+        monitor loop deliberately does not use this — it needs to tell a
+        confirmed teardown from an unanswered question.
+        """
+        return self.probe_killswitch() == "active"
 
     def check_ipv6_leak(self):
         """Returns True if a global-scope IPv6 address is present — a leak risk,
@@ -271,28 +389,71 @@ class VPNMonitor:
 
     # --------------------------------------------------------- qbt management
 
-    def stop_qbittorrent(self):
-        """Stop qBittorrent and wait for it to actually exit before returning.
+    def stop_qbittorrent(self, urgent=False):
+        """Stop qBittorrent and report whether it is *confirmed* gone.
 
-        A fire-and-forget pkill can leave the process alive for a moment into
-        whatever runs right after this call — and callers that immediately
-        relax the kill switch (stop_vpn, attempt_reconnect) need it gone
-        first, not just signaled. Mirrors checkip.sh's stop_qbittorrent().
+        Returns True only when the process is actually no longer running.
+        Callers gate the next teardown step on that: this used to return None
+        and set status["qbittorrent"] = False unconditionally — even after a
+        SIGKILL that did not work — so every caller proceeded on an assumption
+        rather than a fact.
+
+        urgent=True skips the graceful window and sends SIGKILL immediately.
+        That is for the single trigger where waiting is unsafe: a confirmed
+        inactive kill switch means UFW is passing traffic and a live client is
+        egressing on the ISP link right now, so losing unsaved settings is the
+        cheaper cost. Every other fail-stop runs with the kill switch still up,
+        where nothing can leak while we wait, so the client gets QBT_STOP_GRACE
+        seconds to write its config and resume data first.
+
+        Mirrors checkip.sh's stop_qbittorrent().
         """
         if not self.is_qbittorrent_running():
             self.status["qbittorrent"] = False
-            return
-        self.log("Stopping qBittorrent...", source="QBIT")
-        subprocess.run(["sudo", "pkill", "-f", "qbittorrent-nox"], capture_output=True)
-        for _ in range(10):
-            if not self.is_qbittorrent_running():
-                break
-            time.sleep(0.5)
+            return True
+
+        if urgent:
+            self.log("Stopping qBittorrent NOW (SIGKILL) — the kill switch is down "
+                     "and traffic is unprotected", source="QBIT", level="WARNING")
+            subprocess.run(["sudo", "pkill", "-9", "-f", "qbittorrent-nox"],
+                           capture_output=True)
+            stopped = self._await_qbittorrent_exit(QBT_KILL_CONFIRM)
         else:
-            self.log("qBittorrent still running - sending SIGKILL", source="QBIT", level="WARNING")
-            subprocess.run(["sudo", "pkill", "-9", "-f", "qbittorrent-nox"], capture_output=True)
-            time.sleep(0.5)
-        self.status["qbittorrent"] = False
+            self.log("Stopping qBittorrent...", source="QBIT")
+            subprocess.run(["sudo", "pkill", "-f", "qbittorrent-nox"], capture_output=True)
+            stopped = self._await_qbittorrent_exit(QBT_STOP_GRACE, announce=True)
+            if not stopped:
+                self.log(f"qBittorrent has not exited after {QBT_STOP_GRACE}s — "
+                         f"sending SIGKILL", source="QBIT", level="WARNING")
+                subprocess.run(["sudo", "pkill", "-9", "-f", "qbittorrent-nox"],
+                               capture_output=True)
+                stopped = self._await_qbittorrent_exit(QBT_KILL_CONFIRM)
+
+        self.status["qbittorrent"] = not stopped
+        if stopped:
+            self.log("qBittorrent stopped", source="QBIT")
+        else:
+            self.log("qBittorrent is STILL RUNNING after SIGKILL", source="QBIT",
+                     level="CRITICAL")
+        return stopped
+
+    def _await_qbittorrent_exit(self, timeout, announce=False):
+        """Poll until qBittorrent is gone or `timeout` seconds elapse.
+
+        Returns True only if the process is actually gone. `announce` logs
+        progress every 5s so a long graceful shutdown does not look like a hang.
+        """
+        deadline = time.monotonic() + timeout
+        next_notice = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if not self.is_qbittorrent_running():
+                return True
+            if announce and time.monotonic() >= next_notice:
+                self.log(f"Still waiting for qBittorrent to finish shutting down "
+                         f"(~{int(deadline - time.monotonic())}s left)...", source="QBIT")
+                next_notice += 5
+            time.sleep(QBT_POLL_INTERVAL)
+        return not self.is_qbittorrent_running()
 
     def apply_qbittorrent_config(self):
         """Apply the settings this project owns to the live qBittorrent config.
@@ -360,10 +521,207 @@ class VPNMonitor:
             return f"External IP {ip} is the home IP — the tunnel is not carrying traffic"
         return None
 
+    def verify_tunnel_bind(self):
+        """Check that qBittorrent's listening socket is really on the tun0 address.
+
+        Returns "bound", "unbound", or "unknown".
+
+        Writing Session\\InterfaceAddress is not proof it took effect. The client
+        reads its config once at startup and binds then; if the address it was
+        told to use is not present at that moment it falls back to listening on
+        every interface and says nothing. A stale address from a previous tunnel
+        looks exactly like that — and VPNGate hands out a different tun0 IP on
+        every connection, so "stale" is the normal case across sessions, not an
+        edge case. Hence: verify, do not assume.
+        """
+        tun0_ip = qbt_config.detect_tun0_ip()
+        if not tun0_ip:
+            return "unknown"
+
+        # Only the BitTorrent peer listener matters. The WebUI is a separate
+        # socket and is *meant* to be on 0.0.0.0 (WebUI\Address=*) so the
+        # dashboard is reachable over the LAN — judging every qbittorrent
+        # socket flags that healthy listener and kills the client.
+        peer_port = self._qbt_peer_port()
+        if not peer_port:
+            return "unknown"
+
+        try:
+            r = subprocess.run(["ss", "-tlnp"], capture_output=True, text=True, timeout=5)
+            if r.returncode != 0:
+                return "unknown"
+        except Exception:
+            return "unknown"
+
+        for ln in r.stdout.splitlines():
+            if "qbittorrent" not in ln:
+                continue
+            parts = ln.split()
+            if len(parts) < 4:
+                continue
+            local = parts[3]
+            addr, _, port = local.rpartition(":")
+            if port != str(peer_port):
+                continue
+            # ss prints the scope as "10.211.1.29%tun0" once a socket is bound
+            # to a specific interface, so the address has to be split off the
+            # scope before comparing — matching the raw string reports a
+            # correctly bound client as unbound.
+            addr = addr.strip("[]").split("%")[0]
+            if addr in ("0.0.0.0", "*", "::"):
+                return "unbound"
+            return "bound" if addr == tun0_ip else "unbound"
+
+        # The peer socket is not open yet — libtorrent takes a moment after
+        # the process starts. Not an answer either way; the caller retries.
+        return "unknown"
+
+    def _qbt_peer_port(self):
+        """The BitTorrent listen port from qBittorrent.conf, or None."""
+        try:
+            sections = qbt_config.read_ini(qbt_config.DEFAULT_CONFIG)
+            value = qbt_config.get_key(sections, "BitTorrent", r"Session\Port")
+            return int(value) if value else None
+        except Exception:
+            return None
+
+    # ------------------------------------------------- qBittorrent tunnel bind
+
+    def _qbt_webui_port(self):
+        try:
+            sections = qbt_config.read_ini(qbt_config.DEFAULT_CONFIG)
+            value = qbt_config.get_key(sections, "Preferences", r"WebUI\Port")
+            return int(value) if value else 8080
+        except Exception:
+            return 8080
+
+    def _qbt_api(self):
+        """Return a requests.Session authenticated to the local WebUI, or None.
+
+        Tries the unauthenticated localhost path first (WebUI\\LocalHostAuth=false)
+        and falls back to QBT_WEBUI_USER / QBT_WEBUI_PASS from vpn_config.conf,
+        so this works whichever way qBittorrent is configured.
+        """
+        base = f"http://127.0.0.1:{self._qbt_webui_port()}"
+        s = requests.Session()
+        try:
+            r = s.get(f"{base}/api/v2/app/preferences", timeout=5)
+            if r.status_code == 200:
+                return s, base
+        except Exception:
+            return None, base
+
+        user = read_config_value("QBT_WEBUI_USER", "")
+        password = read_config_value("QBT_WEBUI_PASS", "")
+        if not user:
+            return None, base
+        try:
+            r = s.post(f"{base}/api/v2/auth/login",
+                       data={"username": user, "password": password},
+                       headers={"Referer": base}, timeout=5)
+            if r.status_code == 200 and "Fails" not in r.text:
+                return s, base
+        except Exception:
+            pass
+        return None, base
+
+    def apply_tunnel_bind(self):
+        """Bind qBittorrent to tun0 through its WebUI API. Returns True on success.
+
+        This cannot be done through qBittorrent.conf. Verified on 4.2.5: values
+        written to Session\\Interface, Session\\InterfaceAddress and Session\\Port
+        are preserved in the file but never applied — the client reports an empty
+        interface, picks a random listen port, and listens on every address.
+        Setting the same three values over the API binds it to a single address
+        immediately. qbt_config.py still writes the keys in case a later
+        qBittorrent honours them, but this is what actually takes effect.
+        """
+        tun0_ip = qbt_config.detect_tun0_ip()
+        if not tun0_ip:
+            self.log("Cannot bind qBittorrent — tun0 has no address",
+                     source="QBIT", level="CRITICAL")
+            return False
+
+        # The WebUI takes a few seconds to accept connections after startup.
+        session = None
+        deadline = time.monotonic() + QBT_BIND_CONFIRM
+        while time.monotonic() < deadline:
+            session, base = self._qbt_api()
+            if session:
+                break
+            time.sleep(0.5)
+        if not session:
+            self.log(
+                "Cannot reach the qBittorrent WebUI to apply the tunnel bind. "
+                "Either set WebUI\\LocalHostAuth=false or add QBT_WEBUI_USER / "
+                "QBT_WEBUI_PASS to ~/.vpn_config.conf.",
+                source="QBIT", level="CRITICAL")
+            return False
+
+        port = self._qbt_peer_port() or 19806
+        prefs = {
+            "current_network_interface": "tun0",
+            "current_interface_address": tun0_ip,
+            "listen_port": port,
+            "random_port": False,
+            "upnp": False,
+        }
+        try:
+            r = session.post(f"{base}/api/v2/app/setPreferences",
+                             data={"json": json.dumps(prefs)},
+                             headers={"Referer": base}, timeout=10)
+            if r.status_code != 200:
+                self.log(f"Tunnel bind request rejected (HTTP {r.status_code})",
+                         source="QBIT", level="CRITICAL")
+                return False
+        except Exception as exc:
+            self.log(f"Tunnel bind request failed — {exc}",
+                     source="QBIT", level="CRITICAL")
+            return False
+
+        # Read it back. A 200 means the request was accepted, not that the bind
+        # took — and "accepted but not applied" is exactly how the config-file
+        # approach failed silently for so long. Ask the client what it thinks
+        # it is bound to.
+        try:
+            got = session.get(f"{base}/api/v2/app/preferences", timeout=5).json()
+        except Exception as exc:
+            self.log(f"Could not read back the tunnel bind — {exc}",
+                     source="QBIT", level="CRITICAL")
+            return False
+
+        actual_addr = got.get("current_interface_address", "")
+        actual_iface = got.get("current_network_interface", "")
+        if actual_addr != tun0_ip or actual_iface != "tun0":
+            self.log(
+                f"Tunnel bind did not take — qBittorrent reports interface "
+                f"{actual_iface or '(any)'} address {actual_addr or '(all)'}, "
+                f"expected tun0 / {tun0_ip}",
+                source="QBIT", level="CRITICAL")
+            return False
+
+        self.log(f"Tunnel bind applied and confirmed — tun0 ({tun0_ip}) port "
+                 f"{got.get('listen_port', port)}", source="QBIT")
+        return True
+
     def start_qbittorrent(self):
         if self.is_qbittorrent_running():
-            self.log("qBittorrent already running", source="QBIT")
-            return True
+            # Do not report success on an instance we did not configure. Its
+            # bind comes from whenever it was last started, which may be a
+            # previous tunnel with a different address, and the config cannot
+            # be applied to a running client — it reads the file only at
+            # startup and overwrites it on exit.
+            bind = self.verify_tunnel_bind()
+            if bind == "bound":
+                self.log("qBittorrent already running and bound to tun0", source="QBIT")
+                return True
+            self.log(
+                f"qBittorrent is already running but its tunnel bind is {bind} — "
+                "it was not started by this session, so its config was never "
+                "re-applied. Stop it and start it again from here.",
+                source="QBIT", level="CRITICAL",
+            )
+            return False
         blocked = self.torrent_start_blocked()
         if blocked:
             self.log(f"Refusing to start qBittorrent — {blocked}",
@@ -377,12 +735,47 @@ class VPNMonitor:
             stderr=subprocess.STDOUT,
         )
         time.sleep(1)
-        if proc.poll() is None:
-            self.log(f"qBittorrent started (PID: {proc.pid})", source="QBIT")
-            self.status["qbittorrent"] = True
-            return True
-        self.log("qBittorrent may have failed to start", source="QBIT", level="WARNING")
-        return False
+        if proc.poll() is not None:
+            self.log("qBittorrent may have failed to start", source="QBIT", level="WARNING")
+            return False
+
+        self.log(f"qBittorrent started (PID: {proc.pid})", source="QBIT")
+        self.status["qbittorrent"] = True
+
+        # The config file cannot bind this client (see apply_tunnel_bind), so
+        # the bind has to be applied over the API once the WebUI is up.
+        if not self.apply_tunnel_bind():
+            self.log("Could not bind qBittorrent to the tunnel — stopping it. "
+                     "The kill switch is still up, but an unbound client would "
+                     "keep seeding the moment the tunnel dropped.",
+                     source="QBIT", level="CRITICAL")
+            self.stop_qbittorrent()
+            return False
+
+        # Confirm the bind actually took. libtorrent opens its peer socket a
+        # few seconds after the process starts, so keep asking for the whole
+        # window rather than judging the first answer — an unopened socket is
+        # "unknown", not "unbound", and killing the client over it is exactly
+        # the false positive this check is supposed to prevent.
+        bind = "unknown"
+        deadline = time.monotonic() + QBT_BIND_CONFIRM
+        while time.monotonic() < deadline:
+            time.sleep(0.5)
+            bind = self.verify_tunnel_bind()
+            if bind == "bound":
+                self.log("Tunnel bind confirmed — peer port on tun0", source="QBIT")
+                return True
+        if bind == "unbound":
+            self.log(
+                "qBittorrent is NOT bound to tun0 — it is listening on all "
+                "interfaces and would keep seeding if the tunnel dropped. "
+                "Stopping it.", source="QBIT", level="CRITICAL",
+            )
+            self.stop_qbittorrent()
+            return False
+        self.log("Could not confirm the tunnel bind (ss gave no answer)",
+                 source="QBIT", level="WARNING")
+        return True
 
     # ------------------------------------------------------- security measures
 
@@ -397,6 +790,7 @@ class VPNMonitor:
             err = (result.stderr or result.stdout).strip()
             self.log(f"UFW kill switch failed — {err}", level="ERROR")
             raise RuntimeError(f"UFW kill switch failed: {err}")
+        self._invalidate_killswitch_cache()
         self.status["kill_switch_active"] = True
         self.log("Kill switch active — all outgoing blocked except VPN tunnel and LAN")
 
@@ -412,6 +806,7 @@ class VPNMonitor:
         else:
             err = (result.stderr or result.stdout).strip()
             self.log(f"UFW reset failed — {err}", level="WARNING")
+        self._invalidate_killswitch_cache()
         self.status["kill_switch_active"] = False
 
     def disable_ipv6(self):
@@ -803,8 +1198,15 @@ class VPNMonitor:
         # qBittorrent must be *confirmed* stopped before the kill switch is
         # touched — teardown_killswitch() sets outgoing to unrestricted, and
         # anything still running at that point would egress on the ISP link.
-        if self.is_qbittorrent_running():
-            self.stop_qbittorrent()
+        if not self.stop_qbittorrent():
+            self.log(
+                "Teardown HALTED at step 1 — qBittorrent survived SIGKILL. OpenVPN "
+                "is left running and the kill switch stays ACTIVE; opening UFW now "
+                "would hand the client the ISP link. Kill it by hand, then run "
+                "./remove_killswitch.sh.",
+                level="CRITICAL",
+            )
+            return False
 
         self.log("Stopping OpenVPN...", source="OPENVPN")
         subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
@@ -817,37 +1219,75 @@ class VPNMonitor:
             subprocess.run(["sudo", "pkill", "-9", "-f", "openvpn"], capture_output=True)
             time.sleep(0.5)
         if self.check_openvpn_process():
-            self.log("OpenVPN did not stop", source="OPENVPN", level="WARNING")
-        else:
-            self.log("OpenVPN stopped", source="OPENVPN")
+            # Step 2 did not complete, so step 3 does not start.
+            self.log(
+                "Teardown HALTED at step 2 — OpenVPN survived SIGKILL. The kill "
+                "switch stays ACTIVE. Kill it by hand, then run "
+                "./remove_killswitch.sh to restore network access.",
+                source="OPENVPN", level="CRITICAL",
+            )
+            return False
+        self.log("OpenVPN stopped", source="OPENVPN")
 
         # Last gate before the firewall opens. Issuing the stops in the right
         # order is not the same as them having worked: if a client survived
         # both SIGTERM and SIGKILL, relaxing UFW hands it the ISP link. Leave
-        # the kill switch up instead and say so.
+        # the kill switch up instead and say so. Re-checked here rather than
+        # trusted from step 1 — qBittorrent could have been restarted by hand
+        # while OpenVPN was being stopped.
         if self.is_qbittorrent_running():
             self.log(
-                "Kill switch left ACTIVE — qBittorrent is still running and would "
+                "Kill switch left ACTIVE — qBittorrent is running again and would "
                 "egress unprotected. Kill it, then run ./remove_killswitch.sh.",
                 level="CRITICAL",
             )
-            return
+            return False
+
+        # Step 3: only now is it safe to open the firewall back up.
         self.teardown_killswitch()
         self.restore_ipv6()
         self.restore_dns()
+        return True
 
     def stop_vpn_bg(self):
         threading.Thread(target=self.stop_vpn, daemon=True).start()
 
     def stop_all(self):
-        """Graceful ordered shutdown: qBittorrent → monitor → VPN."""
+        """Ordered shutdown: qBittorrent → monitor → VPN → restore.
+
+        Each step must be confirmed complete before the next one starts; any
+        step that cannot be confirmed halts the sequence with the kill switch
+        left up, rather than carrying on and opening the firewall on faith.
+        """
         self.log("Stop All — shutting down in order...")
-        if self.is_qbittorrent_running():
-            self.stop_qbittorrent()
-        # Signal the monitor loop to exit so it doesn't try to reconnect
+
+        # Step 1: the torrent client.
+        if not self.stop_qbittorrent():
+            self.log(
+                "Stop All HALTED at step 1 — qBittorrent survived SIGKILL. The "
+                "monitor, OpenVPN and the kill switch are all left as they are.",
+                level="CRITICAL",
+            )
+            return False
+
+        # Step 2: the monitor. Wait for the thread to actually exit — signalling
+        # it is not the same as it having stopped, and stop_vpn() must not race
+        # a loop iteration that is still probing and logging.
         self._stop_event.set()
         self.status["running"] = False
-        self.stop_vpn()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=self.fast_interval + QBT_KILL_CONFIRM)
+            if self._thread.is_alive():
+                self.log(
+                    "Stop All HALTED at step 2 — the monitor thread did not exit. "
+                    "OpenVPN and the kill switch are left as they are.",
+                    level="CRITICAL",
+                )
+                return False
+        self.log("Monitor stopped")
+
+        # Steps 3 and 4: OpenVPN, then restore. stop_vpn() gates them the same way.
+        return self.stop_vpn()
 
     # ------------------------------------------------------- VPN reconnect
 
@@ -857,8 +1297,15 @@ class VPNMonitor:
         # setup_killswitch, which resets UFW and briefly restores the default
         # allow-outgoing policy — anything still running would egress
         # unprotected during that window.
-        if self.is_qbittorrent_running():
-            self.stop_qbittorrent()
+        if not self.stop_qbittorrent():
+            self.log(
+                "Reconnect ABORTED — qBittorrent survived SIGKILL. _openvpn_start() "
+                "reapplies the kill switch, which briefly restores the default "
+                "allow-outgoing policy, and the client would egress unprotected "
+                "in that window.",
+                level="CRITICAL",
+            )
+            return False
         ok = self._openvpn_start()
         if ok:
             ip = self.get_external_ip()
@@ -877,29 +1324,59 @@ class VPNMonitor:
 
         last_ip_check = 0
         consecutive_ip_errors = 0
+        consecutive_ks_unknown = 0
+        consecutive_fast_unknown = 0
+        # Set only by the confirmed-inactive-kill-switch branch: that is the one
+        # exit where the client is egressing unprotected and must die at once.
+        # Every other break leaves the kill switch up, so a clean exit is safe.
+        stop_urgent = False
 
         while not self._stop_event.is_set():
-            vpn_proc = self.check_openvpn_process()
-            vpn_iface = self.check_vpn_interface()
-            # Only check default route when tun0 is up — route is meaningless without it
-            vpn_route = self.check_default_route() if vpn_iface else False
+            # Tri-state: True / False / None ("could not ask").
+            vpn_proc = self.probe_openvpn_process()
+            vpn_iface = self.probe_vpn_interface()
+            # Only check the route when tun0 is up — the route is meaningless
+            # without it, and unknowable if we could not even see the interface.
+            vpn_route = self.probe_default_route() if vpn_iface is True else (
+                None if vpn_iface is None else False)
             ipv6_leak = self.check_ipv6_leak()
-            self.status["vpn_process"] = vpn_proc
-            self.status["vpn_interface"] = vpn_iface
-            self.status["vpn_route"] = vpn_route
+            self.status["vpn_process"] = vpn_proc is True
+            self.status["vpn_interface"] = vpn_iface is True
+            self.status["vpn_route"] = vpn_route is True
 
-            if not vpn_proc or not vpn_iface or not vpn_route or ipv6_leak:
-                what = (
-                    "VPN process down" if not vpn_proc
-                    else "VPN interface down" if not vpn_iface
-                    else "default route not through tunnel (traffic bypassing tunnel)" if not vpn_route
-                    else "global IPv6 address detected (leak risk)"
-                )
-                self.log(f"{what} — stopping everything", level="CRITICAL")
+            # A definite False is a real failure and trips immediately.
+            failure = (
+                "VPN process down" if vpn_proc is False
+                else "VPN interface down" if vpn_iface is False
+                else "default route not through tunnel (traffic bypassing tunnel)"
+                if vpn_route is False
+                else "global IPv6 address detected (leak risk)" if ipv6_leak
+                else None
+            )
+            if failure:
+                self.log(f"{failure} — stopping everything", level="CRITICAL")
                 self.status["secure"] = False
-                if self.is_qbittorrent_running():
-                    self.stop_qbittorrent()
                 break
+
+            # None means the command did not answer — that is not evidence the
+            # tunnel is gone. Retry, exactly as the kill-switch probe does.
+            if None in (vpn_proc, vpn_iface, vpn_route):
+                consecutive_fast_unknown += 1
+                unanswered = ("OpenVPN process" if vpn_proc is None
+                              else "tun0 interface" if vpn_iface is None
+                              else "default route")
+                self.log(
+                    f"Fast check inconclusive — {unanswered} check did not respond "
+                    f"({consecutive_fast_unknown} consecutive)", level="WARNING")
+                if consecutive_fast_unknown >= FAST_MAX_UNKNOWN:
+                    self.log(
+                        f"{FAST_MAX_UNKNOWN} consecutive fast checks could not be "
+                        f"confirmed — stopping everything", level="CRITICAL")
+                    self.status["secure"] = False
+                    break
+                self._stop_event.wait(self.fast_interval)
+                continue
+            consecutive_fast_unknown = 0
 
             now_ts = time.time()
             if now_ts - last_ip_check >= self.ip_interval:
@@ -907,15 +1384,39 @@ class VPNMonitor:
                 # It used to be checked only at startup, so a UFW reset from
                 # another terminal (stop_web.sh, ufw_base.sh) went unnoticed
                 # while the monitor carried on reporting healthy.
-                if not self.check_killswitch_active():
+                ks = self.probe_killswitch()
+                if ks == "inactive":
+                    # UFW answered and the deny-outgoing policy is gone. This is
+                    # a real teardown — trip immediately, no retries.
                     self.log("Kill switch is no longer active — stopping everything",
                              level="CRITICAL")
                     self.status["kill_switch_active"] = False
                     self.status["secure"] = False
-                    if self.is_qbittorrent_running():
-                        self.stop_qbittorrent()
+                    # UFW is open and the client is egressing unprotected:
+                    # kill it now, do not wait for a clean exit.
+                    stop_urgent = True
                     break
-                self.status["kill_switch_active"] = True
+                if ks == "unknown":
+                    # UFW did not answer. Says nothing about the firewall, so
+                    # retry rather than killing a possibly-healthy session —
+                    # same tolerance the external IP check below gets.
+                    consecutive_ks_unknown += 1
+                    self.log(
+                        f"Kill switch check inconclusive — UFW did not respond "
+                        f"({consecutive_ks_unknown} consecutive)",
+                        level="WARNING",
+                    )
+                    if consecutive_ks_unknown >= KILLSWITCH_MAX_UNKNOWN:
+                        self.log(
+                            f"{KILLSWITCH_MAX_UNKNOWN} consecutive kill switch checks "
+                            f"could not be confirmed — stopping everything",
+                            level="CRITICAL",
+                        )
+                        self.status["secure"] = False
+                        break
+                else:
+                    consecutive_ks_unknown = 0
+                    self.status["kill_switch_active"] = True
 
                 ip = self.get_external_ip()
                 post_check_ts = time.time()
@@ -927,16 +1428,12 @@ class VPNMonitor:
                     if consecutive_ip_errors >= 3:
                         self.log("3 consecutive IP check failures — stopping everything", level="CRITICAL")
                         self.status["secure"] = False
-                        if self.is_qbittorrent_running():
-                            self.stop_qbittorrent()
                         break
                     # Retry sooner than normal (stamp from post-check time)
                     last_ip_check = post_check_ts - self.ip_interval + 5
                 elif ip.strip() == self.home_ip.strip():
                     self.log(f"IP LEAK DETECTED: external IP {ip} matches home IP — stopping everything", level="CRITICAL")
                     self.status["secure"] = False
-                    if self.is_qbittorrent_running():
-                        self.stop_qbittorrent()
                     break
                 else:
                     consecutive_ip_errors = 0
@@ -953,7 +1450,21 @@ class VPNMonitor:
             # but leave the kill switch active so no traffic leaks out.
             # User must click Stop VPN to restore network access.
             self.log("Monitoring stopped due to VPN failure — kill switch remains active", level="WARNING")
-            self.stop_qbittorrent()
+
+            # Step 1: qBittorrent, and nothing else until it is confirmed gone.
+            # Stopping OpenVPN first would drop the tunnel out from under a live
+            # client; the ordering is only worth anything if each step is
+            # verified rather than merely issued.
+            if not self.stop_qbittorrent(urgent=stop_urgent):
+                self.log(
+                    "Teardown HALTED at step 1 — qBittorrent survived SIGKILL. "
+                    "OpenVPN and the kill switch are left exactly as they are. "
+                    "Kill it by hand, then run ./remove_killswitch.sh.",
+                    level="CRITICAL",
+                )
+                return
+
+            # Step 2: OpenVPN, now that no client can be holding the tunnel.
             subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
             self.log("OpenVPN stopped — use Stop VPN to restore network access", source="OPENVPN")
         else:

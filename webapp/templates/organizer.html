@@ -100,6 +100,7 @@
     .btn-primary { background: var(--blue);   color: #fff; }
     .btn-success { background: var(--green);  color: #fff; }
     .btn-save    { background: var(--border); color: var(--text); }
+    .btn-stop    { background: var(--red);    color: #fff; }
 
     /* ---- results table (fills remaining height) ---- */
     .table-wrap {
@@ -216,6 +217,64 @@
     }
     #token-modal input:focus { outline: 1px solid var(--blue); }
     #token-modal .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+    .muted { color: var(--muted); font-size: 11px; }
+    .toolbar label { font-size: 11px; color: var(--muted); }
+    .toolbar.steps { gap: 8px; }
+    .modal {
+      display: none; position: fixed; inset: 0; z-index: 50;
+      background: rgba(0,0,0,.6); align-items: center; justify-content: center;
+    }
+    .modal.open { display: flex; }
+    .modal .modal-box {
+      background: var(--panel, #1b1f27); border: 1px solid #333;
+      border-radius: 6px; padding: 16px; width: min(560px, 92vw);
+    }
+    .modal h3 { font-size: 14px; margin-bottom: 8px; }
+    .modal .modal-actions {
+      display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;
+    }
+    .browse-list {
+      max-height: 46vh; overflow-y: auto; margin: 10px 0;
+      border: 1px solid #333; border-radius: 4px;
+    }
+    .browse-list .row {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 10px; font-size: 12px; cursor: pointer;
+    }
+    .browse-list .row:hover { background: #262b34; }
+    .browse-list .row.up { color: var(--muted); }
+    .bar {
+      height: 6px; background: #262b34; border-radius: 3px;
+      overflow: hidden; margin: 8px 0 4px;
+    }
+    .bar-fill { height: 100%; width: 0; background: var(--blue, #3b82f6); transition: width .2s; }
+    .job-banner {
+      flex-shrink: 0;
+      border: 1px solid var(--yellow);
+      border-radius: 6px;
+      background: rgba(255,152,0,.08);
+      color: var(--yellow);
+      padding: 7px 10px;
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .bar-file { height: 4px; }
+    .bar-file .bar-fill { background: var(--green); }
+
+    .col-dest { width: 100px; }
+    select.dest-select {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text);
+      padding: 3px 6px;
+      font-size: 12px;
+    }
+    select.dest-select:focus { outline: 1px solid var(--blue); }
+    th select.dest-select { background: var(--surface); }
   </style>
 </head>
 <body>
@@ -238,14 +297,69 @@
   <a href="/" >← Back to Monitor</a>
 </div>
 
-<!-- Toolbar -->
+<!-- Folder picker -->
 <div class="toolbar">
-  <input type="text" id="dir-input" placeholder="Directory path, e.g. /home/pi/Downloads">
-  <input type="text" id="exclude-input" placeholder="Exclude subdirs, e.g. Samples,.stfolder">
-  <button class="btn-primary" onclick="scanFiles()">Scan</button>
-  <button class="btn-success" id="btn-apply" disabled onclick="applyFiles()">Apply Selected</button>
-  <button class="btn-save"   id="btn-all"   style="display:none" onclick="toggleSelectAll()">Select All</button>
+  <label>Source</label>
+  <input type="text" id="dir-input" placeholder="Source folder" readonly>
+  <button class="btn-save" onclick="openBrowser('source')">Browse…</button>
+</div>
+<!-- Two destinations, mirroring organize.py's Movies / TV prompt. Each file is
+     tagged with one of them in the table below. -->
+<div class="toolbar">
+  <label>Movies</label>
+  <input type="text" id="out-movies" placeholder="Movies destination" readonly>
+  <button class="btn-save" onclick="openBrowser('movies')">Browse…</button>
+  <label>TV</label>
+  <input type="text" id="out-tv" placeholder="TV destination" readonly>
+  <button class="btn-save" onclick="openBrowser('tv')">Browse…</button>
+</div>
+<div class="toolbar">
+  <span id="exclude-summary" class="muted">No subfolders excluded</span>
+  <button class="btn-save" id="btn-exclude" onclick="openExcludes()" disabled>Choose exclusions…</button>
+  <input type="hidden" id="exclude-input">
+</div>
+
+<!-- Steps: each one only unlocks when the previous has actually finished -->
+<div class="toolbar steps">
+  <button class="btn-primary" id="btn-scan"   onclick="scanFiles()">1. Scan</button>
+  <button class="btn-success" id="btn-rename" onclick="applyFiles()" disabled>2. Rename</button>
+  <button class="btn-success" id="btn-move"   onclick="moveFiles()"  disabled>3. Move</button>
+  <button class="btn-stop"    id="btn-delete" onclick="cleanupSources()" disabled>4. Delete sources</button>
+  <button class="btn-save"    id="btn-all" style="display:none" onclick="toggleSelectAll()">Select All</button>
   <span id="file-count"></span>
+</div>
+<div id="job-banner" class="job-banner" style="display:none"></div>
+<div id="move-progress" style="display:none">
+  <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+  <span id="move-label" class="muted"></span>
+  <div class="bar bar-file"><div class="bar-fill" id="bar-file-fill"></div></div>
+  <span id="move-file-label" class="muted"></span>
+</div>
+
+<!-- Folder browser -->
+<div id="browse-modal" class="modal">
+  <div class="modal-box">
+    <h3 id="browse-title">Choose folder</h3>
+    <div id="browse-path" class="muted"></div>
+    <div id="browse-list" class="browse-list"></div>
+    <div class="modal-actions">
+      <button class="btn-save" onclick="closeModal('browse-modal')">Cancel</button>
+      <button class="btn-primary" onclick="chooseCurrent()">Use this folder</button>
+    </div>
+  </div>
+</div>
+
+<!-- Exclusion picker -->
+<div id="exclude-modal" class="modal">
+  <div class="modal-box">
+    <h3>Exclude subfolders</h3>
+    <div class="muted">Ticked folders are skipped by the scan.</div>
+    <div id="exclude-list" class="browse-list"></div>
+    <div class="modal-actions">
+      <button class="btn-save" onclick="closeModal('exclude-modal')">Cancel</button>
+      <button class="btn-primary" onclick="saveExcludes()">Apply</button>
+    </div>
+  </div>
 </div>
 
 <!-- Results table -->
@@ -256,13 +370,21 @@
         <th class="col-chk"><input type="checkbox" id="chk-all" onclick="toggleSelectAll()"></th>
         <th class="col-orig">Original path</th>
         <th class="col-rename">Rename to</th>
+        <th class="col-dest">
+          <select class="dest-select" id="dest-all" onchange="setAllDest(this.value)">
+            <option value="">Dest…</option>
+            <option value="movies">All Movies</option>
+            <option value="tv">All TV</option>
+            <option value="skip">All Skip</option>
+          </select>
+        </th>
         <th class="col-flat">Flatten</th>
         <th class="col-size">Size</th>
         <th class="col-result">Result</th>
       </tr>
     </thead>
     <tbody id="file-tbody">
-      <tr class="state-row"><td colspan="6">Enter a directory path and click Scan.</td></tr>
+      <tr class="state-row"><td colspan="7">Enter a directory path and click Scan.</td></tr>
     </tbody>
   </table>
 </div>
@@ -307,7 +429,7 @@
 
   function setState(html) {
     document.getElementById('file-tbody').innerHTML =
-      `<tr class="state-row"><td colspan="6">${html}</td></tr>`;
+      `<tr class="state-row"><td colspan="7">${html}</td></tr>`;
   }
 
   // ---- scan ----
@@ -319,7 +441,10 @@
     localStorage.setItem('vpn_organizer_exclude', exclude);
 
     setState('Scanning…');
-    document.getElementById('btn-apply').disabled = true;
+    _files = [];
+    resetSteps();
+    document.getElementById('job-banner').style.display = 'none';
+    document.getElementById('move-progress').style.display = 'none';
     document.getElementById('btn-all').style.display = 'none';
     document.getElementById('file-count').textContent = '';
     document.getElementById('chk-all').checked = true;
@@ -338,7 +463,7 @@
       if (!_files.length) { setState('No .mp4 or .mkv files found in that directory.'); return; }
 
       renderTable();
-      document.getElementById('btn-apply').disabled = false;
+      resetSteps();
       document.getElementById('btn-all').style.display = '';
       document.getElementById('file-count').textContent = `${_files.length} file${_files.length !== 1 ? 's' : ''} found`;
     } catch (e) {
@@ -346,11 +471,26 @@
     }
   }
 
+  // Episode markers: S01E02, 1x02, "Season 1", or a bare 3-4 digit episode
+  // code. A guess only — every row stays editable before the move runs.
+  const _TV_RE = /(^|[\s._-])(s\d{1,2}[\s._-]?e\d{1,3}|\d{1,2}x\d{2}|season[\s._-]?\d{1,2}|ep(isode)?[\s._-]?\d{1,3})([\s._-]|$)/i;
+
+  function guessDest(f) {
+    return _TV_RE.test(f.proposed || f.original) ? 'tv' : 'movies';
+  }
+
+  function setAllDest(value) {
+    if (!value) return;
+    document.querySelectorAll('.dest-select-row').forEach(s => { s.value = value; });
+    document.getElementById('dest-all').value = '';
+    updateSteps();
+  }
+
   function renderTable() {
     const tbody = document.getElementById('file-tbody');
     const rows = _files.map((f, i) => {
       const mb = (f.size / 1048576).toFixed(1);
-      const changed = f.proposed !== f.original.split('/').pop();
+      const dest = guessDest(f);
       return `<tr data-i="${i}">
         <td class="col-chk"><input type="checkbox" class="file-chk" checked></td>
         <td class="col-orig">${escHtml(f.original)}</td>
@@ -359,6 +499,13 @@
                  value="${escHtml(f.proposed)}"
                  title="${escHtml(f.proposed)}"
                  placeholder="keep original name">
+        </td>
+        <td class="col-dest">
+          <select class="dest-select dest-select-row">
+            <option value="movies"${dest === 'movies' ? ' selected' : ''}>Movies</option>
+            <option value="tv"${dest === 'tv' ? ' selected' : ''}>TV</option>
+            <option value="skip">Skip</option>
+          </select>
         </td>
         <td class="col-flat" style="text-align:center">
           <input type="checkbox" class="file-flatten" ${f.in_subdir ? 'checked' : ''}>
@@ -378,8 +525,16 @@
     if (e.key === 'Enter') scanFiles();
   });
 
-  // Restore remembered exclude list
+  // Restore remembered exclude list and folder choices
   document.getElementById('exclude-input').value = localStorage.getItem('vpn_organizer_exclude') || '';
+  for (const [target, t] of Object.entries({
+        source: { input: 'dir-input',  store: 'vpn_organizer_dir' },
+        movies: { input: 'out-movies', store: 'vpn_organizer_movies' },
+        tv:     { input: 'out-tv',     store: 'vpn_organizer_tv' } })) {
+    const saved = localStorage.getItem(t.store);
+    if (saved) document.getElementById(t.input).value = saved;
+    if (target === 'source' && saved) document.getElementById('btn-exclude').disabled = false;
+  }
 
   // ---- select all toggle ----
 
@@ -387,13 +542,16 @@
     const chkAll = document.getElementById('chk-all');
     const checks = document.querySelectorAll('.file-chk');
     checks.forEach(c => c.checked = chkAll.checked);
+    updateSteps();
   }
 
   // Keep header checkbox in sync when individual rows change
   document.getElementById('file-tbody').addEventListener('change', e => {
+    if (e.target.classList.contains('dest-select-row')) { updateSteps(); return; }
     if (!e.target.classList.contains('file-chk')) return;
     const all = [...document.querySelectorAll('.file-chk')];
     document.getElementById('chk-all').checked = all.every(c => c.checked);
+    updateSteps();
   });
 
   // ---- apply ----
@@ -415,7 +573,7 @@
 
     if (!ops.length) return alert('No files selected.');
 
-    const btn = document.getElementById('btn-apply');
+    const btn = document.getElementById('btn-rename');
     btn.disabled = true;
     btn.textContent = 'Applying…';
 
@@ -450,9 +608,319 @@
       });
     } finally {
       btn.disabled = false;
-      btn.textContent = 'Apply Selected';
+      btn.textContent = '2. Rename';
     }
   }
+
+  // ---------------------------------------------------------- folder browser
+  let _browseTarget = null, _browsePath = '/';
+
+  function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+  // Which input each browse target fills, and where it is remembered.
+  const _TARGETS = {
+    source: { input: 'dir-input',   store: 'vpn_organizer_dir',    title: 'Choose source folder' },
+    movies: { input: 'out-movies',  store: 'vpn_organizer_movies', title: 'Choose Movies destination' },
+    tv:     { input: 'out-tv',      store: 'vpn_organizer_tv',     title: 'Choose TV destination' },
+  };
+
+  async function openBrowser(target) {
+    _browseTarget = target;
+    const t = _TARGETS[target];
+    document.getElementById('browse-title').textContent = t.title;
+    const start = document.getElementById(t.input).value.trim();
+    document.getElementById('browse-modal').classList.add('open');
+    await loadBrowse(start || '/');
+  }
+
+  async function loadBrowse(path) {
+    const r = await fetch('/api/files/browse?path=' + encodeURIComponent(path),
+                          { headers: authHeaders({}) });
+    if (r.status === 401) { showTokenModal(); return; }
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Cannot open folder'); return; }
+    _browsePath = data.path;
+    document.getElementById('browse-path').textContent = data.path;
+    const list = document.getElementById('browse-list');
+    list.innerHTML = '';
+    if (data.parent) {
+      const up = document.createElement('div');
+      up.className = 'row up';
+      up.textContent = '↑ ..';
+      up.onclick = () => loadBrowse(data.parent);
+      list.appendChild(up);
+    }
+    data.dirs.forEach(d => {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.textContent = '📁 ' + d.name;
+      row.onclick = () => loadBrowse(d.path);
+      list.appendChild(row);
+    });
+    if (!data.dirs.length) {
+      const empty = document.createElement('div');
+      empty.className = 'row up';
+      empty.textContent = '(no subfolders)';
+      list.appendChild(empty);
+    }
+  }
+
+  function chooseCurrent() {
+    const t = _TARGETS[_browseTarget];
+    document.getElementById(t.input).value = _browsePath;
+    localStorage.setItem(t.store, _browsePath);
+    closeModal('browse-modal');
+    if (_browseTarget === 'source') {
+      document.getElementById('btn-exclude').disabled = false;
+      setExcludes([]);
+    }
+    resetSteps();
+  }
+
+  // ------------------------------------------------------- exclusion picker
+  function setExcludes(list) {
+    document.getElementById('exclude-input').value = list.join(',');
+    document.getElementById('exclude-summary').textContent =
+      list.length ? 'Excluded: ' + list.join(', ') : 'No subfolders excluded';
+  }
+
+  async function openExcludes() {
+    const dir = document.getElementById('dir-input').value.trim();
+    if (!dir) return alert('Choose a source folder first.');
+    const r = await fetch('/api/files/browse?path=' + encodeURIComponent(dir),
+                          { headers: authHeaders({}) });
+    if (r.status === 401) { showTokenModal(); return; }
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Cannot read folder'); return; }
+    const current = document.getElementById('exclude-input').value
+                      .split(',').map(s => s.trim()).filter(Boolean);
+    const list = document.getElementById('exclude-list');
+    list.innerHTML = '';
+    data.dirs.forEach(d => {
+      const row = document.createElement('label');
+      row.className = 'row';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = d.name;
+      cb.checked = current.includes(d.name);
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(d.name));
+      list.appendChild(row);
+    });
+    if (!data.dirs.length) list.innerHTML = '<div class="row up">(no subfolders)</div>';
+    document.getElementById('exclude-modal').classList.add('open');
+  }
+
+  function saveExcludes() {
+    const picked = [...document.querySelectorAll('#exclude-list input:checked')].map(c => c.value);
+    setExcludes(picked);
+    localStorage.setItem('vpn_organizer_exclude', picked.join(','));
+    closeModal('exclude-modal');
+    resetSteps();
+  }
+
+  // ------------------------------------------------------------- step gating
+  // Each step unlocks only when the one before it has actually finished. The
+  // delete step in particular must never be reachable while a move is still
+  // copying - the source is the only complete copy until the move confirms.
+  let _moveJob = null, _moveDone = false, _renamed = false;
+
+  function resetSteps() {
+    _moveJob = null; _moveDone = false; _renamed = false;
+    updateSteps();
+  }
+
+  // Labels a selected row is actually asking for. A destination folder only
+  // has to be set if some file is tagged with it.
+  function neededDests() {
+    const need = new Set();
+    document.querySelectorAll('#file-tbody tr[data-i]').forEach(row => {
+      if (!row.querySelector('.file-chk').checked) return;
+      const d = row.querySelector('.dest-select-row').value;
+      if (d !== 'skip') need.add(d);
+    });
+    return need;
+  }
+
+  function destPaths() {
+    return { movies: document.getElementById('out-movies').value.trim(),
+             tv:     document.getElementById('out-tv').value.trim() };
+  }
+
+  function updateSteps() {
+    const haveFiles = !!(_files && _files.length);
+    const paths = destPaths();
+    const missing = [...neededDests()].filter(d => !paths[d]);
+    const g = (id, reason) => {
+      const el = document.getElementById(id);
+      el.disabled = reason !== null;
+      el.title = reason || '';
+    };
+    g('btn-rename', !haveFiles ? 'Scan first' : null);
+    g('btn-move',   !haveFiles      ? 'Scan first'
+                  : !neededDests().size ? 'Every selected file is set to Skip'
+                  : missing.length  ? 'Choose a folder for: ' + missing.join(', ')
+                                    : null);
+    // Never reachable while a copy is in flight: until the move reports
+    // complete, the source is the only complete copy of the file.
+    g('btn-delete', !_moveDone ? 'Run the move step first' : null);
+  }
+
+  // ----------------------------------------------------------------- step 3
+  async function moveFiles() {
+    // Rows tagged Skip are left where they are — and, because the delete step
+    // only ever touches folders this job reports as moved, their source
+    // folders survive step 4 too.
+    const rows = [...document.querySelectorAll('#file-tbody tr[data-i]')]
+      .filter(r => r.querySelector('.file-chk').checked)
+      .filter(r => r.querySelector('.dest-select-row').value !== 'skip');
+    if (!rows.length) return alert('Select at least one file that is not set to Skip.');
+    const ops = rows.map(r => {
+      const i = parseInt(r.dataset.i);
+      return { original: _files[i].original,
+               dest: r.querySelector('.dest-select-row').value,
+               rename_to: r.querySelector('.file-rename').value.trim() || _files[i].proposed };
+    });
+
+    const paths = destPaths();
+    const destinations = {};
+    neededDests().forEach(d => { destinations[d] = paths[d]; });
+
+    const btn = document.getElementById('btn-move');
+    btn.disabled = true;
+    document.getElementById('move-progress').style.display = '';
+    document.getElementById('move-label').textContent = 'Starting…';
+
+    const r = await fetch('/api/files/move', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ source_dir: _sourceDir, destinations, operations: ops }),
+    });
+    if (r.status === 401) { showTokenModal(); btn.disabled = false; return; }
+    const data = await r.json();
+    if (!r.ok) { alert(data.error || 'Move failed'); btn.disabled = false; return; }
+    _moveJob = data.job_id;
+    pollMove();
+  }
+
+  // A move started in another tab, or before a reload, is still running on the
+  // server — the job record is the only thing that knows. Without this the copy
+  // continued invisibly and step 4 could never unlock.
+  async function reattachMove() {
+    let jobs;
+    try {
+      const r = await fetch('/api/files/move', { headers: authHeaders({}) });
+      if (!r.ok) return;                       // 401 handled by the first real action
+      jobs = (await r.json()).jobs || [];
+    } catch (e) { return; }
+    if (!jobs.length) return;
+
+    const running = jobs.find(j => j.state === 'running');
+    if (running) {
+      _moveJob = running.id;
+      document.getElementById('move-progress').style.display = '';
+      document.getElementById('move-label').textContent = 'Reattaching to move in progress…';
+      banner(`Move in progress from ${running.source_dir} — reattached.`);
+      pollMove();
+      return;
+    }
+    const latest = jobs[0];
+    if (latest.state === 'interrupted') {
+      banner(`A move from ${latest.source_dir} was interrupted after ` +
+             `${latest.moved} of ${latest.total_files} file(s). The files it ` +
+             `finished are already at their destination; scan and move again ` +
+             `to pick up the rest. Sources cannot be deleted from that run.`);
+    }
+  }
+
+  function banner(text) {
+    const el = document.getElementById('job-banner');
+    el.textContent = text;
+    el.style.display = '';
+  }
+
+  function fmtBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.min(u.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+    return (n / Math.pow(1024, i)).toFixed(i ? 1 : 0) + ' ' + u[i];
+  }
+
+  // The job id is passed down the chain rather than read from _moveJob: a
+  // rescan clears _moveJob, and an in-flight poll would otherwise fetch a null
+  // id and pop an error at the user.
+  async function pollMove(jobId) {
+    jobId = jobId || _moveJob;
+    if (!jobId || jobId !== _moveJob) return;
+    const r = await fetch('/api/files/move/' + jobId, { headers: authHeaders({}) });
+    const job = await r.json();
+    if (!r.ok) { alert(job.error || 'Lost the move job'); return; }
+
+    const pct = job.total_bytes ? Math.round(100 * job.done_bytes / job.total_bytes) : 0;
+    document.getElementById('bar-fill').style.width = pct + '%';
+    document.getElementById('move-label').textContent =
+      job.state === 'complete'
+        ? `Move complete — ${job.results.filter(x => x.status === 'moved').length} moved, ` +
+          `${fmtBytes(job.done_bytes)} transferred`
+        : `${pct}% — file ${Math.min(job.done_files + 1, job.total_files)} of ${job.total_files} — ` +
+          `${fmtBytes(job.done_bytes)} of ${fmtBytes(job.total_bytes)}`;
+
+    // Second bar: the file being copied right now. On a 20GB transfer the
+    // overall bar barely moves, so without this the UI looks stalled.
+    const filePct = job.current_total
+      ? Math.round(100 * job.current_bytes / job.current_total) : 0;
+    document.getElementById('bar-file-fill').style.width =
+      (job.state === 'complete' ? 0 : filePct) + '%';
+    document.getElementById('move-file-label').textContent =
+      job.state === 'complete' ? ''
+      : job.current ? `${job.current} — ${filePct}% (${fmtBytes(job.current_bytes)} of ${fmtBytes(job.current_total)})`
+      : '';
+
+    const map = {};
+    job.results.forEach(res => { map[res.original] = res; });
+    document.querySelectorAll('#file-tbody tr[data-i]').forEach(row => {
+      const res = map[_files[parseInt(row.dataset.i)].original];
+      if (!res) return;
+      const cell = row.querySelector('.file-result-cell');
+      cell.className = 'col-result file-result-cell ' +
+        (res.status === 'moved' ? 'ok' : res.status === 'skipped' ? 'skip' : 'err');
+      cell.textContent = res.message || res.status;
+    });
+
+    if (job.state === 'interrupted') {
+      banner('The move stopped before it finished — the web app restarted. ' +
+             'Scan and move again; sources cannot be deleted from that run.');
+      updateSteps();
+      return;
+    }
+    if (job.state !== 'complete') { setTimeout(() => pollMove(jobId), 700); return; }
+    // Only now is the move genuinely finished, so the delete step may unlock.
+    _moveDone = true;
+    updateSteps();
+  }
+
+  // ----------------------------------------------------------------- step 4
+  async function cleanupSources() {
+    const btn = document.getElementById('btn-delete');
+    btn.disabled = true; btn.textContent = 'Deleting…';
+    try {
+      const r = await fetch('/api/files/cleanup', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ job_id: _moveJob }),
+      });
+      if (r.status === 401) { showTokenModal(); return; }
+      const data = await r.json();
+      if (!r.ok) { alert(data.error || 'Cleanup failed'); return; }
+      const del = data.results.filter(x => x.status === 'deleted');
+      const kept = data.results.filter(x => x.status === 'kept');
+      document.getElementById('move-label').textContent =
+        `Deleted ${del.length} item(s)` + (kept.length ? `; kept ${kept.length} folder(s) with unrecognised files` : '');
+    } finally {
+      btn.textContent = '4. Delete sources';
+    }
+  }
+
+  reattachMove();
+
 </script>
 </body>
 </html>

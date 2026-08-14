@@ -6,11 +6,11 @@ implementations cannot drift on what qBittorrent is actually told to do.
 
 The settings this file owns, and nothing else:
 
-  Session\\Interface          tun0
-  Session\\InterfaceName      tun0
-  Session\\InterfaceAddress   the live tun0 IP (a socket-level bind: the kernel
-                              refuses the send if the address is gone, so a
-                              dropped tunnel cannot fall back to eth0)
+  Session\\Interface          tun0      } written for a future qBittorrent that
+  Session\\InterfaceName      tun0      } honours them; 4.2.5 does NOT - see below
+  Session\\InterfaceAddress   the live tun0 IP
+  WebUI\\LocalHostAuth        false - lets the monitor apply the real bind over
+                              the local API without storing a password
   Session\\DefaultSavePath    QBT_SAVE_PATH
   Session\\QueueingSystemEnabled / Session\\MaxActiveDownloads /
   Session\\MaxActiveTorrents  the concurrent-download limit
@@ -20,6 +20,14 @@ merge, not a copy - qBittorrent rewrites its whole config on exit, so anything
 set from the Web UI (credentials, categories, speed limits) lives only in that
 file, and overwriting it with the repo template silently reset it on every
 start.
+
+**The interface keys do not bind anything on qBittorrent 4.2.5.** Tested
+directly: the client keeps them in the file, then reports
+`current_network_interface = ''`, picks a random listen port and listens on
+every address. `apply_tunnel_bind()` in `webapp/monitor.py` applies the real
+bind through the WebUI API after startup and reads it back to confirm. They are
+still written here so a later qBittorrent that does honour them gets the right
+values, but writing them is not the same as having bound anything.
 
 The keys above are the qBittorrent 4.x names (`BitTorrent/Session/*`). The
 `[Preferences] Queueing\\*` and `Downloads\\SavePath` entries still present in
@@ -160,6 +168,23 @@ def apply_config(config=DEFAULT_CONFIG, template=DEFAULT_TEMPLATE,
         # longer has. Drop it and fall back to the name bind.
         del_key(sections, "BitTorrent", r"Session\InterfaceAddress")
         warnings.append("tun0 IP unavailable - bound by interface name only")
+
+    # --- local API access --------------------------------------------------
+    # The keys above do not actually bind anything. Verified on qBittorrent
+    # 4.2.5: Session\Interface, Session\InterfaceAddress and Session\Port are
+    # preserved in this file but never applied — the client reports an empty
+    # interface, picks a random listen port and listens on every address. The
+    # real bind is applied over the WebUI API by apply_tunnel_bind() in
+    # webapp/monitor.py, and this is what lets it do that without storing a
+    # password: requests from 127.0.0.1 skip authentication.
+    #
+    # The trade-off is deliberate and worth knowing: any local process or local
+    # user can then drive qBittorrent's API without credentials. Set
+    # QBT_WEBUI_USER / QBT_WEBUI_PASS in vpn_config.conf instead if that
+    # matters on this box — apply_tunnel_bind() prefers the localhost path but
+    # falls back to logging in.
+    set_key(sections, "Preferences", r"WebUI\LocalHostAuth", "false")
+    status.append("local WebUI API access enabled (for the tunnel bind)")
 
     # --- download location -------------------------------------------------
     if save_path:

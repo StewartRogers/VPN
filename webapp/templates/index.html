@@ -41,6 +41,20 @@
       font-weight: 700;
       letter-spacing: 1px;
       flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    /* Right-hand nav: the organizer used to be a panel at the bottom of the
+       left column, below the fold on a short window. */
+    .app-header .nav { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+    .app-header .nav a { text-decoration: none; }
+    .app-header .nav .hint {
+      font-size: 11px;
+      font-weight: 400;
+      letter-spacing: 0;
+      color: var(--muted);
     }
 
     /* ---- two-column resizable layout ---- */
@@ -301,7 +315,13 @@
   </div>
 </div>
 
-<div class="app-header">VPN Monitor</div>
+<div class="app-header">
+  <span>VPN Monitor</span>
+  <div class="nav">
+    <span class="hint">Rename &amp; flatten downloaded video files</span>
+    <a href="/organizer" target="_blank"><button class="btn-save">Open File Organizer ↗</button></a>
+  </div>
+</div>
 
 <div class="app-layout">
 
@@ -320,6 +340,38 @@
         <span class="s-key">External IP</span>   <span class="s-val dim" id="s-ip">—</span>
         <span class="s-key">Default Route</span> <span class="s-val dim" id="s-route">—</span>
         <span class="s-key">qBittorrent</span>   <span class="s-val dim" id="s-qbt">—</span>
+      </div>
+    </div>
+
+    <!-- Configuration -->
+    <div class="panel">
+      <div class="panel-title">Configuration</div>
+      <div class="cfg-row">
+        <div class="field">
+          <label>Home IP (pre-VPN)</label>
+          <div style="display:flex;gap:5px;align-items:center">
+            <input type="text" id="cfg-home-ip" value="{{ home_ip }}" placeholder="Detecting…" style="width:130px">
+            <button class="btn-save" onclick="detectHomeIP()">Detect</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>Fast Interval (s)</label>
+          <input type="number" id="cfg-fast" value="2" min="1" max="60">
+        </div>
+        <div class="field">
+          <label>IP Check (s)</label>
+          <input type="number" id="cfg-ip" value="10" min="5" max="300">
+        </div>
+        <div style="display:flex;gap:5px;align-items:flex-end">
+          <button class="btn-save" onclick="saveConfig()">Save &amp; Apply</button>
+          <button class="btn-save" onclick="showTokenModal()">Token</button>
+        </div>
+      </div>
+      <div class="cfg-row">
+        <div class="field" style="flex:1">
+          <label>qBittorrent Save Path</label>
+          <input type="text" id="cfg-save-path" value="{{ save_path }}" placeholder="qBittorrent default" style="width:100%">
+        </div>
       </div>
     </div>
 
@@ -361,7 +413,7 @@
         <div class="step-label">Step 4 — qBittorrent</div>
         <div class="step-btns">
           <button class="btn-start" id="btn-qbt-start" disabled onclick="post('/api/qbt/start').then(({ok})=>ok&&pollStatus())">Start</button>
-          <button class="btn-stop"  onclick="post('/api/qbt/stop').then(({ok})=>ok&&pollStatus())">Stop</button>
+          <button class="btn-stop"  id="btn-qbt-stop" onclick="post('/api/qbt/stop').then(({ok})=>ok&&pollStatus())">Stop</button>
         </div>
       </div>
 
@@ -369,46 +421,6 @@
         <button class="btn-stop-all" id="btn-stop-all" onclick="stopAll()">Stop All</button>
         <span style="font-size:11px;color:var(--muted)">Stops qBittorrent, monitor &amp; VPN in order</span>
       </div>
-    </div>
-
-    <!-- Configuration -->
-    <div class="panel">
-      <div class="panel-title">Configuration</div>
-      <div class="cfg-row">
-        <div class="field">
-          <label>Home IP (pre-VPN)</label>
-          <div style="display:flex;gap:5px;align-items:center">
-            <input type="text" id="cfg-home-ip" value="{{ home_ip }}" placeholder="Detecting…" style="width:130px">
-            <button class="btn-save" onclick="detectHomeIP()">Detect</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Fast Interval (s)</label>
-          <input type="number" id="cfg-fast" value="2" min="1" max="60">
-        </div>
-        <div class="field">
-          <label>IP Check (s)</label>
-          <input type="number" id="cfg-ip" value="5" min="5" max="300">
-        </div>
-        <div style="display:flex;gap:5px;align-items:flex-end">
-          <button class="btn-save" onclick="saveConfig()">Save &amp; Apply</button>
-          <button class="btn-save" onclick="showTokenModal()">Token</button>
-        </div>
-      </div>
-      <div class="cfg-row">
-        <div class="field" style="flex:1">
-          <label>qBittorrent Save Path</label>
-          <input type="text" id="cfg-save-path" value="{{ save_path }}" placeholder="qBittorrent default" style="width:100%">
-        </div>
-      </div>
-    </div>
-
-    <!-- File Organizer -->
-    <div class="panel" style="display:flex;align-items:center;justify-content:space-between">
-      <span style="font-size:11px;color:var(--muted)">Rename &amp; flatten downloaded video files</span>
-      <a href="/organizer" target="_blank">
-        <button class="btn-save">Open File Organizer ↗</button>
-      </a>
     </div>
 
   </div><!-- /left -->
@@ -497,15 +509,64 @@
     set('s-ip',  s.external_ip || '—', s.external_ip ? 'info' : 'dim');
     set('s-qbt', s.qbittorrent ? 'Running' : 'Stopped', s.qbittorrent ? 'ok' : 'dim');
 
-    document.getElementById('btn-vpn-start').disabled = s.vpn_starting;
-    document.getElementById('btn-vpn-stop').disabled  = s.running || s.vpn_starting;
     document.getElementById('btn-vpn-cancel-retry').style.display = s.vpn_retry_pending ? '' : 'none';
+    applyButtonState(s);
+  }
 
-    const vpnReady = !s.vpn_starting && s.vpn_process && s.vpn_interface;
-    document.getElementById('btn-start').disabled = s.running || !vpnReady;
-    document.getElementById('btn-stop').disabled  = !s.running;
+  // Start order: VPN -> monitor -> qBittorrent.  Stop order is the reverse, and
+  // a step may only be stopped once everything layered on top of it is already
+  // stopped. A disabled button is only a hint — the server enforces the same
+  // rules — but the hint should never point at something that cannot work.
+  function applyButtonState(s) {
+    const busy    = s.vpn_starting;
+    const vpnUp   = s.vpn_process;
+    const vpnReady = !busy && s.vpn_process && s.vpn_interface;
+    const monUp   = s.running;
+    const qbtUp   = s.qbittorrent;
 
-    document.getElementById('btn-qbt-start').disabled = !(s.running && s.secure);
+    const rules = {
+      // Start VPN: only when the VPN is not already up and not mid-attempt.
+      'btn-vpn-start':  busy  ? 'VPN is still starting'
+                      : vpnUp ? 'VPN is already running'
+                              : null,
+      // Stop VPN: everything above it must be down first.
+      'btn-vpn-stop':   busy  ? 'VPN is still starting'
+                      : !vpnUp ? 'VPN is not running'
+                      : qbtUp ? 'Stop qBittorrent first'
+                      : monUp ? 'Stop the monitor first'
+                              : null,
+      'btn-start':      monUp ? 'Monitor is already running'
+                      : !vpnReady ? 'Start the VPN first'
+                              : null,
+      'btn-stop':       !monUp ? 'Monitor is not running'
+                      : qbtUp ? 'Stop qBittorrent first'
+                              : null,
+      'btn-qbt-start':  qbtUp ? 'qBittorrent is already running'
+                      : !monUp ? 'Start the monitor first'
+                      : !s.secure ? 'Tunnel is not confirmed secure'
+                              : null,
+      'btn-qbt-stop':   !qbtUp ? 'qBittorrent is not running' : null,
+      // Force Reconnect tears the tunnel down and back up; it must not run
+      // underneath a live client.
+      'btn-reconnect':  busy  ? 'VPN is still starting'
+                      : qbtUp ? 'Stop qBittorrent first'
+                              : null,
+    };
+
+    for (const [id, reason] of Object.entries(rules)) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.disabled = reason !== null;
+      el.title = reason || '';
+    }
+
+    // Stop All is the deliberate escape hatch: it performs the whole ordered
+    // teardown itself, so it stays available whenever anything is up.
+    const stopAll = document.getElementById('btn-stop-all');
+    if (stopAll) {
+      stopAll.disabled = !(vpnUp || monUp || qbtUp);
+      stopAll.title = stopAll.disabled ? 'Nothing is running' : '';
+    }
   }
 
   function appendLog(line) {

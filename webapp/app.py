@@ -5,12 +5,15 @@ import os
 import secrets
 import subprocess
 import threading
+import time
+import uuid
 from typing import Optional
 
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 
 from monitor import VPNMonitor, detect_external_ip, read_config_value
+import organizer as organizer_mod
 from organizer import scan_directory, organize_files
 
 load_dotenv()
@@ -168,11 +171,41 @@ def vpn_upload_config():
     return jsonify({"started": True})
 
 
+def _ordering_violation(step):
+    """Enforce the start/stop ordering server-side.
+
+    The UI disables buttons that would break the order, but that is a hint and
+    not a control: curl, a stale tab, or a state change between 3s status polls
+    all still reach these endpoints. Stopping a layer while something above it
+    is still running is what leaves a torrent client on an unprotected link.
+    """
+    if step == "vpn_start":
+        if monitor.status.get("vpn_starting"):
+            return "VPN is still starting"
+        if monitor.check_openvpn_process():
+            return "VPN is already running"
+    elif step == "vpn_stop":
+        if monitor.is_qbittorrent_running():
+            return "Stop qBittorrent before stopping the VPN"
+        if monitor.status.get("running"):
+            return "Stop the monitor before stopping the VPN"
+    elif step == "monitor_stop":
+        if monitor.is_qbittorrent_running():
+            return "Stop qBittorrent before stopping the monitor"
+    elif step == "reconnect":
+        if monitor.is_qbittorrent_running():
+            return "Stop qBittorrent before reconnecting the VPN"
+    return None
+
+
 @app.route("/api/vpn/start", methods=["POST"])
 def vpn_start():
     err = _auth() or _require_monitor()
     if err:
         return err
+    bad = _ordering_violation("vpn_start")
+    if bad:
+        return jsonify({"error": bad}), 409
     monitor.start_vpn()
     return jsonify({"started": True})
 
@@ -182,6 +215,9 @@ def vpn_stop():
     err = _auth() or _require_monitor()
     if err:
         return err
+    bad = _ordering_violation("vpn_stop")
+    if bad:
+        return jsonify({"error": bad}), 409
     monitor.stop_vpn_bg()
     return jsonify({"stopped": True})
 
@@ -213,6 +249,9 @@ def stop():
     err = _auth() or _require_monitor()
     if err:
         return err
+    bad = _ordering_violation("monitor_stop")
+    if bad:
+        return jsonify({"error": bad}), 409
     monitor.stop()
     return jsonify({"stopped": True})
 
@@ -256,6 +295,9 @@ def reconnect():
     err = _auth() or _require_monitor()
     if err:
         return err
+    bad = _ordering_violation("reconnect")
+    if bad:
+        return jsonify({"error": bad}), 409
     threading.Thread(target=monitor.attempt_reconnect, daemon=True).start()
     return jsonify({"started": True})
 
@@ -282,7 +324,10 @@ def configure():
 
     try:
         fast_interval = max(1, min(int(data.get("fast_interval", 2)), 60))
-        ip_interval = max(5, min(int(data.get("ip_interval", 5)), 300))
+        # Default 10s, matching VPNMonitor, checkip.sh and vpn_config.conf.
+        # The kill-switch probe rides this cadence too, so a lower default
+        # doubles the ufw work for no extra leak protection.
+        ip_interval = max(5, min(int(data.get("ip_interval", 10)), 300))
     except (TypeError, ValueError):
         return jsonify({"error": "Invalid interval value"}), 400
 
@@ -347,6 +392,269 @@ def files_organize():
         return jsonify({"results": results})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+
+
+# ------------------------------------------------- organizer: browse / move / clean
+
+# Move jobs run in a background thread: a cross-filesystem copy of a 20GB file
+# is not something an HTTP request can wait on. The job record is how the UI
+# answers "is the move finished yet" - and the delete step is gated on it.
+#
+# The record is mirrored to disk so it outlives both the browser tab and the
+# web app. Before that, the job id existed only in a JavaScript variable: a
+# reload during a 20GB copy left the copy running with nothing able to see it,
+# and step 4 could never unlock.
+_jobs = {}
+_jobs_lock = threading.Lock()
+
+_VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_JOBS_FILE = (os.environ.get("ORGANIZER_JOBS_FILE", "").strip()
+              or os.path.join(_VPN_DIR, "organizer_jobs.json"))
+_JOBS_KEEP = 20
+
+
+def _save_jobs():
+    """Write the job records out atomically.
+
+    Called when a job starts, when each file finishes and when the job ends —
+    not on every chunk. Per-chunk byte counts are a progress display; writing
+    them would mean a disk write every few megabytes on an SD card.
+    """
+    try:
+        with _jobs_lock:
+            recent = sorted(_jobs.values(), key=lambda j: j.get("started", 0),
+                            reverse=True)[:_JOBS_KEEP]
+            for stale in list(_jobs):
+                if stale not in {j["id"] for j in recent}:
+                    del _jobs[stale]
+            payload = json.dumps({"jobs": recent}, indent=1)
+        tmp = _JOBS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, _JOBS_FILE)      # readers never see a half-written file
+    except OSError as exc:
+        print(f"WARNING: could not persist organizer jobs to {_JOBS_FILE}: {exc}",
+              flush=True)
+
+
+def _load_jobs():
+    """Restore job records at startup.
+
+    A job still marked "running" belonged to a process that is gone, so its
+    copy thread died with it. It becomes "interrupted", never "complete": the
+    delete step is gated on "complete", and a job that stopped mid-copy has
+    results it never finished writing. The user rescans and moves again — the
+    files that did complete are recorded as moved and will be skipped as
+    duplicates on the second pass.
+    """
+    try:
+        with open(_JOBS_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return
+    for job in data.get("jobs", []):
+        if not isinstance(job, dict) or "id" not in job:
+            continue
+        if job.get("state") == "running":
+            job["state"] = "interrupted"
+            job["current"] = None
+        _jobs[job["id"]] = job
+
+
+_load_jobs()
+
+
+@app.route("/api/files/browse")
+def files_browse():
+    err = _auth()
+    if err:
+        return err
+    try:
+        return jsonify(organizer_mod.browse(request.args.get("path", "/")))
+    except NotADirectoryError:
+        return jsonify({"error": "Not a directory"}), 404
+    except PermissionError:
+        return jsonify({"error": "Permission denied"}), 403
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/files/move", methods=["POST"])
+def files_move():
+    err = _auth()
+    if err:
+        return err
+    data = request.get_json(force=True)
+    source_dir = os.path.realpath((data.get("source_dir") or "").strip())
+    operations = data.get("operations") or []
+    if not os.path.isdir(source_dir):
+        return jsonify({"error": "Source directory not found"}), 404
+
+    # Destinations are declared once, by label, and each file names a label.
+    # Resolving them here rather than per-file is what keeps the validation
+    # honest: an operation can only ever land in a folder the request declared
+    # up front, so a crafted `dest` cannot write outside the chosen roots.
+    declared = data.get("destinations") or {}
+    if not isinstance(declared, dict):
+        return jsonify({"error": "destinations must be an object"}), 400
+    if data.get("output_dir"):           # single-folder form, still supported
+        declared = dict(declared, output=data["output_dir"])
+    dests = {}
+    for label, path in declared.items():
+        path = os.path.realpath((path or "").strip())
+        if not path or path == "/":
+            return jsonify({"error": f"Destination '{label}' is not set"}), 400
+        if path == source_dir or path.startswith(source_dir + os.sep):
+            return jsonify({"error": f"Destination '{label}' must be outside "
+                                     "the source folder"}), 400
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception as exc:
+            return jsonify({"error": f"Could not create '{label}' folder: {exc}"}), 400
+        dests[label] = path
+    if not dests:
+        return jsonify({"error": "At least one destination folder is required"}), 400
+
+    def _plan(op):
+        """Resolve one operation to (src, dst, error)."""
+        rel = op.get("original", "")
+        src = os.path.realpath(os.path.join(source_dir, rel))
+        if not src.startswith(source_dir + os.sep) or not os.path.isfile(src):
+            return src, None, "File not found in source"
+        label = op.get("dest") or ("output" if "output" in dests else None)
+        root = dests.get(label)
+        if not root:
+            return src, None, f"No destination chosen ({label or 'unset'})"
+        name = os.path.basename(op.get("rename_to") or op.get("proposed") or rel)
+        dst = os.path.realpath(os.path.join(root, name))
+        if not dst.startswith(root + os.sep):
+            return src, None, "Destination escapes the output folder"
+        return src, dst, None
+
+    job_id = uuid.uuid4().hex[:12]
+    total_bytes = 0
+    for op in operations:
+        src, dst, bad = _plan(op)
+        if not bad:
+            total_bytes += os.path.getsize(src)
+
+    job = {"id": job_id, "state": "running",
+           "done_bytes": 0, "total_bytes": total_bytes,
+           "done_files": 0, "total_files": len(operations),
+           "current": None, "current_bytes": 0, "current_total": 0,
+           "results": [], "source_dir": source_dir,
+           "destinations": dests,
+           "started": time.time(), "finished": None}
+    with _jobs_lock:
+        _jobs[job_id] = job
+    _save_jobs()
+
+    def run():
+        for op in operations:
+            rel = op.get("original", "")
+            src, dst, bad = _plan(op)
+            if bad:
+                job["results"].append({"original": rel, "status": "error",
+                                       "message": bad})
+                job["done_files"] += 1
+                _save_jobs()
+                continue
+            size = os.path.getsize(src)
+            job["current"] = rel
+            job["current_total"] = size
+            job["current_bytes"] = 0
+            base = job["done_bytes"]
+
+            def progress(done, total, _base=base):
+                job["current_bytes"] = done
+                job["done_bytes"] = _base + done
+
+            res = organizer_mod.move_file(src, dst, chunk_cb=progress)
+            job["done_bytes"] = base + (res.get("bytes") or 0)
+            job["done_files"] += 1
+            res["original"] = rel
+            res["destination"] = dst
+            job["results"].append(res)
+            _save_jobs()
+        job["current"] = None
+        job["current_bytes"] = job["current_total"] = 0
+        job["state"] = "complete"
+        job["finished"] = time.time()
+        _save_jobs()
+
+    threading.Thread(target=run, daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/files/move", methods=["GET"])
+def files_move_list():
+    """Job records, newest first — how a reloaded page finds a move in flight.
+
+    Summary fields only: the results list of a large job is far bigger than
+    anything the picker needs, and /api/files/move/<id> serves it in full.
+    """
+    err = _auth()
+    if err:
+        return err
+    with _jobs_lock:
+        jobs = sorted(_jobs.values(), key=lambda j: j.get("started", 0), reverse=True)
+        summary = [{k: j.get(k) for k in
+                    ("id", "state", "started", "finished", "source_dir",
+                     "done_bytes", "total_bytes", "done_files", "total_files",
+                     "current", "current_bytes", "current_total")}
+                   for j in jobs]
+        for row, job in zip(summary, jobs):
+            row["moved"] = sum(1 for r in job.get("results", [])
+                               if r.get("status") == "moved")
+    return jsonify({"jobs": summary})
+
+
+@app.route("/api/files/move/<job_id>")
+def files_move_status(job_id):
+    err = _auth()
+    if err:
+        return err
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job"}), 404
+    return jsonify(job)
+
+
+@app.route("/api/files/cleanup", methods=["POST"])
+def files_cleanup():
+    err = _auth()
+    if err:
+        return err
+    data = request.get_json(force=True)
+    job_id = (data.get("job_id") or "").strip()
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job - run the move step first"}), 404
+    # The delete step only becomes available once the move is genuinely
+    # finished; deleting sources under an in-flight copy destroys the only
+    # complete copy of the file.
+    if job["state"] == "interrupted":
+        return jsonify({"error": "That move was interrupted before it finished — "
+                                 "scan and move again before deleting sources"}), 409
+    if job["state"] != "complete":
+        return jsonify({"error": "Move is still running"}), 409
+    moved = [r for r in job["results"] if r.get("status") == "moved"]
+    if not moved:
+        return jsonify({"results": [], "message": "Nothing was moved - nothing to clean"})
+
+    source_dir = job["source_dir"]
+    folders, results = [], []
+    for r in moved:
+        d = os.path.dirname(os.path.realpath(os.path.join(source_dir, r["original"])))
+        if d != source_dir and d not in folders:
+            folders.append(d)
+    for folder in folders:
+        results.extend(organizer_mod.cleanup_source(folder, source_dir))
+    return jsonify({"results": results})
 
 
 # ------------------------------------------------------------------ main

@@ -59,12 +59,42 @@ Both monitors run the same two-tier loop:
   switch on this cadence (a `sudo` call, hence not on the 2s tier);
   `checkip.sh` still checks it only at startup.
 
-### Failure response: fail-stop
+The kill-switch check goes through `probe_killswitch()`, which is **tri-state**:
+`"active"`, `"inactive"`, or `"unknown"` when UFW does not answer (timeout,
+non-zero exit, missing sudo). Keep the third state. `ufw status verbose` is a
+Python program that shells out to iptables — ~0.5s on an idle Pi, slower under
+load — and when it was collapsed into a bool, a call that merely ran long was
+indistinguishable from a torn-down firewall and fail-stopped a healthy session
+(2026-08-14: tunnel up, exit IP correct, killed anyway). Results are cached for
+`KILLSWITCH_CACHE_TTL` and shared under a lock, because `/api/status` calls this
+on every 3s browser poll and concurrent `ufw` runs contend on the xtables lock.
+
+`check_killswitch_active()` is the bool wrapper: it returns True only for
+`"active"`, so everything gated on it (`torrent_start_blocked()`, the monitor's
+startup check) still fails closed on an inconclusive probe.
+
+#The fast-tier checks are tri-state for the same reason
+(`probe_openvpn_process`, `probe_vpn_interface`, `probe_default_route` return
+True/False/None). `except: return False` meant a command that merely timed out
+under torrent load read as "the tunnel is gone" — on 2026-08-14 11:32 the
+monitor logged "VPN interface down" and tore everything down while OpenVPN's
+log shows tun0 up continuously. `FAST_MAX_UNKNOWN` retries an unanswered probe;
+a definite False still trips at once. When tun0 cannot be read the route is
+unknown, never "bypassing the tunnel".
+
+## Failure response: fail-stop
 
 **Neither monitor reconnects on its own.** On any fast-tier failure, an exit IP
-matching the home IP, or three consecutive failed IP lookups, the monitor stops
-qBittorrent and exits **with the kill switch still active**. The web monitor
-additionally stops OpenVPN. The box goes offline until the user intervenes.
+matching the home IP, a *confirmed* inactive kill switch, three consecutive
+failed IP lookups, or three consecutive inconclusive kill-switch probes, the
+monitor stops qBittorrent and exits **with the kill switch still active**. The
+web monitor additionally stops OpenVPN. The box goes offline until the user
+intervenes.
+
+Note the asymmetry, and preserve it: a *confirmed* answer trips on the first
+check, an *unanswered* one gets `KILLSWITCH_MAX_UNKNOWN` attempts first. The
+retry tolerance applies only to "I could not ask" — never soften it into a
+grace period for "the kill switch is gone".
 
 There is no `MAX_RECONNECT_ATTEMPTS`. Do not reintroduce one, and do not
 "fix" the fail-stop into a retry loop — a silent reconnect loop is exactly
@@ -76,6 +106,29 @@ solely for the manual **Force Reconnect** button.
 
 These are the load-bearing rules of the project. Any change that reorders them
 is a leak:
+
+0. **Teardown is step-by-step, and each step must be *confirmed* before the
+   next one starts**: qBittorrent → monitor → OpenVPN → restore (UFW, IPv6,
+   DNS). `stop_qbittorrent()` returns True only when the process is actually
+   gone — it used to return `None` and set `status["qbittorrent"] = False`
+   even after a SIGKILL that failed, so callers advanced on an assumption. Any
+   step that cannot be confirmed **halts the sequence** with the kill switch
+   left up and a CRITICAL log; it never proceeds on faith. `stop_all()` also
+   `join()`s the monitor thread rather than just setting the stop event.
+
+   How qBittorrent is stopped depends on whether traffic is currently exposed:
+
+   - **Kill switch confirmed inactive** → `stop_qbittorrent(urgent=True)`,
+     straight to SIGKILL. UFW is passing traffic, so the client is egressing on
+     the ISP link right now and unsaved settings are the cheaper loss.
+   - **Every other trigger** (VPN down, tun0 gone, IP leak, inconclusive probe)
+     → SIGTERM and up to `QBT_STOP_GRACE` (30s) to exit cleanly, SIGKILL only as
+     a backstop. The kill switch is still up on these paths, so nothing can leak
+     while we wait, and qBittorrent needs those seconds to rewrite
+     `qBittorrent.conf` — the only copy of everything set via its WebUI.
+
+   Do not shorten the grace period to make teardown feel snappier. A 5s window
+   is what truncated the config write on 2026-08-14.
 
 1. **The kill switch goes up before OpenVPN starts** and comes down only after
    qBittorrent and OpenVPN are confirmed stopped. Every teardown path
@@ -193,6 +246,122 @@ not duplicated here, and adjust the two `bash` paths to this checkout.
 
 Without the `ufw` and `bash` entries, `setup_killswitch()` fails,
 `check_killswitch_active()` returns `False`, and the monitor refuses to start.
+
+### Binding qBittorrent to the tunnel
+
+**The config file cannot do this.** Verified directly on qBittorrent 4.2.5:
+values written to `Session\Interface`, `Session\InterfaceAddress` and
+`Session\Port` are *preserved in the file* but never applied. The client
+reports `current_network_interface = ''`, picks a random listen port, and
+listens on every address. This was silently true for the whole life of the
+project — the kill switch was the only layer actually working, and the UFW
+rules for the configured peer port never matched the port in use.
+
+`apply_tunnel_bind()` in `webapp/monitor.py` sets it over the WebUI API
+(`/api/v2/app/setPreferences`) after startup, then **reads the preferences back
+and compares** — a 200 means the request was accepted, not that the bind took,
+which is exactly how the file approach failed unnoticed. Auth tries the
+unauthenticated localhost path first (`WebUI\LocalHostAuth=false`) and falls
+back to `QBT_WEBUI_USER` / `QBT_WEBUI_PASS` from `vpn_config.conf`. If the bind
+cannot be applied and confirmed, qBittorrent is stopped.
+
+`qbt_config.py` still writes those keys in case a later qBittorrent honours
+them, but do not treat writing them as having bound anything.
+
+### Verifying the tunnel bind
+
+`verify_tunnel_bind()` checks **only the BitTorrent peer port** (`Session\Port`,
+via `_qbt_peer_port()`). qBittorrent has two listeners and they have opposite
+requirements:
+
+- `Session\Port` (19806) — peer traffic, **must** be on the tun0 address.
+- `WebUI\Port` (8080) with `WebUI\Address=*` — the dashboard, **correctly** on
+  `0.0.0.0` so it is reachable over the LAN.
+
+Judging every qbittorrent socket flags the healthy WebUI listener and kills a
+correctly bound client (2026-08-14 11:18: config applied and bound to
+10.211.1.225, killed 0.5s later anyway).
+
+The probe is tri-state for the same reason as the kill-switch one. libtorrent
+opens its peer socket seconds after the process starts, so a socket that is not
+there yet is `"unknown"` and gets retried for `QBT_BIND_CONFIRM`; only a socket
+that is open on the wrong address is `"unbound"`. Absent is not the same as
+wrong.
+
+## Web UI step ordering
+
+Start order is VPN -> monitor -> qBittorrent; stop order is the reverse, and a
+layer may only be stopped once everything above it is already stopped. This is
+enforced in two places, and both are required:
+
+- `applyButtonState()` in `templates/index.html` disables the buttons and puts
+  the reason in the tooltip.
+- `_ordering_violation()` in `app.py` returns 409 on `/api/vpn/start`,
+  `/api/vpn/stop`, `/api/stop` and `/api/reconnect`.
+
+The server check is the real control. A disabled button is a hint that curl, a
+stale tab, or a state change between 3s status polls all bypass.
+
+## File organizer
+
+Four steps, each unlocked only by the previous one finishing: scan -> rename ->
+move -> delete.
+
+There are **two destinations, Movies and TV**, mirroring `organize.py`'s
+interactive prompt, and every scanned row is tagged with one of them (or Skip).
+`/api/files/move` takes a `destinations` map of label -> folder plus a `dest`
+label per operation, and resolves every path against that map: an operation can
+only land in a folder the request declared up front, so a crafted `dest` cannot
+write outside the chosen roots. The older single `output_dir` form is still
+accepted and becomes the label `output`. Rows set to Skip are simply left out
+of the operations list, which is also what keeps their source folders out of
+step 4 — the delete step only visits folders the job reported as `moved`.
+
+The move job reports `done_bytes`/`total_bytes` **and** `current_bytes`/
+`current_total`/`done_files`/`total_files`, because the UI draws two bars. On a
+single 20GB file the overall bar does not move for several minutes, which reads
+as a hang; the per-file bar is what shows it is alive.
+
+Job records are mirrored to `organizer_jobs.json` (gitignored; override with
+`ORGANIZER_JOBS_FILE`) so a move outlives the browser tab and the web app.
+`GET /api/files/move` lists them newest first and the page reattaches to a
+running one on load — before that the job id lived only in a JavaScript
+variable, so a reload during a 20GB copy left the copy running with nothing
+able to see it and step 4 permanently locked. Writes happen per file, not per
+chunk, and go through a temp file plus `os.replace` so a poll never reads a
+half-written record.
+
+A job still marked `running` at load time reloads as **`interrupted`, never
+`complete`** — its copy thread died with the old process. That keeps the step-4
+gate (`state == "complete"`) honest; the operator rescans and moves again, and
+the files that did finish are recorded as `moved` and skip as duplicates on the
+second pass.
+
+The copy is deliberately in-process rather than `rsync`: `move_file()` verifies
+the destination size before unlinking the source, and that verification is what
+step 4 is gated on. Shelling out to `rsync` would mean parsing its progress
+output and trusting its exit status for the same guarantee.
+
+`move_file()` cannot use `os.rename` alone: the output folder is normally on a
+different mount (`/mnt/hdddisk` -> `/mnt/bluedrive`) and rename fails with
+EXDEV across filesystems. The fallback copies, fsyncs, verifies the destination
+size, and only then unlinks the source — so a failed or partial copy leaves the
+source intact. That verification is what makes the delete step safe, and it is
+why the delete step is gated on the move job reporting `state == "complete"`
+rather than on the request having returned.
+
+`scan_directory(skip_junk=True)` and `cleanup_source()` share one definition of
+junk (`_JUNK_EXTS`, `_JUNK_DIRS`, `_JUNK_NAME_RE`). They must agree: when the
+scan picked up `Sample/sample.mkv`, the move put a 30-second sample in the
+output folder and the cleanup then deleted the folder it came from. Anything
+the scan returns must never be classified as junk.
+
+`cleanup_source()` never touches the source root itself and refuses any path
+outside it. A folder holding unrecognised files is kept, not forced.
+
+The folder browser (`/api/files/browse`) intentionally browses anywhere the web
+app user can read — the user chose that over an allowlist. It is still behind
+`VPN_API_TOKEN`; do not add a path that skips `_auth()`.
 
 ## Notes for changes
 

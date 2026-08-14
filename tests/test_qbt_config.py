@@ -141,3 +141,37 @@ def test_configured_max_active_reads_the_config_file(monkeypatch):
         assert qbt_config.configured_max_active() is None
     monkeypatch.setattr(qbt_config, "read_shell_config", lambda *a, **k: "5")
     assert qbt_config.configured_max_active() == 5
+
+
+# ----------------------------------------------------- local WebUI API access
+
+def test_localhost_auth_is_disabled(conf):
+    """The interface keys above do not actually bind anything on qBittorrent
+    4.2.5 — the real bind is applied over the WebUI API by the monitor, and
+    this is what lets it do that without storing a password."""
+    apply(conf)
+    assert keys(conf, "Preferences")["WebUI\\LocalHostAuth"] == "false"
+
+
+def test_localhost_auth_is_flipped_when_already_true(tmp_path):
+    p = tmp_path / "qBittorrent.conf"
+    p.write_text(LIVE.replace("[Preferences]",
+                              "[Preferences]\nWebUI\\LocalHostAuth=true"))
+    apply(str(p))
+    assert keys(str(p), "Preferences")["WebUI\\LocalHostAuth"] == "false"
+
+
+def test_other_webui_keys_are_left_alone(tmp_path):
+    """The config file is the only copy of the WebUI credentials — a merge that
+    drops them loses the user's password."""
+    p = tmp_path / "qBittorrent.conf"
+    p.write_text(LIVE.replace(
+        "[Preferences]",
+        "[Preferences]\nWebUI\\Username=admin\nWebUI\\Port=8080\n"
+        "WebUI\\Password_ha1=@ByteArray(deadbeef)"))
+    apply(str(p))
+    k = keys(str(p), "Preferences")
+    assert k["WebUI\\Username"] == "admin"
+    assert k["WebUI\\Port"] == "8080"
+    assert k["WebUI\\Password_ha1"] == "@ByteArray(deadbeef)"
+    assert k["WebUI\\LocalHostAuth"] == "false"

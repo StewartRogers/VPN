@@ -41,3 +41,8 @@ qBittorrent-data.conf
 # qBittorrent logs
 qbit.log
 checkvpn.log
+
+# File organizer move-job records. Runtime state written by webapp/app.py so a
+# move survives a page reload or a web app restart; never a project artefact.
+organizer_jobs.json
+organizer_jobs.json.tmp
