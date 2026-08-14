@@ -28,6 +28,7 @@ qBittorrent-data.conf
 # it was accumulating entries for paths that only exist on one checkout.
 # .claude/settings.json (shared project settings) stays tracked.
 .claude/settings.local.json
+.claude/settings.local.json.tmp.*
 
 # IDE and system files
 .vscode/
