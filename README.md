@@ -80,7 +80,7 @@ pgrep -x openvpn && pgrep -f qbittorrent-nox
 ## Web app
 
 ```bash
-pip3 install -r webapp/requirements.txt
+./setup_venv.sh            # once — creates ./.venv from webapp/requirements.txt
 ./start_web.sh
 # open http://<pi-ip>:5000
 ```
@@ -186,17 +186,21 @@ The web app keeps its log in memory and streams it to the browser.
 ## Requirements
 
 Debian/Ubuntu (developed on Raspberry Pi OS), `openvpn`, `qbittorrent-nox`,
-`ufw`, `python3` (3.9+) with `requests` and `flask`, plus `curl`, `pgrep`, `ip`,
-and `ss`. The web app needs passwordless sudo for several operations — see
-[INSTALL.md](INSTALL.md).
+`ufw`, `python3` (3.9+) and `python3-venv`, plus `curl`, `pgrep`, `ip`, and
+`ss`. Python dependencies (`requests`, `flask`) install into a project venv via
+`./setup_venv.sh` — nothing is installed system-wide. The web app needs
+passwordless sudo for several operations — see [INSTALL.md](INSTALL.md).
+
+The shell scripts use `./.venv` when it exists and fall back to the system
+`python3` when it does not, so an existing checkout keeps working unchanged.
 
 ## Tests
 
 ```bash
-python3 -m pytest -q
+./.venv/bin/python -m pytest -q
 ```
 
-68 tests covering the monitor loop, the kill-switch state machine, leak
+199 tests covering the monitor loop, the kill-switch state machine, leak
 detection, the SSRF guard on `.ovpn` downloads, and the torrent start gate. CI
 runs `flake8 --select=E9,F` and pytest on every push and PR to `master`.
 

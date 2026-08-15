@@ -31,11 +31,20 @@ difference is a bug you just found.
 ./startvpn.sh                  # CLI: config → kill switch → VPN → monitor → qbit
 ./start_web.sh                 # web dashboard on :5000
 ./checkip.sh <home_ip>         # monitor alone (requires kill switch already up)
-python3 vpn_active.py <home_ip>   # one-shot check; exit 1 = secure, 0 = not
+./setup_venv.sh                # create ./.venv from webapp/requirements.txt
 
-python3 qbt_config.py          # apply the qBittorrent settings by hand
-python3 -m pytest -q           # 79 tests
+.venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 1 = secure, 0 = not
+.venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
+.venv/bin/python -m pytest -q     # 199 tests
 ```
+
+The shell scripts resolve their interpreter by sourcing `py_env.sh`, which sets
+`VPN_PYTHON` to `./.venv/bin/python` when that exists and to `python3`
+otherwise. Call Python through `"$VPN_PYTHON"` in shell, never `python3`
+directly. Nothing in this project runs Python under `sudo` — every privileged
+call is a bash-level `sudo` of `ufw`/`openvpn`/`pkill`/`sysctl`. Keep it that
+way: `sudo` resets `PATH` and drops the venv, which would force absolute
+interpreter paths into `/etc/sudoers.d/vpn-webapp`.
 
 Live state, without any of the above:
 
@@ -234,8 +243,13 @@ The web app keeps its log in memory and streams it over SSE.
 
 ## Dependencies
 
-`python3` (3.9+) with `requests` and `flask`; `openvpn`, `qbittorrent-nox`,
-`ufw`; and `pgrep`, `ip`, `curl`, `ss`, `sudo`.
+`python3` (3.9+) and `python3-venv`; `openvpn`, `qbittorrent-nox`, `ufw`; and
+`pgrep`, `ip`, `curl`, `ss`, `sudo`.
+
+`requests` and `flask` are **not** system packages — they live in `./.venv`,
+created by `setup_venv.sh` from `webapp/requirements.txt`. The venv is created
+without `--system-site-packages` on purpose, so `requirements.txt` is the one
+source of truth rather than the venv half-inheriting apt's `python3-requests`.
 
 ## sudo requirements (web app)
 

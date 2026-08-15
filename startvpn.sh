@@ -13,6 +13,9 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Resolve the Python interpreter (./.venv if present, else system python3)
+source "$SCRIPT_DIR/py_env.sh"
+
 # Load config
 CONFIG_FILE=""
 if [ -f "$HOME/.vpn_config.conf" ]; then
@@ -272,7 +275,7 @@ if [ "$SWCHECK" = "y" ]; then
 
     sudo apt-get -qq update 2>/dev/null || true
 
-    declare -a PACKAGES=("qbittorrent-nox" "openvpn" "ufw" "python3" "python3-pip")
+    declare -a PACKAGES=("qbittorrent-nox" "openvpn" "ufw" "python3" "python3-venv")
     declare -a TO_INSTALL=()
     declare -a TO_UPDATE=()
 
@@ -299,11 +302,14 @@ if [ "$SWCHECK" = "y" ]; then
     fi
 
     echo ""
-    if python3 -c "import requests" >/dev/null 2>&1; then
-        echo "  installed: python3-requests"
+    # Python dependencies live in ./.venv, installed from
+    # webapp/requirements.txt — not in apt's python3-requests. One source of
+    # truth beats a venv that half-inherits from the system packages.
+    if "$VPN_PYTHON" -c "import requests" >/dev/null 2>&1; then
+        echo "  installed: python dependencies ($VPN_PYTHON_KIND)"
     else
-        echo "  installing python3-requests..."
-        sudo apt-get install -y -qq python3-requests
+        echo "  missing:   python dependencies"
+        echo "             run: $SCRIPT_DIR/setup_venv.sh"
     fi
 
     echo ""

@@ -7,7 +7,8 @@
 - An OpenVPN provider that issues `.ovpn` config files
 
 Packages: `openvpn`, `qbittorrent-nox`, `ufw`, `python3` (3.9 or newer),
-`python3-pip`, `curl`. The web app additionally needs `flask` and `requests`.
+`python3-venv`, `curl`. The Python libraries (`flask`, `requests`) go into a
+project virtualenv, not into the system Python.
 
 There is no `iptables` dependency — the firewall is UFW exclusively.
 
@@ -21,19 +22,35 @@ chmod +x *.sh
 
 ## 2. Install dependencies
 
-`startvpn.sh` can do it for you — answer `y` at the
+`startvpn.sh` can install the system packages for you — answer `y` at the
 `Check software installation?` prompt on first run. It installs and updates
-`qbittorrent-nox`, `openvpn`, `ufw`, `python3`, `python3-pip`, and
-`python3-requests`.
+`qbittorrent-nox`, `openvpn`, `ufw`, `python3`, and `python3-venv`.
 
 Or do it by hand:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y openvpn qbittorrent-nox ufw python3 python3-pip \
-                        python3-requests curl
-pip3 install -r webapp/requirements.txt      # web app only
+sudo apt-get install -y openvpn qbittorrent-nox ufw python3 python3-venv curl
 ```
+
+Then create the project virtualenv. This is required for the web app and for
+running the tests; the CLI path uses it too when present:
+
+```bash
+./setup_venv.sh
+```
+
+It creates `./.venv` and installs `webapp/requirements.txt` into it. Re-run it
+any time to refresh the dependencies — an existing venv is reused.
+
+Everything in the project resolves Python through `py_env.sh`, which prefers
+`./.venv/bin/python` and falls back to the system `python3` when there is no
+venv. Nothing runs Python under `sudo`, so the venv needs no entry in the
+sudoers file below.
+
+On Debian 12 (bookworm) and later, the system Python is marked
+externally-managed and `pip install` outside a venv is refused, so the venv is
+the only supported way to install these dependencies there.
 
 ## 3. First qBittorrent run
 

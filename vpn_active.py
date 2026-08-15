@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Copyright (c) 2022-2025 Stewart Rogers
 # SPDX-License-Identifier: MIT
 

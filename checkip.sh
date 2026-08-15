@@ -4,6 +4,9 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Resolve the Python interpreter (./.venv if present, else system python3)
+source "$SCRIPT_DIR/py_env.sh"
+
 # Load config
 if [ -f "$HOME/.vpn_config.conf" ]; then
     source "$HOME/.vpn_config.conf"
@@ -143,7 +146,7 @@ check_routing() {
 # Returns 0=secure, 1=confirmed leak, 2=could not determine
 perform_ip_check() {
     local result
-    result=$(python3 "$SCRIPT_DIR/vpn_active.py" "$YIP_HOMEIP" 2>/dev/null)
+    result=$("$VPN_PYTHON" "$SCRIPT_DIR/vpn_active.py" "$YIP_HOMEIP" 2>/dev/null)
     case "$result" in
         secure)
             log "INFO" "IP check: secure"
@@ -236,7 +239,7 @@ apply_qbittorrent_config() {
     # owns (tun0 bind, save path, concurrent-download limit) into the live
     # qBittorrent config without clobbering anything qBittorrent wrote itself.
     local out
-    if ! out=$(python3 "$SCRIPT_DIR/qbt_config.py" 2>&1); then
+    if ! out=$("$VPN_PYTHON" "$SCRIPT_DIR/qbt_config.py" 2>&1); then
         log "WARN" "Could not apply qBittorrent config"
     fi
     while IFS= read -r line; do

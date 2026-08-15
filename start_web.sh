@@ -21,6 +21,9 @@
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Resolve the Python interpreter (./.venv if present, else system python3)
+source "$SCRIPT_DIR/py_env.sh"
+
 # Load webapp/.env, without clobbering vars already set in the environment
 if [ -f "$SCRIPT_DIR/webapp/.env" ]; then
     while IFS='=' read -r key value; do
@@ -66,32 +69,36 @@ else
 fi
 echo ""
 
-# Check Python version is 3.8+
-py_version=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
-py_major=$(python3 -c "import sys; print(sys.version_info.major)" 2>/dev/null)
-py_minor=$(python3 -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
+# Check Python version is 3.9+
+py_version=$("$VPN_PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+py_major=$("$VPN_PYTHON" -c "import sys; print(sys.version_info.major)" 2>/dev/null)
+py_minor=$("$VPN_PYTHON" -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
 if [ -z "$py_version" ] || [ "$py_major" -lt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -lt 9 ]; }; then
     echo "ERROR: Python 3.9 or higher is required (found: ${py_version:-none})"
     echo ""
     echo "Install with:"
-    echo "  sudo apt install python3"
+    echo "  sudo apt install python3 python3-venv"
     echo ""
     exit 1
 fi
-echo "  Python: $py_version"
+echo "  Python: $py_version ($VPN_PYTHON_KIND)"
 
 # Check required Python packages are installed
 missing=()
 for pkg in flask requests; do
-    if ! python3 -c "import $pkg" 2>/dev/null; then
+    if ! "$VPN_PYTHON" -c "import $pkg" 2>/dev/null; then
         missing+=("$pkg")
     fi
 done
 if [ ${#missing[@]} -gt 0 ]; then
     echo "ERROR: Missing Python package(s): ${missing[*]}"
     echo ""
-    echo "Install with:"
-    echo "  pip3 install -r $SCRIPT_DIR/webapp/requirements.txt"
+    if [ "$VPN_PYTHON_KIND" = "venv" ]; then
+        echo "The venv at $VPN_VENV is incomplete. Refresh it with:"
+    else
+        echo "Create the project venv and install dependencies with:"
+    fi
+    echo "  $SCRIPT_DIR/setup_venv.sh"
     echo ""
     exit 1
 fi
@@ -101,4 +108,4 @@ exec env \
     VPN_API_TOKEN="${VPN_API_TOKEN:-}" \
     HOME_IP="${HOME_IP:-}" \
     ACCESS_LOG="${ACCESS_LOG:-}" \
-    python3 "$SCRIPT_DIR/webapp/app.py"
+    "$VPN_PYTHON" "$SCRIPT_DIR/webapp/app.py"

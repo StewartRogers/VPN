@@ -13,6 +13,10 @@
 # Load configuration file if exists
 #
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Resolve the Python interpreter (./.venv if present, else system python3)
+source "$SCRIPT_DIR/py_env.sh"
+
 if [ -f "$HOME/.vpn_config.conf" ]; then
     source "$HOME/.vpn_config.conf"
 elif [ -f "$SCRIPT_DIR/vpn_config.conf" ]; then
@@ -168,7 +172,7 @@ read -rp "Run file organizer? [y/N]: " do_organize
 do_organize=$(echo "$do_organize" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 if [[ "$do_organize" == "y" ]]; then
     log_message "INFO" "Starting file organizer"
-    python3 "$SCRIPT_DIR/organize.py"
+    "$VPN_PYTHON" "$SCRIPT_DIR/organize.py"
     log_message "INFO" "File organizer completed"
 else
     echo ""

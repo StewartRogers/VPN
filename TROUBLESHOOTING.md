@@ -269,7 +269,7 @@ config *before* launching the process:
 
 ```bash
 sudo pkill -f qbittorrent-nox
-python3 qbt_config.py          # apply now; prints what it set
+.venv/bin/python qbt_config.py   # apply now; prints what it set
 ```
 
 `qbt_config.py` warns on stderr if qBittorrent is already running, precisely
