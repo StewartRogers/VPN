@@ -248,9 +248,70 @@ echo ""
 divider
 
 #
+# Pre-flight: refuse to start on top of a previous session's kill switch.
+#
+# The monitor exits with the kill switch still up by design (fail-stop), so a
+# failed session leaves outgoing denied. Everything below then fails for
+# reasons that have nothing to do with what it reports: the home-IP lookup
+# cannot reach any service ("Could not retrieve valid external IP address"),
+# and ufw_killswitch.sh's `getent hosts` may not resolve the endpoint either
+# ("Failed to apply UFW kill switch"). Both name the symptom, not the cause.
+# Observed 2026-08-14 21:33 — a second run started 6 minutes into a failed one
+# and produced exactly that pair of misleading errors.
+#
+# Tri-state on purpose, and note the polarity is the opposite of the safety
+# gates elsewhere: this is a diagnostic, not a guard. Only a *confirmed*
+# "deny (outgoing)" stops the run. If UFW cannot be probed at all, continue —
+# check_killswitch_active() in checkip.sh still fails closed further down.
+#
+killswitch_state() {
+    local out
+    if ! out=$(timeout 10 sudo ufw status verbose 2>/dev/null); then
+        echo "unknown"
+        return
+    fi
+    if grep -q "deny (outgoing)" <<< "$out"; then
+        echo "active"
+    else
+        echo "inactive"
+    fi
+}
+
+if [ "$(killswitch_state)" = "active" ]; then
+    echo "  ERROR: UFW kill switch is already active from a previous session."
+    echo ""
+    echo "  Outgoing traffic is blocked, so this run cannot look up the home IP"
+    echo "  or resolve the VPN endpoint. Restore the base state first:"
+    echo ""
+    echo "    ./stopvpn.sh"
+    echo ""
+    log_message "ERROR" "Kill switch already active at startup - run stopvpn.sh first"
+    ERROR_HANDLED=true
+    exit 1
+fi
+
+#
 # Capture home IP before VPN starts
 #
-YHOMEIP=$(curl -s --max-time 10 https://api.ipify.org 2>/dev/null)
+# Was a single `curl` to api.ipify.org with no fallback: one flaky response and
+# the run dead-ends at "Home IP not captured - cannot start monitor". Reuse
+# vpn_active.get_external_ip() instead of growing a second copy of the retry
+# logic — it tries three services, calls raise_for_status(), and rejects the
+# IPv6 answer that api64.ipify.org hands back on a dual-stack host.
+#
+capture_home_ip() {
+    PYTHONPATH="$SCRIPT_DIR" "$VPN_PYTHON" -c \
+        'import vpn_active; print(vpn_active.get_external_ip() or "")' 2>/dev/null
+}
+
+YHOMEIP=$(capture_home_ip)
+if ! validate_ip "$YHOMEIP"; then
+    # One retry: /var/log has a crumb of every service read-timing-out at once
+    # on this Pi, which a few seconds usually clears.
+    log_message "WARN" "External IP lookup failed - retrying once..."
+    sleep 3
+    YHOMEIP=$(capture_home_ip)
+fi
 if ! validate_ip "$YHOMEIP"; then
     log_message "WARN" "Could not retrieve valid external IP address"
     YHOMEIP=""
