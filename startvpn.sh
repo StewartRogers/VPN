@@ -318,6 +318,41 @@ if ! validate_ip "$YHOMEIP"; then
 fi
 echo "  Home IP (pre-VPN): ${YHOMEIP:-unknown}"
 log_message "INFO" "Home IP (pre-VPN): ${YHOMEIP:-unknown}"
+
+#
+# Warn about resolvers that will be routed through the tunnel.
+#
+# Testing DNS here proves nothing on its own — right now these queries go out
+# the physical interface and an ISP resolver answers them happily. The failure
+# only appears once redirect-gateway moves the default route onto tun0 and the
+# same queries arrive from the VPN's exit IP, which an ISP resolver will not
+# answer. So flag the arrangement rather than the symptom.
+#
+# Advisory only, never a gate: 8.8.8.8 is off-LAN too and works fine. Same
+# LAN_CIDRS default as ufw_killswitch.sh, since that is what decides whether a
+# nameserver is allowed out on the physical interface instead.
+#
+SUSPECT_RESOLVERS=$(PYTHONPATH="$SCRIPT_DIR" "$VPN_PYTHON" \
+    "$SCRIPT_DIR/vpn_active.py" --check-resolvers \
+    ${LAN_CIDRS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16} 2>/dev/null)
+
+if [ -n "$SUSPECT_RESOLVERS" ]; then
+    echo ""
+    echo "  WARNING: DNS may stop working once the tunnel is up."
+    echo ""
+    echo "  These resolvers are outside your LAN, so they will be reached"
+    echo "  through the VPN once redirect-gateway applies. An ISP resolver"
+    echo "  will not answer queries arriving from the VPN's exit IP:"
+    echo ""
+    for ns in $SUSPECT_RESOLVERS; do
+        echo "    $ns"
+        log_message "WARN" "Resolver $ns will be routed through the tunnel and may not answer"
+    done
+    echo ""
+    echo "  If lookups hang after connecting, point this machine at a public"
+    echo "  resolver (8.8.8.8, 1.1.1.1) or at your router on the LAN."
+    echo ""
+fi
 echo ""
 
 #

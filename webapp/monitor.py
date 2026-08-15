@@ -74,6 +74,7 @@ _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _VPN_DIR not in sys.path:
     sys.path.insert(0, _VPN_DIR)
 import qbt_config
+import vpn_active
 
 # Directory used to store iptables / DNS / IPv6 backups across VPN start/stop.
 # Stored under the user's home directory — not in /tmp — to prevent other local
@@ -1426,6 +1427,12 @@ class VPNMonitor:
                     consecutive_ip_errors += 1
                     self.log(f"IP check error ({consecutive_ip_errors} consecutive)", level="WARNING")
                     if consecutive_ip_errors >= 3:
+                        # Name the layer that broke before tearing down. A dead
+                        # tunnel and DNS that stops answering through it look
+                        # identical here and need opposite fixes. Runs only on
+                        # the way out, so its ~10s cost never delays the loop.
+                        self.log(f"IP check diagnosis: {vpn_active.diagnose_ip_failure()}",
+                                 level="WARNING")
                         self.log("3 consecutive IP check failures — stopping everything", level="CRITICAL")
                         self.status["secure"] = False
                         break

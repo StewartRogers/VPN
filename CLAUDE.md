@@ -35,7 +35,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 1 = secure, 0 = not
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 199 tests
+.venv/bin/python -m pytest -q     # 213 tests
 ```
 
 The shell scripts resolve their interpreter by sourcing `py_env.sh`, which sets
@@ -217,6 +217,33 @@ and auto-corrects this on every run — it is the single line every kill-switch
 guarantee depends on. IPv6 is also disabled at the kernel level
 (`sysctl net.ipv6.conf.*.disable_ipv6=1`) before OpenVPN starts, as defense in
 depth.
+
+## DNS placement
+
+`redirect-gateway def1` moves the default route onto `tun0`, so any nameserver
+**outside `LAN_CIDRS` is reached through the tunnel** and must be willing to
+answer a query arriving from the VPN's exit IP. Public anycast resolvers
+(8.8.8.8, 1.1.1.1) are; an ISP's resolver is not — it drops the query, nothing
+comes back, and `getaddrinfo` blocks for its full retry budget rather than
+returning an error. Three lookups then take ~60s and surface as "could not
+reach IP services" while the tunnel is provably healthy (2026-08-14, RPI5 on
+Shaw's resolvers: ICMP through `tun0` fine at 1400 bytes, every hostname dead).
+
+A nameserver inside `LAN_CIDRS` is safe by construction — `ufw_killswitch.sh`
+allows it out on the physical interface, so it never enters the tunnel. That
+is also a DNS leak: those queries go to the ISP in the clear while torrenting.
+
+`startvpn.sh` warns about off-LAN, non-public resolvers before starting, via
+`vpn_active.py --check-resolvers`. It is **advisory only and must stay that
+way** — 8.8.8.8 is off-LAN too and is exactly what you want. Note that testing
+DNS *before* the VPN starts proves nothing: those queries leave on the physical
+interface and an ISP resolver answers them happily. Only the routing
+arrangement is diagnosable up front.
+
+When an IP check fails, `vpn_active.diagnose_ip_failure()` resolves a name and
+connects to a literal address to say which layer broke. Both monitors call it —
+`checkip.sh` on every `error` result, the web monitor only on the third
+consecutive failure, since it costs ~10s and would otherwise stall the loop.
 
 ## Configuration
 

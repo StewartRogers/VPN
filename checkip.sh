@@ -157,7 +157,12 @@ perform_ip_check() {
             return 1
             ;;
         error)
-            log "WARN" "IP check: could not reach IP services"
+            # "could not reach IP services" is true of a broken tunnel and of
+            # DNS pointed somewhere that stops answering through it, and those
+            # need opposite fixes. Ask which one before logging.
+            local why
+            why=$("$VPN_PYTHON" "$SCRIPT_DIR/vpn_active.py" --diagnose 2>/dev/null)
+            log "WARN" "IP check: ${why:-could not reach IP services}"
             return 2
             ;;
         *)
