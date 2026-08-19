@@ -38,6 +38,15 @@ difference is a bug you just found.
 .venv/bin/python -m pytest -q     # 213 tests
 ```
 
+`start_web.sh` generates a `VPN_API_TOKEN` on first run and saves it to
+`webapp/.env` (mode 600, gitignored), reusing it on later starts; `--new-token`
+rotates it. Persisting is the point: the dashboard keeps the token in the
+browser's `localStorage`, so regenerating it on every launch would lock the
+browser out on every restart. A `VPN_API_TOKEN` already in the environment wins
+for that run and is never written to disk. Nothing is unauthenticated by
+default any more — `_auth()` still no-ops on an empty token, which is only
+reachable by running `webapp/app.py` directly.
+
 The shell scripts resolve their interpreter by sourcing `py_env.sh`, which sets
 `VPN_PYTHON` to `./.venv/bin/python` when that exists and to `python3`
 otherwise. Call Python through `"$VPN_PYTHON"` in shell, never `python3`
@@ -358,6 +367,32 @@ accepted and becomes the label `output`. Rows set to Skip are simply left out
 of the operations list, which is also what keeps their source folders out of
 step 4 — the delete step only visits folders the job reported as `moved`.
 
+An unset destination is rejected on the **raw string, before `os.path.realpath`**.
+`realpath("")` returns the process's working directory rather than `""`, so a
+blank folder box used to resolve to wherever the web app was started from — the
+repo checkout — and files were moved into it while the job reported success.
+
+**A destination may sit inside the source tree.** Filing `/mnt/media` into
+`/mnt/media/Movies` is the normal library layout, and refusing it made the move
+step unusable for exactly the arrangement most people have. Only a destination
+*equal to* the source is refused, because `dst` would equal `src` for every file
+at the root. The nesting was never the hazard — the delete step was, and three
+guards address it directly. Keep all three; each one alone is insufficient:
+
+1. `scan_directory(exclude_paths=...)` keeps the destinations out of the walk,
+   so an already-filed library never enters the operation list. Matched **by
+   path, not by basename** — excluding `Movies` by name would drop every
+   unrelated folder sharing it.
+2. `_plan()` refuses a source already inside a destination
+   (`Already in the '<label>' folder`). Without it a rescan re-files the
+   library, which marks the destination as a `moved` source folder.
+3. `files_cleanup()` never descends into a destination root, whatever the
+   results list claims.
+
+The thing being protected: `cleanup_source()` treats `.nfo`, `.jpg` and `.txt`
+as junk, so walking a destination strips a media library of its artwork and
+sidecars.
+
 The move job reports `done_bytes`/`total_bytes` **and** `current_bytes`/
 `current_total`/`done_files`/`total_files`, because the UI draws two bars. On a
 single 20GB file the overall bar does not move for several minutes, which reads
@@ -372,24 +407,33 @@ able to see it and step 4 permanently locked. Writes happen per file, not per
 chunk, and go through a temp file plus `os.replace` so a poll never reads a
 half-written record.
 
-A job still marked `running` at load time reloads as **`interrupted`, never
-`complete`** — its copy thread died with the old process. That keeps the step-4
-gate (`state == "complete"`) honest; the operator rescans and moves again, and
-the files that did finish are recorded as `moved` and skip as duplicates on the
-second pass.
+A job ends in one of three states, and `state == "complete"` is what unlocks
+step 4 — so it has to mean something:
+
+- **`interrupted`** — still marked `running` at load time, so its copy thread
+  died with the old process. Never silently promoted to `complete`; the
+  operator rescans and moves again, and the files that did finish are recorded
+  as `moved` and skip as duplicates on the second pass.
+- **`failed`** — every file errored and nothing moved. It used to report
+  `complete` regardless, so a job that moved nothing presented as a success
+  with a live Delete button. `/api/files/cleanup` returns 409 on it.
+- **`complete`** — at least one file moved. A *partial* success stays
+  `complete` on purpose: the files that did move are real, and cleanup only
+  ever visits folders reported as `moved`.
 
 The copy is deliberately in-process rather than `rsync`: `move_file()` verifies
 the destination size before unlinking the source, and that verification is what
 step 4 is gated on. Shelling out to `rsync` would mean parsing its progress
 output and trusting its exit status for the same guarantee.
 
-`move_file()` cannot use `os.rename` alone: the output folder is normally on a
-different mount (`/mnt/hdddisk` -> `/mnt/bluedrive`) and rename fails with
-EXDEV across filesystems. The fallback copies, fsyncs, verifies the destination
-size, and only then unlinks the source — so a failed or partial copy leaves the
-source intact. That verification is what makes the delete step safe, and it is
-why the delete step is gated on the move job reporting `state == "complete"`
-rather than on the request having returned.
+`move_file()` cannot use `os.rename` alone: the output folder is often on a
+different mount from the source and rename fails with EXDEV across filesystems.
+It may equally be on the *same* mount, nested in the source — both layouts are
+supported, and `os.rename` is still tried first. The fallback copies, fsyncs,
+verifies the destination size, and only then unlinks the source — so a failed
+or partial copy leaves the source intact. That verification is what makes the
+delete step safe, and it is why the delete step is gated on the move job
+reporting `state == "complete"` rather than on the request having returned.
 
 `scan_directory(skip_junk=True)` and `cleanup_source()` share one definition of
 junk (`_JUNK_EXTS`, `_JUNK_DIRS`, `_JUNK_NAME_RE`). They must agree: when the
@@ -399,6 +443,15 @@ the scan returns must never be classified as junk.
 
 `cleanup_source()` never touches the source root itself and refuses any path
 outside it. A folder holding unrecognised files is kept, not forced.
+
+`_jobs` is module-level and the copy runs on a daemon thread that goes on
+calling `_save_jobs()` after the test that started it returns.
+`tests/test_organizer_move.py` therefore points `_JOBS_FILE` at a temp path for
+the whole **session**, not per test: a per-test `monkeypatch` is undone at teardown
+and the still-running thread's next write then lands in the repo's real
+`organizer_jobs.json`. The per-test fixture also clears `_jobs`, without which
+`_save_jobs()` rewrites every job from every earlier test on each file copied
+and the suite eventually times itself out.
 
 The folder browser (`/api/files/browse`) intentionally browses anywhere the web
 app user can read — the user chose that over an allowlist. It is still behind
