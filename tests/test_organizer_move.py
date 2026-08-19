@@ -248,23 +248,45 @@ class TestScanJunkConsistency:
 import app as webapp  # noqa: E402
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _isolate_job_store(tmp_path_factory):
+    """Keep every job write out of the repo, including the late ones.
+
+    A move runs on a daemon thread that goes on calling _save_jobs() after the
+    test that started it has returned. Redirecting _JOBS_FILE per test is not
+    enough: monkeypatch restores it at teardown, and the still-running thread's
+    next write then lands in the repo's real organizer_jobs.json. Setting it
+    once for the session gives those writes somewhere harmless to go.
+    """
+    webapp._JOBS_FILE = str(tmp_path_factory.mktemp("jobs") / "organizer_jobs.json")
+
+
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, tmp_path):
     monkeypatch.setattr(webapp, "_API_TOKEN", "")
+    # _jobs is module-level and used to carry every job from every earlier test
+    # in the session. _save_jobs() rewrites the whole store once per file
+    # copied, so the cost grew with the number of tests already run and
+    # eventually timed _wait() out — an intermittent failure in whichever test
+    # happened to run late. Clearing it also keeps the repo's real
+    # organizer_jobs.json out of the test run.
+    monkeypatch.setattr(webapp, "_JOBS_FILE", str(tmp_path / "jobs.json"))
+    webapp._jobs.clear()
     webapp.app.config["TESTING"] = True
     with webapp.app.test_client() as c:
         yield c
+    webapp._jobs.clear()
 
 
-def _wait(client, job_id, timeout=5):
+def _wait(client, job_id, timeout=5, state="complete"):
     import time
     deadline = time.time() + timeout
     while time.time() < deadline:
         job = client.get("/api/files/move/" + job_id).get_json()
-        if job["state"] == "complete":
+        if job["state"] == state:
             return job
         time.sleep(0.02)
-    raise AssertionError("move job never completed")
+    raise AssertionError(f"move job never reached {state!r}")
 
 
 def _wait_persisted(jobs_file, job_id, state, timeout=5):
@@ -314,7 +336,7 @@ class TestPerFileDestinations:
             "source_dir": str(src),
             "destinations": {"movies": str(tmp_path / "Movies")},
             "operations": [{"original": "Film.2024.mkv", "dest": "elsewhere"}]})
-        job = _wait(client, r.get_json()["job_id"])
+        job = _wait(client, r.get_json()["job_id"], state="failed")
         assert job["results"][0]["status"] == "error"
         assert (src / "Film.2024.mkv").exists()
 
@@ -377,7 +399,7 @@ class TestPerFileDestinations:
             "destinations": {"movies": str(movies)},
             "operations": [{"original": "Movies/Filed.2019.mkv", "dest": "movies",
                             "rename_to": "Filed.2019.Renamed.mkv"}]})
-        job = _wait(client, r.get_json()["job_id"])
+        job = _wait(client, r.get_json()["job_id"], state="failed")
         assert job["results"][0]["status"] == "error"
         assert "Already in" in job["results"][0]["message"]
         assert (movies / "Filed.2019.mkv").exists()
@@ -399,6 +421,40 @@ class TestPerFileDestinations:
         job["results"].append({"original": "Movies/Film.2024.mkv", "status": "moved"})
         client.post("/api/files/cleanup", json={"job_id": job_id})
         assert art.exists(), "cleanup deleted artwork inside the destination"
+
+    def test_a_job_where_every_file_errored_is_not_complete(self, client, tmp_path):
+        """"complete" is what unlocks the delete step, so it must mean something."""
+        src = _tree(tmp_path)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(tmp_path / "Movies")},
+            "operations": [{"original": "Nope.mkv", "dest": "movies"}]})
+        job = _wait(client, r.get_json()["job_id"], state="failed")
+        assert job["state"] == "failed"
+        assert all(x["status"] == "error" for x in job["results"])
+
+    def test_a_failed_job_refuses_cleanup(self, client, tmp_path):
+        src = _tree(tmp_path)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(tmp_path / "Movies")},
+            "operations": [{"original": "Nope.mkv", "dest": "movies"}]})
+        job_id = r.get_json()["job_id"]
+        _wait(client, job_id, state="failed")
+        resp = client.post("/api/files/cleanup", json={"job_id": job_id})
+        assert resp.status_code == 409
+
+    def test_a_partial_move_still_completes(self, client, tmp_path):
+        """The files that did move are real; only an all-error run is a failure."""
+        src = _tree(tmp_path)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(tmp_path / "Movies")},
+            "operations": [{"original": "Film.2024.mkv", "dest": "movies"},
+                           {"original": "Nope.mkv", "dest": "movies"}]})
+        job = _wait(client, r.get_json()["job_id"])
+        assert job["state"] == "complete"
+        assert {x["status"] for x in job["results"]} == {"moved", "error"}
 
     def test_single_output_dir_form_still_works(self, client, tmp_path):
         src = _tree(tmp_path)

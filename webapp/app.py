@@ -608,7 +608,14 @@ def files_move():
             _save_jobs()
         job["current"] = None
         job["current_bytes"] = job["current_total"] = 0
-        job["state"] = "complete"
+        # A run in which every file errored is not a completed move. It used to
+        # be marked "complete" regardless, which is the flag step 4 unlocks on,
+        # so a job that moved nothing presented as a success with a live Delete
+        # button. Partial success stays "complete": the files that did move are
+        # real, and cleanup only ever visits folders reported as `moved`.
+        moved = any(r.get("status") == "moved" for r in job["results"])
+        errored = any(r.get("status") == "error" for r in job["results"])
+        job["state"] = "failed" if errored and not moved else "complete"
         job["finished"] = time.time()
         _save_jobs()
 
@@ -668,6 +675,9 @@ def files_cleanup():
     if job["state"] == "interrupted":
         return jsonify({"error": "That move was interrupted before it finished — "
                                  "scan and move again before deleting sources"}), 409
+    if job["state"] == "failed":
+        return jsonify({"error": "That move did not move anything — every file "
+                                 "failed, so there are no sources to delete"}), 409
     if job["state"] != "complete":
         return jsonify({"error": "Move is still running"}), 409
     moved = [r for r in job["results"] if r.get("status") == "moved"]

@@ -860,11 +860,14 @@
     if (!r.ok) { alert(job.error || 'Lost the move job'); return; }
 
     const pct = job.total_bytes ? Math.round(100 * job.done_bytes / job.total_bytes) : 0;
+    const stopped = job.state !== 'running';
     document.getElementById('bar-fill').style.width = pct + '%';
     document.getElementById('move-label').textContent =
       job.state === 'complete'
         ? `Move complete — ${job.results.filter(x => x.status === 'moved').length} moved, ` +
           `${fmtBytes(job.done_bytes)} transferred`
+      : job.state === 'failed'
+        ? `Move failed — nothing was moved (${job.results.length} file(s) errored)`
         : `${pct}% — file ${Math.min(job.done_files + 1, job.total_files)} of ${job.total_files} — ` +
           `${fmtBytes(job.done_bytes)} of ${fmtBytes(job.total_bytes)}`;
 
@@ -873,9 +876,9 @@
     const filePct = job.current_total
       ? Math.round(100 * job.current_bytes / job.current_total) : 0;
     document.getElementById('bar-file-fill').style.width =
-      (job.state === 'complete' ? 0 : filePct) + '%';
+      (stopped ? 0 : filePct) + '%';
     document.getElementById('move-file-label').textContent =
-      job.state === 'complete' ? ''
+      stopped ? ''
       : job.current ? `${job.current} — ${filePct}% (${fmtBytes(job.current_bytes)} of ${fmtBytes(job.current_total)})`
       : '';
 
@@ -893,6 +896,16 @@
     if (job.state === 'interrupted') {
       banner('The move stopped before it finished — the web app restarted. ' +
              'Scan and move again; sources cannot be deleted from that run.');
+      updateSteps();
+      return;
+    }
+    if (job.state === 'failed') {
+      // Every file errored, so there is nothing to delete and step 4 stays
+      // locked. Without this branch the poll loop never terminated, because it
+      // only ever stopped on 'complete'.
+      const why = (job.results.find(x => x.status === 'error') || {}).message;
+      banner('The move did not move anything' + (why ? ` — ${why}` : '') +
+             '. Check the per-file results, fix the cause, and move again.');
       updateSteps();
       return;
     }
