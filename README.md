@@ -90,17 +90,29 @@ environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `VPN_API_TOKEN` | unset | Require `Authorization: Bearer <token>` on every API call |
+| `VPN_API_TOKEN` | generated | Bearer token required on every API call. Auto-created on first run |
 | `BIND_HOST` | `0.0.0.0` | Interface to bind; set to your LAN IP to narrow exposure |
 | `PORT` | `5000` | Listen port |
 | `HOME_IP` | unset | Pre-configure the monitor's home IP at startup |
 | `ACCESS_LOG` | off | Set to `1` to log every HTTP request |
 
-Unauthenticated by default — fine on a trusted LAN, but set a token if the box
-is reachable from anywhere else:
+### API token
+
+`start_web.sh` generates a 32-byte token on its first run, prints it, and saves
+it to `webapp/.env` (mode 600, gitignored). Later runs reuse that one, so the
+token you paste into the dashboard's **Token** dialog keeps working across
+restarts — it is stored in the browser's `localStorage`.
 
 ```bash
-python3 -c "import secrets; print(secrets.token_hex(32))"   # generate one
+./start_web.sh              # first run prints the new token
+./start_web.sh --new-token  # rotate; every browser must re-enter the new one
+cat webapp/.env             # look up the current token
+```
+
+Setting `VPN_API_TOKEN` in the environment overrides the stored one for that run
+only and is never written to disk:
+
+```bash
 VPN_API_TOKEN=<token> ./start_web.sh
 ```
 

@@ -21,8 +21,11 @@ qBittorrent-data.conf
 # Backup and temporary files (outside repo, listed for reference only)
 # ~/.vpn_backups/ — iptables/DNS backups, never in the repo
 
-# Secrets
+# Secrets. The .tmp.* pattern covers start_web.sh's atomic rewrite of .env —
+# a bare '.env' rule does not match '.env.tmp.aBc123', and that temp file
+# holds the API token.
 .env
+.env.tmp.*
 
 # Claude Code per-machine permission allowlist. Machine-specific by design —
 # it was accumulating entries for paths that only exist on one checkout.
