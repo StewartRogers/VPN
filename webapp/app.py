@@ -365,8 +365,12 @@ def files_scan():
     if not os.path.isdir(source_dir):
         return jsonify({"error": "Directory not found"}), 404
     exclude_dirs = {d.strip() for d in request.args.get("exclude", "").split(",") if d.strip()}
+    # Destination folders, sent as repeated exclude_path params. They may sit
+    # inside the source, and re-listing an already-filed library is noise at
+    # best — every row would come back "Already in the 'movies' folder".
+    exclude_paths = [p for p in request.args.getlist("exclude_path") if p.strip()]
     try:
-        files = scan_directory(source_dir, exclude_dirs)
+        files = scan_directory(source_dir, exclude_dirs, exclude_paths=exclude_paths)
         return jsonify({"source_dir": source_dir, "files": files})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
@@ -503,12 +507,29 @@ def files_move():
         declared = dict(declared, output=data["output_dir"])
     dests = {}
     for label, path in declared.items():
-        path = os.path.realpath((path or "").strip())
-        if not path or path == "/":
+        # Check the raw string BEFORE realpath: os.path.realpath("") returns the
+        # process's working directory, not "", so an unset destination used to
+        # sail past the emptiness check and resolve to wherever the web app was
+        # started from — the repo checkout. Files were then moved into it and
+        # the job reported success.
+        raw = (path or "").strip()
+        if not raw:
             return jsonify({"error": f"Destination '{label}' is not set"}), 400
-        if path == source_dir or path.startswith(source_dir + os.sep):
-            return jsonify({"error": f"Destination '{label}' must be outside "
-                                     "the source folder"}), 400
+        path = os.path.realpath(raw)
+        if path == "/":
+            return jsonify({"error": f"Destination '{label}' is not set"}), 400
+        # A destination *inside* the source is allowed — organizing
+        # /mnt/media into /mnt/media/Movies is the normal library layout. What
+        # made that unsafe was not the nesting itself but the delete step: a
+        # rescan picks the already-filed library back up, and cleaning its
+        # folders deletes artwork and .nfo sidecars, which count as junk. Two
+        # guards below close that off instead of banning the layout: _plan()
+        # refuses a source already inside a destination, and the cleanup step
+        # never descends into one. The source folder itself is still refused —
+        # it would make dst == src for every file sitting at the root.
+        if path == source_dir:
+            return jsonify({"error": f"Destination '{label}' cannot be the "
+                                     "source folder itself"}), 400
         try:
             os.makedirs(path, exist_ok=True)
         except Exception as exc:
@@ -523,6 +544,13 @@ def files_move():
         src = os.path.realpath(os.path.join(source_dir, rel))
         if not src.startswith(source_dir + os.sep) or not os.path.isfile(src):
             return src, None, "File not found in source"
+        # Already filed. Re-moving it would mark its folder as `moved` and hand
+        # the destination to the delete step, which strips artwork and .nfo
+        # files as junk. Only reachable when a destination sits inside the
+        # source and a rescan swept the library back up.
+        for dlabel, droot in dests.items():
+            if src == droot or src.startswith(droot + os.sep):
+                return src, None, f"Already in the '{dlabel}' folder"
         label = op.get("dest") or ("output" if "output" in dests else None)
         root = dests.get(label)
         if not root:
@@ -647,10 +675,18 @@ def files_cleanup():
         return jsonify({"results": [], "message": "Nothing was moved - nothing to clean"})
 
     source_dir = job["source_dir"]
+    # Destinations may legitimately sit inside the source tree, and the delete
+    # step treats .nfo/.jpg/.txt as junk — so a destination must never be
+    # walked, whatever the results list says.
+    dest_roots = [os.path.realpath(p) for p in (job.get("destinations") or {}).values()]
+
+    def _in_destination(path):
+        return any(path == root or path.startswith(root + os.sep) for root in dest_roots)
+
     folders, results = [], []
     for r in moved:
         d = os.path.dirname(os.path.realpath(os.path.join(source_dir, r["original"])))
-        if d != source_dir and d not in folders:
+        if d != source_dir and d not in folders and not _in_destination(d):
             folders.append(d)
     for folder in folders:
         results.extend(organizer_mod.cleanup_source(folder, source_dir))

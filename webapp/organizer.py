@@ -49,11 +49,16 @@ def clean_filename(filename: str) -> str:
 
 
 def scan_directory(source_dir: str, exclude_dirs: set = None,
-                   skip_junk: bool = True) -> list:
+                   skip_junk: bool = True, exclude_paths=None) -> list:
     """Walk source_dir and return metadata for every video file found.
 
     exclude_dirs: directory basenames to skip, matched case-insensitively
     at any depth (e.g. {"Samples", ".stfolder"}).
+
+    exclude_paths: absolute directory paths to skip entirely, matched by path
+    rather than by name. This is how a destination folder nested inside the
+    source stays out of the results — excluding it by basename would also drop
+    every unrelated folder that happens to share the name.
 
     skip_junk: leave out sample media and sample/proof/screenshot folders.
     These are the same things the delete step treats as junk, so including
@@ -63,12 +68,14 @@ def scan_directory(source_dir: str, exclude_dirs: set = None,
     """
     source_dir = os.path.realpath(source_dir)
     exclude_lower = {d.lower() for d in (exclude_dirs or ())}
+    exclude_abs = {os.path.realpath(p) for p in (exclude_paths or ()) if p}
     results = []
 
     for root, dirs, files in os.walk(source_dir):
         dirs[:] = sorted(d for d in dirs
                          if d.lower() not in exclude_lower
-                         and not (skip_junk and d.lower() in _JUNK_DIRS))
+                         and not (skip_junk and d.lower() in _JUNK_DIRS)
+                         and os.path.realpath(os.path.join(root, d)) not in exclude_abs)
         for fname in sorted(files):
             _, ext = os.path.splitext(fname)
             if ext.lower() not in _VIDEO_EXTS:

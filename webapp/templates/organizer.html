@@ -450,8 +450,12 @@
     document.getElementById('chk-all').checked = true;
 
     try {
+      // Destinations may live inside the source (…/media → …/media/Movies).
+      // Excluding them keeps the already-filed library out of the scan.
+      const destExcl = Object.values(destPaths()).filter(Boolean)
+        .map(p => '&exclude_path=' + encodeURIComponent(p)).join('');
       const url = '/api/files/scan?dir=' + encodeURIComponent(dir) +
-        (exclude ? '&exclude=' + encodeURIComponent(exclude) : '');
+        (exclude ? '&exclude=' + encodeURIComponent(exclude) : '') + destExcl;
       const r = await fetch(url, { headers: authHeaders({}) });
       if (r.status === 401) { showTokenModal(); setState('Authentication required.'); return; }
       const data = await r.json();

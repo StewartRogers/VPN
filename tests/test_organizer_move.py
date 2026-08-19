@@ -318,13 +318,87 @@ class TestPerFileDestinations:
         assert job["results"][0]["status"] == "error"
         assert (src / "Film.2024.mkv").exists()
 
-    def test_destination_inside_the_source_is_rejected(self, client, tmp_path):
+    def test_destination_inside_the_source_is_allowed(self, client, tmp_path):
+        """Organizing /media into /media/Movies is the normal library layout.
+
+        What used to make it unsafe was the delete step re-walking the filed
+        library, not the nesting; the guards for that are asserted below.
+        """
         src = _tree(tmp_path)
         r = client.post("/api/files/move", json={
             "source_dir": str(src),
-            "destinations": {"movies": str(src / "out")},
+            "destinations": {"movies": str(src / "Movies")},
+            "operations": [{"original": "Film.2024.mkv", "dest": "movies"}]})
+        assert r.status_code == 200
+        job = _wait(client, r.get_json()["job_id"])
+        assert job["results"][0]["status"] == "moved"
+        assert (src / "Movies" / "Film.2024.mkv").exists()
+
+    def test_an_empty_destination_is_rejected(self, client, tmp_path, monkeypatch):
+        """realpath("") is the CWD, not "" — an unset folder must not resolve.
+
+        The emptiness check used to run after realpath, so a blank box became
+        the directory the web app was started from and files were moved into it.
+        """
+        src = _tree(tmp_path)
+        landing = tmp_path / "cwd"
+        landing.mkdir()
+        monkeypatch.chdir(landing)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": "   "},
             "operations": [{"original": "Film.2024.mkv", "dest": "movies"}]})
         assert r.status_code == 400
+        assert "not set" in r.get_json()["error"]
+        assert not (landing / "Film.2024.mkv").exists()
+        assert (src / "Film.2024.mkv").exists()
+
+    def test_destination_equal_to_the_source_is_rejected(self, client, tmp_path):
+        """dst would equal src for every file sitting at the source root."""
+        src = _tree(tmp_path)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(src)},
+            "operations": [{"original": "Film.2024.mkv", "dest": "movies"}]})
+        assert r.status_code == 400
+
+    def test_a_file_already_in_a_destination_is_not_removed(self, client, tmp_path):
+        """A rescan sweeps the filed library back up; it must not be re-moved.
+
+        Re-moving marks the destination as a `moved` source folder, which would
+        hand the library to the delete step and lose its artwork and .nfo files.
+        """
+        src = _tree(tmp_path)
+        movies = src / "Movies"
+        movies.mkdir()
+        (movies / "Filed.2019.mkv").write_bytes(b"z" * 64)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(movies)},
+            "operations": [{"original": "Movies/Filed.2019.mkv", "dest": "movies",
+                            "rename_to": "Filed.2019.Renamed.mkv"}]})
+        job = _wait(client, r.get_json()["job_id"])
+        assert job["results"][0]["status"] == "error"
+        assert "Already in" in job["results"][0]["message"]
+        assert (movies / "Filed.2019.mkv").exists()
+
+    def test_cleanup_never_walks_a_nested_destination(self, client, tmp_path):
+        """Even if a result names one, the delete step must not enter it."""
+        src = _tree(tmp_path)
+        movies = src / "Movies"
+        movies.mkdir()
+        art = movies / "cover.jpg"          # junk by extension
+        art.write_bytes(b"j" * 10)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(movies)},
+            "operations": [{"original": "Film.2024.mkv", "dest": "movies"}]})
+        job_id = r.get_json()["job_id"]
+        job = _wait(client, job_id)
+        # Forge a result pointing the cleanup at the destination itself.
+        job["results"].append({"original": "Movies/Film.2024.mkv", "status": "moved"})
+        client.post("/api/files/cleanup", json={"job_id": job_id})
+        assert art.exists(), "cleanup deleted artwork inside the destination"
 
     def test_single_output_dir_form_still_works(self, client, tmp_path):
         src = _tree(tmp_path)
