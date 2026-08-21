@@ -602,6 +602,11 @@
         if (res.status === 'ok') {
           cell.className = 'col-result file-result-cell ok';
           cell.textContent = res.renamed_to ? '→ ' + res.renamed_to : 'Done';
+          // The rename already happened on disk under this new relative path.
+          // The move step looks the file up by _files[i].original, so that has
+          // to track where the file actually is now or it looks for the old
+          // (no longer existing) name and reports "File not found in source".
+          if (res.renamed_to) _files[i].original = res.renamed_to;
         } else if (res.status === 'skipped') {
           cell.className = 'col-result file-result-cell skip';
           cell.textContent = res.message || 'Skipped';
