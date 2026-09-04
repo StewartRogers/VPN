@@ -93,6 +93,39 @@ def _dest_prompt(movies_dir: str, tv_dir: str) -> str:
         print("  Enter M, T, O, or S.")
 
 
+def _dest_dir_prompt(label: str) -> str:
+    """Prompt for a destination folder, refusing a blank answer.
+
+    Checked on the raw string, before realpath: realpath("") is the process's
+    working directory rather than "", so pressing Enter here used to file
+    everything into wherever organize.py happened to be started from.
+    """
+    while True:
+        raw = _prompt(label)
+        if not raw.strip():
+            print("  A folder is required.")
+            continue
+        return os.path.realpath(os.path.expanduser(raw))
+
+
+def _touches_destination(path: str, dest_dirs: list) -> bool:
+    """True if `path` is a destination folder, or sits inside or above one.
+
+    A destination inside the source tree is the normal library layout, so the
+    scan legitimately returns the destination itself as a source subfolder.
+    Deleting that subfolder afterwards destroys the library — including the
+    files just filed into it.
+    """
+    path = os.path.realpath(path)
+    for d in dest_dirs:
+        if not d:
+            continue
+        d = os.path.realpath(d)
+        if path == d or path.startswith(d + os.sep) or d.startswith(path + os.sep):
+            return True
+    return False
+
+
 def scan_grouped(source_dir: str, recursive: bool) -> tuple[list[dict], dict[str, list[dict]]]:
     """
     Returns root_files (files directly in source_dir) and subdir_map
@@ -220,8 +253,8 @@ def main() -> None:
         sys.exit(1)
 
     recursive = _yn("Scan subdirectories?", default=True)
-    movies_dir = os.path.realpath(os.path.expanduser(_prompt("Movies directory")))
-    tv_dir = os.path.realpath(os.path.expanduser(_prompt("TV directory")))
+    movies_dir = _dest_dir_prompt("Movies directory")
+    tv_dir = _dest_dir_prompt("TV directory")
 
     print()
     print("  Scanning...", end=" ", flush=True)
@@ -247,7 +280,7 @@ def main() -> None:
             print("  Skipped.\n")
             continue
         print()
-        subdir_moved = subdir_duplicate = subdir_kept = subdir_errors = 0
+        subdir_moved = subdir_duplicate = subdir_errors = 0
         for f in files:
             counter += 1
             result = process_file(f, source_dir, movies_dir, tv_dir, f"[{counter}/{total}]")
@@ -257,7 +290,6 @@ def main() -> None:
             errors += result == "error"
             subdir_moved += result == "moved"
             subdir_duplicate += result == "duplicate"
-            subdir_kept += result == "skipped"
             subdir_errors += result == "error"
 
         # Every file is accounted for either this run (moved) or a prior one
@@ -265,11 +297,22 @@ def main() -> None:
         # as long as nothing in it failed to move or was deliberately kept.
         if (subdir_moved or subdir_duplicate) and not subdir_errors:
             full_subdir = os.path.join(source_dir, rel_dir)
-            if os.path.exists(full_subdir):
+            if _touches_destination(full_subdir, [movies_dir, tv_dir]):
+                # rmtree here would take the library it was just filing into.
+                print(f"  '{rel_dir}' left in place - it is, or contains, a "
+                      f"destination folder.")
+            elif os.path.exists(full_subdir):
+                # Count every survivor, not just the videos that were skipped.
+                # subdir_kept only tracks video files, so subtitles, artwork
+                # and sidecars went unmentioned and unmissed.
+                remaining = sum(len(fs) for _, _, fs in os.walk(full_subdir))
                 prompt = f"  Delete '{rel_dir}'?"
-                if subdir_kept:
-                    prompt = f"  Delete '{rel_dir}' and the {subdir_kept} file(s) you kept in it?"
-                if _yn(prompt, default=not subdir_kept):
+                if remaining:
+                    prompt = (f"  Delete '{rel_dir}' and the {remaining} "
+                              f"file(s) still in it?")
+                # Never default to yes: this is a recursive delete, and the
+                # count above cannot tell junk from something worth keeping.
+                if _yn(prompt, default=False):
                     try:
                         shutil.rmtree(full_subdir)
                         print(f"  Done. Deleted '{rel_dir}'.")

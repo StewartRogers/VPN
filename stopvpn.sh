@@ -108,6 +108,39 @@ stop_service_by_pid() {
     fi
 }
 
+#
+# Confirm qBittorrent is actually gone before anything relaxes the firewall.
+#
+# Ordering invariant 1: the kill switch comes down only once the client is
+# *confirmed* stopped. Issuing a kill is not the same as it having worked.
+# stop_service_by_pid() removes the PID file unconditionally, and its plain
+# kill/kill -9 are not run under sudo (only the pkill fallback is), so a client
+# owned by another user or ignoring the signal survives silently into
+# 2>/dev/null. This was the only teardown path that then reset ufw regardless.
+#
+# Mirrors monitor.py's stop_qbittorrent()/_await_qbittorrent_exit().
+QBT_STOP_GRACE="${QBT_STOP_GRACE:-30}"
+
+confirm_qbittorrent_stopped() {
+    local waited=0
+    while [ "$waited" -lt "$QBT_STOP_GRACE" ]; do
+        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+        sleep 1
+        waited=$((waited + 1))
+        if [ $((waited % 5)) -eq 0 ]; then
+            echo "  Still waiting for qBittorrent to shut down (${waited}s/${QBT_STOP_GRACE}s)"
+        fi
+    done
+    echo "  qBittorrent has not exited after ${QBT_STOP_GRACE}s - sending SIGKILL"
+    log_message "WARN" "qBittorrent still running after ${QBT_STOP_GRACE}s - sending SIGKILL"
+    sudo pkill -9 -f qbittorrent-nox 2>/dev/null
+    for _ in 1 2 3 4 5; do
+        sleep 1
+        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+    done
+    return 1
+}
+
 # Function to stop services
 
 shutdown_services() {
@@ -119,7 +152,18 @@ shutdown_services() {
 
     echo "  [ qBittorrent ]"
     stop_service_by_pid "qbittorrent"
-    sleep 1
+    if ! confirm_qbittorrent_stopped; then
+        echo ""
+        echo "  CRITICAL: qBittorrent is STILL RUNNING after SIGKILL."
+        echo "  Teardown HALTED - the kill switch is being left ACTIVE, because"
+        echo "  opening the firewall now would hand the client your ISP link."
+        echo "  Kill it by hand, then run ./remove_killswitch.sh."
+        echo ""
+        log_message "CRITICAL" "Teardown HALTED - qBittorrent survived SIGKILL; kill switch left active"
+        divider
+        echo ""
+        return 1
+    fi
 
     echo ""
     echo "  [ Monitoring ]"
@@ -151,7 +195,9 @@ shutdown_services() {
 # Main script logic
 if [[ "$1" == "--shutdown-only" ]]; then
     log_message "INFO" "Shutdown requested (--shutdown-only)"
-    shutdown_services
+    if ! shutdown_services; then
+        exit 1
+    fi
     echo "Done."
     exit 0
 fi
@@ -160,7 +206,11 @@ fi
 read -rp "Shutdown services? [y/N]: " do_shutdown
 do_shutdown=$(echo "$do_shutdown" | tr '[:upper:]' '[:lower:]' | tr -d '\r')
 if [[ "$do_shutdown" == "y" ]]; then
-    shutdown_services
+    if ! shutdown_services; then
+        # The firewall is still up and a client is still live; running the
+        # organizer next would bury that message under a scan.
+        exit 1
+    fi
 else
     echo ""
     echo "  Skipped service shutdown."

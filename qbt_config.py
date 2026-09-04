@@ -47,6 +47,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 
 _VPN_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -80,14 +81,35 @@ def read_ini(path):
 
 
 def write_ini(path, sections):
+    """Rewrite `path` atomically: temp file in the same directory, then replace.
+
+    This file is the only copy of everything qBittorrent owns — WebUI
+    credentials, categories, speed limits — and this function merges into it
+    rather than regenerating it. Opening it with "w" truncated the live config
+    in place, so a crash or a full disk between truncate and write lost the
+    lot. os.replace is atomic within a filesystem, so a reader sees either the
+    old file or the new one.
+    """
     out = []
     for name, lines in sections:
         if name is not None:
             out.append(name)
         out.extend(lines)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        f.write("\n".join(out).rstrip("\n") + "\n")
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".qbt_config.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(out).rstrip("\n") + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def get_key(sections, section, key):

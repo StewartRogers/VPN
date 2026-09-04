@@ -46,6 +46,22 @@ if pgrep -f "qbittorrent-nox" > /dev/null; then
     if pgrep -f "qbittorrent-nox" > /dev/null; then
         echo "  Still running - sending SIGKILL"
         sudo pkill -9 -f "qbittorrent-nox"
+        for _ in $(seq 1 10); do
+            pgrep -f "qbittorrent-nox" > /dev/null || break
+            sleep 0.5
+        done
+    fi
+    # Confirm before continuing: everything below this point relaxes the
+    # firewall, and "Stopped." used to be printed unconditionally — a client
+    # that survived SIGKILL (D-state on a stalled disk, say) was announced as
+    # stopped and then handed the ISP link.
+    if pgrep -f "qbittorrent-nox" > /dev/null; then
+        echo ""
+        echo "  CRITICAL: qbittorrent-nox is STILL RUNNING after SIGKILL."
+        echo "  Teardown HALTED - the kill switch is being left ACTIVE."
+        echo "  Kill it by hand, then run ./remove_killswitch.sh."
+        echo ""
+        exit 1
     fi
     echo "  Stopped."
 else

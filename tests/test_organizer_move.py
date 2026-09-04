@@ -181,6 +181,57 @@ class TestCleanupSource:
         assert outside.exists()
 
 
+class TestCleanupNeverEntersADestination:
+    """A destination may sit inside the source tree — that is the normal
+    library layout. Cleanup treats .nfo/.jpg/.txt as junk, so walking a
+    destination strips a filed library of its artwork and sidecars.
+
+    The caller cannot enforce this alone: it only knows the *source folder* of
+    each moved file, and that folder can be an ancestor of a destination rather
+    than inside one.
+    """
+
+    def _library(self, root):
+        """source/Library holds junk; source/Library/Movies is the destination."""
+        lib = root / "Library"
+        film = lib / "Movies" / "Some Film (2020)"
+        film.mkdir(parents=True)
+        for name in ("poster.jpg", "movie.nfo", "readme.txt"):
+            (film / name).write_bytes(b"keep")
+        (lib / "release.nfo").write_bytes(b"junk")
+        return lib, film
+
+    def test_destination_below_the_cleaned_folder_is_untouched(self, tmp_path):
+        lib, film = self._library(tmp_path)
+        organizer.cleanup_source(str(lib), str(tmp_path),
+                                 [str(lib / "Movies")])
+        assert sorted(p.name for p in film.iterdir()) == [
+            "movie.nfo", "poster.jpg", "readme.txt"]
+        assert not (lib / "release.nfo").exists(), "junk outside the destination should still go"
+
+    def test_without_the_exclusion_the_library_is_destroyed(self, tmp_path):
+        """Pins the bug this guard exists for, so a caller that forgets to pass
+        the destinations fails loudly here rather than in someone's library."""
+        lib, film = self._library(tmp_path)
+        organizer.cleanup_source(str(lib), str(tmp_path))
+        assert not film.exists()
+
+    def test_folder_inside_a_destination_is_refused(self, tmp_path):
+        lib, film = self._library(tmp_path)
+        results = organizer.cleanup_source(str(film), str(tmp_path),
+                                           [str(lib / "Movies")])
+        assert results[0]["status"] == "kept"
+        assert (film / "poster.jpg").exists()
+
+    def test_empty_destination_root_is_not_removed(self, tmp_path):
+        dest = tmp_path / "Library" / "Movies"
+        dest.mkdir(parents=True)
+        (tmp_path / "Library" / "release.nfo").write_bytes(b"junk")
+        organizer.cleanup_source(str(tmp_path / "Library"), str(tmp_path),
+                                 [str(dest)])
+        assert dest.exists(), "an empty destination must survive as a move target"
+
+
 # ------------------------------------------------------------------ browse
 
 class TestBrowse:

@@ -35,7 +35,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 1 = secure, 0 = not
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 213 tests
+.venv/bin/python -m pytest -q     # 224 tests
 ```
 
 `start_web.sh` generates a `VPN_API_TOKEN` on first run and saves it to
@@ -133,6 +133,24 @@ is a leak:
    step that cannot be confirmed **halts the sequence** with the kill switch
    left up and a CRITICAL log; it never proceeds on faith. `stop_all()` also
    `join()`s the monitor thread rather than just setting the stop event.
+
+   That confirmation is only as good as `is_qbittorrent_running()`, which now
+   fails in the **opposite direction to the tunnel probes** and must keep doing
+   so. `probe_qbittorrent()` is tri-state; the bool wrapper treats an
+   unanswered probe as *still running*. For `check_openvpn_process()` an
+   unanswered probe means "not confirmed up" and fail-stops, which is safe;
+   here the answer decides whether `teardown_killswitch()` opens UFW, so
+   "could not ask" must never read as "confirmed gone". It used to catch every
+   exception and return `False`, so a `pgrep` that merely timed out under
+   torrent load let `stop_qbittorrent()` report success without sending a
+   signal, and both gates in `stop_vpn()` then passed.
+
+   The same rule applies in bash. `stopvpn.sh`, `stop_web.sh` and
+   `remove_killswitch.sh` each re-check `pgrep -f qbittorrent-nox` after their
+   SIGKILL and **halt rather than touch the firewall** if it is still there;
+   `startvpn.sh`'s `cleanup_on_error` waits for the client to exit before
+   running `ufw_base.sh`, because Ctrl+C reaches the whole process group and
+   `checkip.sh` is inside its own 30s grace window at that moment.
 
    How qBittorrent is stopped depends on whether traffic is currently exposed:
 
@@ -386,8 +404,16 @@ guards address it directly. Keep all three; each one alone is insufficient:
 2. `_plan()` refuses a source already inside a destination
    (`Already in the '<label>' folder`). Without it a rescan re-files the
    library, which marks the destination as a `moved` source folder.
-3. `files_cleanup()` never descends into a destination root, whatever the
-   results list claims.
+3. `cleanup_source(..., exclude_roots=dest_roots)` never descends into a
+   destination root, whatever the results list claims. This one lives in
+   `cleanup_source()` and not in its caller, and that placement is the point:
+   `files_cleanup()` only sees the *source folder* of each moved file, and can
+   therefore only reject a folder **inside** a destination. A source folder is
+   just as often an **ancestor** of one — source `/mnt/media`, Movies
+   `/mnt/media/Library/Movies`, a scanned file at `/mnt/media/Library/film.mkv`
+   — which passes the caller's check and then walks straight down into the
+   library. Guards 1 and 2 do not help: they keep destination files from being
+   *scanned and moved*, not a parent folder from being *cleaned*.
 
 The thing being protected: `cleanup_source()` treats `.nfo`, `.jpg` and `.txt`
 as junk, so walking a destination strips a media library of its artwork and
@@ -469,4 +495,28 @@ app user can read — the user chose that over an allowlist. It is still behind
   design change rather than a patch.
 - The `.ovpn` fetch has an SSRF guard (HTTPS only, private/reserved addresses
   rejected, DNS pinned, proxies disabled, redirects re-validated, 1 MB cap).
-  Do not loosen it for convenience.
+  Do not loosen it for convenience. `startvpn.sh --ovpn-url` has the bash
+  equivalent — `validate_url()` requires `https://`, `reject_private_host()`
+  refuses a host resolving outside global address space, and the `curl` call
+  pins the scheme across redirects with a 1 MB cap and a `remote`-line check on
+  the payload. It is deliberately weaker than the web path in one respect: the
+  name is resolved for the check and again by `curl`, so it is a check, not a
+  pin. This URL decides which server the tunnel terminates at *and* which
+  endpoint `ufw_killswitch.sh` whitelists, so it accepted plain `http://` for
+  far too long.
+- `ufw_killswitch.sh` and `ufw_base.sh` **verify what they applied and exit
+  non-zero if it did not take.** Every `ufw` call in both is silenced and
+  unchecked, and both scripts used to end on an `echo`, so they exited 0
+  unconditionally — while `startvpn.sh`'s `KS_RC` and `monitor.py`'s
+  `setup_killswitch()` both read that status as proof the kill switch was up.
+  A failed `default deny outgoing` followed by a successful `enable` produced a
+  live firewall with outgoing **allowed**, reported as ACTIVE. Keep the
+  `ufw status verbose` assertions at the end of both.
+- `organize.py` (the CLI organizer) now has the guards the web path has:
+  `_touches_destination()` refuses to `rmtree` a folder that is, contains, or
+  sits inside a Movies/TV destination — with the nested library layout above,
+  that folder *is* the library it just filed into. The delete prompt also never
+  defaults to yes, and counts every surviving file rather than only the videos
+  that were skipped, so subtitles and artwork are no longer deleted unmentioned.
+  `_dest_dir_prompt()` rejects a blank folder on the raw string, for the same
+  `realpath("") == cwd` reason as the web path.

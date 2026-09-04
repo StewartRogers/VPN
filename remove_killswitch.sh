@@ -48,7 +48,24 @@ if pgrep -f "qbittorrent-nox" > /dev/null; then
         pgrep -f "qbittorrent-nox" > /dev/null || break
         sleep 0.5
     done
-    pgrep -f "qbittorrent-nox" > /dev/null && sudo pkill -9 -f "qbittorrent-nox"
+    if pgrep -f "qbittorrent-nox" > /dev/null; then
+        sudo pkill -9 -f "qbittorrent-nox"
+        for _ in $(seq 1 10); do
+            pgrep -f "qbittorrent-nox" > /dev/null || break
+            sleep 0.5
+        done
+    fi
+    # Confirm before reopening outbound traffic. "Stopped." was printed
+    # unconditionally, so a client that survived SIGKILL was reported as gone
+    # and then given the ISP link by the very next step.
+    if pgrep -f "qbittorrent-nox" > /dev/null; then
+        echo ""
+        echo "CRITICAL: qbittorrent-nox is STILL RUNNING after SIGKILL."
+        echo "Refusing to reopen outbound traffic - the kill switch stays ACTIVE."
+        echo "Kill it by hand, then run this script again."
+        echo ""
+        exit 1
+    fi
     echo "Stopped."
 else
     echo "qbittorrent-nox is not running."
