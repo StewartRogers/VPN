@@ -78,6 +78,24 @@ ufw allow in on tun0 comment 'VPN interface'   > /dev/null 2>&1
 
 ufw --force enable                  > /dev/null 2>&1
 
+# Confirm the policy that is actually loaded, and fail loudly if it is not the
+# one that was asked for. Every ufw call above is silenced and unchecked, and
+# this script used to end on an echo — so it exited 0 no matter what happened.
+# Both callers treat that as proof (startvpn.sh's KS_RC, monitor.py's
+# setup_killswitch), which meant a failed 'default deny outgoing' followed by a
+# successful 'enable' produced a live firewall with outgoing ALLOWED, reported
+# as a kill switch in place.
+UFW_STATUS="$(ufw status verbose 2>/dev/null)"
+if ! grep -q "Status: active" <<< "$UFW_STATUS"; then
+    echo "ERROR: ufw is not active after --force enable" >&2
+    exit 1
+fi
+if ! grep -qE "^Default:.*\b${UFW_OUT_POLICY} \(outgoing\)" <<< "$UFW_STATUS"; then
+    echo "ERROR: outgoing policy is not '$UFW_OUT_POLICY' after applying base rules" >&2
+    echo "$UFW_STATUS" | grep '^Default:' >&2
+    exit 1
+fi
+
 if [ "$UFW_OUT_POLICY" = "deny" ]; then
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Base rules applied with outgoing DENIED - caller must add its allow-out rules."
 else

@@ -381,12 +381,24 @@ class VPNMonitor:
     def get_external_ip(self):
         return detect_external_ip()
 
+    def probe_qbittorrent(self):
+        """Tri-state: True running, False confirmed gone, None could not ask."""
+        return self._probe(["pgrep", "-f", "qbittorrent-nox"],
+                           lambda r: r.returncode == 0)
+
     def is_qbittorrent_running(self):
-        try:
-            r = subprocess.run(["pgrep", "-f", "qbittorrent-nox"], capture_output=True, timeout=2)
-            return r.returncode == 0
-        except Exception:
-            return False
+        """Bool wrapper — an unanswered probe reads as *still running*.
+
+        This is the opposite direction to check_openvpn_process(), and
+        deliberately so. There an unanswered probe means "tunnel not confirmed
+        up" and fail-stops, which is safe. Here the answer decides whether
+        teardown_killswitch() opens UFW, so "I could not ask" must never read
+        as "confirmed gone" — that hands a live client the ISP link. It used
+        to catch every exception and return False, so a pgrep that merely timed
+        out under torrent load let stop_qbittorrent() report success without
+        sending a signal, and both gates in stop_vpn() then passed.
+        """
+        return self.probe_qbittorrent() is not False
 
     # --------------------------------------------------------- qbt management
 
@@ -810,6 +822,28 @@ class VPNMonitor:
         self._invalidate_killswitch_cache()
         self.status["kill_switch_active"] = False
 
+    def _revert_killswitch_after_failed_start(self):
+        """Open UFW back up after a failed VPN start — but only if nothing is
+        live behind it.
+
+        start_vpn() has no qBittorrent guard of its own, unlike
+        attempt_reconnect(). A fail-stop that halted at step 1 leaves the client
+        running with the kill switch up; pressing Start VPN then, and having it
+        fail, used to relax the firewall underneath that client — no tunnel, no
+        kill switch, torrents live on the ISP link.
+        """
+        if self.is_qbittorrent_running():
+            self.log(
+                "Kill switch left ACTIVE — the VPN did not come up and "
+                "qBittorrent is still running, so opening UFW would put it on "
+                "the ISP link. Stop qBittorrent, then try again.",
+                level="CRITICAL",
+            )
+            return False
+        self.log("Reverting kill switch so a new config can be downloaded", level="WARNING")
+        self.teardown_killswitch()
+        return True
+
     def disable_ipv6(self):
         """Disable IPv6 system-wide to prevent bypass of the VPN tunnel."""
         self.log("Disabling IPv6 to prevent leaks...")
@@ -926,8 +960,7 @@ class VPNMonitor:
                 self._log_openvpn(line, level="WARNING")
         if result.returncode != 0:
             self.log(f"openvpn exited with code {result.returncode}", source="OPENVPN", level="ERROR")
-            self.log("Reverting kill switch so a new config can be downloaded", level="WARNING")
-            self.teardown_killswitch()
+            self._revert_killswitch_after_failed_start()
             return False
 
         # 6. Wait for tun0 to come up, streaming the OpenVPN log
@@ -973,8 +1006,7 @@ class VPNMonitor:
             self.log("tun0 never came up — check OpenVPN log lines above",
                      source="OPENVPN", level="ERROR")
 
-        self.log("Reverting kill switch so a new config can be downloaded", level="WARNING")
-        self.teardown_killswitch()
+        self._revert_killswitch_after_failed_start()
         return False
 
     def _install_ovpn(self, tmp_path, filename):
@@ -1331,6 +1363,13 @@ class VPNMonitor:
         # exit where the client is egressing unprotected and must die at once.
         # Every other break leaves the kill switch up, so a clean exit is safe.
         stop_urgent = False
+        # Latched by every fail-stop exit below, and the only thing the teardown
+        # after the loop keys off. It used to test `not self._stop_event.is_set()`
+        # instead, which is a different question: a stop() landing between a
+        # break and that test (app.py's /api/config calls it, and only sets the
+        # flag) made the whole teardown vanish — including the urgent path,
+        # where UFW is confirmed open and the client is egressing right then.
+        fail_stop = False
 
         while not self._stop_event.is_set():
             # Tri-state: True / False / None ("could not ask").
@@ -1357,6 +1396,7 @@ class VPNMonitor:
             if failure:
                 self.log(f"{failure} — stopping everything", level="CRITICAL")
                 self.status["secure"] = False
+                fail_stop = True
                 break
 
             # None means the command did not answer — that is not evidence the
@@ -1374,6 +1414,7 @@ class VPNMonitor:
                         f"{FAST_MAX_UNKNOWN} consecutive fast checks could not be "
                         f"confirmed — stopping everything", level="CRITICAL")
                     self.status["secure"] = False
+                    fail_stop = True
                     break
                 self._stop_event.wait(self.fast_interval)
                 continue
@@ -1396,6 +1437,7 @@ class VPNMonitor:
                     # UFW is open and the client is egressing unprotected:
                     # kill it now, do not wait for a clean exit.
                     stop_urgent = True
+                    fail_stop = True
                     break
                 if ks == "unknown":
                     # UFW did not answer. Says nothing about the firewall, so
@@ -1414,6 +1456,7 @@ class VPNMonitor:
                             level="CRITICAL",
                         )
                         self.status["secure"] = False
+                        fail_stop = True
                         break
                 else:
                     consecutive_ks_unknown = 0
@@ -1435,12 +1478,14 @@ class VPNMonitor:
                                  level="WARNING")
                         self.log("3 consecutive IP check failures — stopping everything", level="CRITICAL")
                         self.status["secure"] = False
+                        fail_stop = True
                         break
                     # Retry sooner than normal (stamp from post-check time)
                     last_ip_check = post_check_ts - self.ip_interval + 5
                 elif ip.strip() == self.home_ip.strip():
                     self.log(f"IP LEAK DETECTED: external IP {ip} matches home IP — stopping everything", level="CRITICAL")
                     self.status["secure"] = False
+                    fail_stop = True
                     break
                 else:
                     consecutive_ip_errors = 0
@@ -1452,7 +1497,7 @@ class VPNMonitor:
             self._stop_event.wait(self.fast_interval)
 
         self.status["running"] = False
-        if not self._stop_event.is_set():
+        if fail_stop:
             # Internal exit (VPN failure / leak) — stop qBittorrent and OpenVPN,
             # but leave the kill switch active so no traffic leaks out.
             # User must click Stop VPN to restore network access.

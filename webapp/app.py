@@ -698,8 +698,14 @@ def files_cleanup():
         d = os.path.dirname(os.path.realpath(os.path.join(source_dir, r["original"])))
         if d != source_dir and d not in folders and not _in_destination(d):
             folders.append(d)
+    # dest_roots is passed down as well, and that is the guard that actually
+    # holds: this loop only rejects a folder *inside* a destination, but a
+    # source folder can just as easily be an *ancestor* of one (source
+    # /mnt/media, Movies /mnt/media/Library/Movies, a file at
+    # /mnt/media/Library/film.mkv). Such a folder passes _in_destination and
+    # the walk then descends into the library below it.
     for folder in folders:
-        results.extend(organizer_mod.cleanup_source(folder, source_dir))
+        results.extend(organizer_mod.cleanup_source(folder, source_dir, dest_roots))
     return jsonify({"results": results})
 
 

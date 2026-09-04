@@ -107,11 +107,39 @@ rotate_logs() {
 ##
 validate_url() {
     local url=$1
-    if [[ ! "$url" =~ ^https?:// ]]; then
-        log_message "ERROR" "Invalid URL format: $url"
+    # HTTPS only. This URL decides which server the tunnel terminates at, and
+    # ufw_killswitch.sh then whitelists that endpoint — so a plaintext fetch
+    # lets anyone on the path choose both. The web path has required HTTPS all
+    # along; this one accepted http:// too.
+    if [[ ! "$url" =~ ^https:// ]]; then
+        log_message "ERROR" "Invalid URL - must start with https:// : $url"
         return 1
     fi
     return 0
+}
+
+# Reject a URL whose host resolves into private, loopback, link-local or CGNAT
+# space. Mirrors the SSRF guard on the web path's .ovpn fetch. Note this is a
+# weaker guarantee than that path's DNS pinning: the name is resolved here and
+# again by curl, so it is a check rather than a pin.
+reject_private_host() {
+    "$VPN_PYTHON" - "$1" <<'PY' 2>/dev/null
+import ipaddress, socket, sys
+from urllib.parse import urlparse
+host = urlparse(sys.argv[1]).hostname
+if not host:
+    sys.exit(1)
+try:
+    infos = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
+except OSError:
+    sys.exit(1)
+if not infos:
+    sys.exit(1)
+for info in infos:
+    if not ipaddress.ip_address(info[4][0]).is_global:
+        sys.exit(1)
+sys.exit(0)
+PY
 }
 
 validate_ip() {
@@ -210,11 +238,50 @@ fi
 KILLSWITCH_APPLIED=false
 ERROR_HANDLED=false
 
+# Grace period for a clean qBittorrent exit. Mirrors QBT_STOP_GRACE in
+# checkip.sh and webapp/monitor.py.
+QBT_STOP_GRACE="${QBT_STOP_GRACE:-30}"
+
+wait_for_qbittorrent_exit() {
+    pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+    echo ""
+    echo "  Waiting for qBittorrent to stop before restoring the firewall..."
+    log_message "INFO" "Waiting for qBittorrent to exit before relaxing the firewall"
+    local waited=0
+    while [ "$waited" -lt "$QBT_STOP_GRACE" ]; do
+        sleep 1
+        waited=$((waited + 1))
+        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+    done
+    log_message "WARN" "qBittorrent still running after ${QBT_STOP_GRACE}s - sending SIGKILL"
+    sudo pkill -9 -f qbittorrent-nox 2>/dev/null
+    for _ in 1 2 3 4 5; do
+        sleep 1
+        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+    done
+    return 1
+}
+
 cleanup_on_error() {
     local exit_code=$?
     if [ $exit_code -ne 0 ] && [ "$ERROR_HANDLED" != true ]; then
         log_message "ERROR" "Script exited with error (code $exit_code)"
         if [ "$KILLSWITCH_APPLIED" = true ]; then
+            # Never relax the firewall under a live client. Ctrl+C sends SIGINT
+            # to the whole process group, so checkip.sh is inside its own 30s
+            # graceful qBittorrent shutdown at exactly this moment — and this
+            # handler used to run ufw_base.sh a second or two later, leaving the
+            # client egressing on the ISP link for the rest of that window. The
+            # two processes have no other coordination.
+            if ! wait_for_qbittorrent_exit; then
+                log_message "CRITICAL" "qBittorrent survived SIGKILL - kill switch left ACTIVE"
+                echo ""
+                echo "  CRITICAL: qBittorrent is still running."
+                echo "  The kill switch has been LEFT ACTIVE so nothing leaks."
+                echo "  Kill it by hand, then run ./remove_killswitch.sh."
+                echo ""
+                return
+            fi
             log_message "INFO" "Resetting UFW to base state..."
             sudo bash "$SCRIPT_DIR/ufw_base.sh" >> "$LOG_DIR/vpn.log" 2>&1 || true
         fi
@@ -515,8 +582,30 @@ for ATTEMPT in $(seq 1 "$MAX_STARTUP_ATTEMPTS"); do
                 fi
             fi
 
-            curl -s -L -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"
-            if [ $? -ne 0 ] || [ ! -s "$SCRIPT_DIR/$OVPN_FILENAME" ]; then
+            # --proto/--proto-redir keep every hop on https, -f rejects error
+            # pages, and --max-filesize caps the body at 1 MB — the same limits
+            # the web path applies. Without them a redirect could downgrade to
+            # http and an error page could be saved as a .ovpn.
+            DL_OK=true
+            if ! reject_private_host "$OVPNURL"; then
+                log_message "ERROR" "OVPN URL host resolves to a private or reserved address"
+                echo "  ERROR: OVPN URL host resolves to a private or reserved address"
+                DL_OK=false
+            elif ! curl -sS -L -f \
+                    --proto '=https' --proto-redir '=https' \
+                    --max-time 60 --max-filesize 1048576 \
+                    -o "$SCRIPT_DIR/$OVPN_FILENAME" "$OVPNURL"; then
+                DL_OK=false
+            elif [ ! -s "$SCRIPT_DIR/$OVPN_FILENAME" ]; then
+                DL_OK=false
+            elif ! grep -qE '^[[:space:]]*remote[[:space:]]+' "$SCRIPT_DIR/$OVPN_FILENAME"; then
+                # An error page saved as .ovpn fails here rather than later as a
+                # tunnel that never comes up. Same check as download_ovpn().
+                log_message "ERROR" "Downloaded file has no 'remote' line - not an OpenVPN config"
+                echo "  ERROR: Downloaded file is not an OpenVPN config"
+                DL_OK=false
+            fi
+            if [ "$DL_OK" != true ]; then
                 log_message "ERROR" "Failed to download OVPN file"
                 echo "  ERROR: Failed to download OVPN file"
                 rm -f "$SCRIPT_DIR/$OVPN_FILENAME"

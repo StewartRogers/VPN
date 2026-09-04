@@ -84,7 +84,10 @@ echo "  Port/Proto: $VPN_PORT/$VPN_PROTO"
 # this script flipped the policy on the next line, leaving ufw live and
 # outgoing unrestricted in between — a fail-open window on every single kill
 # switch application, including every reconnect.
-UFW_OUT_POLICY=deny bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1
+if ! UFW_OUT_POLICY=deny bash "$SCRIPT_DIR/ufw_base.sh" > /dev/null 2>&1; then
+    echo "ERROR: ufw_base.sh failed to apply the deny-outgoing base state" >&2
+    exit 1
+fi
 
 # --- Add kill switch rules on top ---
 # Outgoing is already denied by default at this point, so the window between
@@ -104,5 +107,26 @@ for cidr in $LAN_CIDRS; do
     ufw allow out on eth0  to "$cidr" comment 'LAN' > /dev/null 2>&1
     ufw allow out on wlan0 to "$cidr" comment 'LAN' > /dev/null 2>&1
 done
+
+# Verify what is actually loaded before reporting success. Every ufw call in
+# this file is silenced and unchecked and the script used to end on an echo, so
+# it exited 0 unconditionally — and both callers (startvpn.sh's KS_RC,
+# monitor.py's setup_killswitch) take that exit status as proof the kill switch
+# is up. A partial application therefore reported ACTIVE while outgoing traffic
+# was still permitted.
+KS_STATUS="$(ufw status verbose 2>/dev/null)"
+if ! grep -q "Status: active" <<< "$KS_STATUS"; then
+    echo "ERROR: kill switch NOT applied - ufw is not active" >&2
+    exit 1
+fi
+if ! grep -qE "^Default:.*\bdeny \(outgoing\)" <<< "$KS_STATUS"; then
+    echo "ERROR: kill switch NOT applied - outgoing traffic is not denied" >&2
+    echo "$KS_STATUS" | grep '^Default:' >&2
+    exit 1
+fi
+if ! ufw status 2>/dev/null | grep -q "$VPN_IP"; then
+    echo "ERROR: kill switch NOT applied - no allow-out rule for VPN server $VPN_IP" >&2
+    exit 1
+fi
 
 echo "  Status:     ACTIVE - all outgoing blocked except VPN tunnel and LAN"

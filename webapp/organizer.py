@@ -261,22 +261,40 @@ def move_file(src: str, dst: str, chunk_cb=None) -> dict:
     return {"status": "moved", "message": "Moved (copied across filesystems)", "bytes": total}
 
 
-def cleanup_source(folder: str, source_root: str) -> list:
+def _within(path: str, roots: list) -> bool:
+    """True if `path` is one of `roots` or sits inside one."""
+    return any(path == r or path.startswith(r + os.sep) for r in roots)
+
+
+def cleanup_source(folder: str, source_root: str, exclude_roots=None) -> list:
     """Remove junk leftovers in `folder`, then the folder itself if it empties.
 
     Only ever descends inside `source_root`, and never removes source_root
-    itself. Returns a list of {path, status, message} describing what happened.
+    itself. Nothing at or below `exclude_roots` (the move's destination roots)
+    is ever touched: a destination may legitimately sit inside the source tree,
+    and this step treats .nfo/.jpg/.txt as junk, so walking one strips a filed
+    media library of its artwork and sidecars. The caller cannot enforce this
+    on its own — it only sees the *source* folder of each moved file, which can
+    be an ancestor of a destination rather than inside one.
+
+    Returns a list of {path, status, message} describing what happened.
     """
     source_root = os.path.realpath(source_root)
     folder = os.path.realpath(folder)
+    excluded = [os.path.realpath(p) for p in (exclude_roots or [])]
     results = []
     if folder == source_root or not folder.startswith(source_root + os.sep):
         return [{"path": folder, "status": "error",
                  "message": "Refusing to clean outside the source directory"}]
+    if _within(folder, excluded):
+        return [{"path": os.path.relpath(folder, source_root), "status": "kept",
+                 "message": "inside a destination folder — not cleaned"}]
     if not os.path.isdir(folder):
         return results
 
     for root, dirs, files in os.walk(folder, topdown=False):
+        if _within(os.path.realpath(root), excluded):
+            continue
         for fname in files:
             fpath = os.path.join(root, fname)
             if is_junk_file(fpath):
@@ -289,6 +307,8 @@ def cleanup_source(folder: str, source_root: str) -> list:
                                     "status": "error", "message": str(exc)})
         for dname in dirs:
             dpath = os.path.join(root, dname)
+            if _within(os.path.realpath(dpath), excluded):
+                continue
             try:
                 if is_junk_dir(dpath) and not os.listdir(dpath):
                     os.rmdir(dpath)
