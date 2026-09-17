@@ -153,15 +153,18 @@ teardown as `stopvpn.sh` (torrents → OpenVPN → app → DNS/IPv6 → UFW last
 | `remove_killswitch.sh` | Emergency recovery if the kill switch locks you out |
 | `start_web.sh` / `stop_web.sh` | Web app lifecycle |
 | `webapp/` | Flask dashboard (`app.py`, `monitor.py`, `organizer.py`) |
-| `vpn_config.conf` | Optional settings, also readable from `~/.vpn_config.conf` |
+| `vpn_config.conf.example` | Template for optional settings — copy to `vpn_config.conf` (gitignored) or `~/.vpn_config.conf` to use |
 
 The firewall is **UFW exclusively** — `ufw_base.sh` and `ufw_killswitch.sh` are
 the only things that touch it. There are no `iptables` calls in this project.
 
 ## Configuration
 
-`~/.vpn_config.conf` takes precedence over `./vpn_config.conf`. Every key below
-is read by something; anything else in the file is inert.
+Copy `vpn_config.conf.example` to `vpn_config.conf` (or `~/.vpn_config.conf`)
+and edit the values you want to change; `vpn_config.conf` is gitignored so
+local edits never show up as diffs. `~/.vpn_config.conf` takes precedence over
+`./vpn_config.conf`. Every key below is read by something; anything else in
+the file is inert.
 
 ```bash
 FAST_CHECK_INTERVAL=2        # seconds between process/interface/route checks

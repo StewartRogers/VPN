@@ -94,9 +94,14 @@ with no `remote` line is refused.
 
 ## 5. Configuration file (optional)
 
-`~/.vpn_config.conf` takes precedence over `./vpn_config.conf`. See the
-Configuration section of [README.md](README.md) for the keys that are actually
-read; anything else in the file is inert.
+```bash
+cp vpn_config.conf.example vpn_config.conf   # or ~/.vpn_config.conf
+```
+
+`~/.vpn_config.conf` takes precedence over `./vpn_config.conf`. `vpn_config.conf`
+is gitignored, so local edits never show up as diffs. See the Configuration
+section of [README.md](README.md) for the keys that are actually read;
+anything else in the file is inert.
 
 ## 6. sudo requirements (web app only)
 

@@ -275,8 +275,10 @@ consecutive failure, since it costs ~10s and would otherwise stall the loop.
 ## Configuration
 
 `~/.vpn_config.conf` takes precedence over `./vpn_config.conf`; both paths use
-that search order. **Several keys in the tracked `vpn_config.conf` are read by
-nothing** (`SETUP_KILLSWITCH`, `PREVENT_DNS_LEAK`, `DISABLE_IPV6`,
+that search order. `vpn_config.conf` is gitignored (local edits never show up
+as diffs); `vpn_config.conf.example` is the tracked template — copy it to
+either path to use it. **Several keys in it are read by nothing**
+(`SETUP_KILLSWITCH`, `PREVENT_DNS_LEAK`, `DISABLE_IPV6`,
 `BIND_TO_VPN_INTERFACE`, `DEFAULT_VIDEO_DEST`, `VPN_HOME`) — see `TODO.md`.
 `SETUP_KILLSWITCH=false` in particular is a leftover from the iptables era and
 describes the opposite of current behaviour: the kill switch is mandatory.
