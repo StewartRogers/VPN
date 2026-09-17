@@ -160,13 +160,24 @@ class TestCleanupSource:
         assert not folder.exists()
         assert any(r["status"] == "deleted" for r in results)
 
-    def test_keeps_folder_holding_unrecognised_files(self, tmp_path):
+    def test_keeps_folder_holding_an_unmoved_video(self, tmp_path):
         folder = self._release(tmp_path)
         (folder / "Keep.This.mkv").write_bytes(b"real")
         organizer.cleanup_source(str(folder), str(tmp_path))
-        assert folder.exists(), "a folder with real content must survive"
+        assert folder.exists(), "a folder with a real, unmoved video must survive"
         assert (folder / "Keep.This.mkv").exists()
         assert not (folder / "release.nfo").exists(), "junk should still go"
+
+    def test_deletes_non_video_leftovers_even_off_the_junk_list(self, tmp_path):
+        """A movie's release folder commonly ships a subtitle alongside the
+        video. The move step only moves the video, so the subtitle is always
+        left behind — it must not block clearing the folder the way a real,
+        unmoved video does."""
+        folder = self._release(tmp_path)
+        (folder / "Some.Movie.2024.srt").write_bytes(b"subtitle")
+        results = organizer.cleanup_source(str(folder), str(tmp_path))
+        assert not folder.exists()
+        assert any(r["message"] == "leftover file" for r in results)
 
     def test_refuses_to_clean_the_source_root_itself(self, tmp_path):
         results = organizer.cleanup_source(str(tmp_path), str(tmp_path))

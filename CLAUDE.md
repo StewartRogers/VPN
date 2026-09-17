@@ -417,9 +417,10 @@ guards address it directly. Keep all three; each one alone is insufficient:
    library. Guards 1 and 2 do not help: they keep destination files from being
    *scanned and moved*, not a parent folder from being *cleaned*.
 
-The thing being protected: `cleanup_source()` treats `.nfo`, `.jpg` and `.txt`
-as junk, so walking a destination strips a media library of its artwork and
-sidecars.
+The thing being protected: `cleanup_source()` deletes every non-video leftover
+unconditionally (subtitles, `.nfo`, `.jpg`, whatever else a release folder
+ships with), so walking a destination strips a media library of its artwork
+and sidecars.
 
 The move job reports `done_bytes`/`total_bytes` **and** `current_bytes`/
 `current_total`/`done_files`/`total_files`, because the UI draws two bars. On a
@@ -470,7 +471,14 @@ output folder and the cleanup then deleted the folder it came from. Anything
 the scan returns must never be classified as junk.
 
 `cleanup_source()` never touches the source root itself and refuses any path
-outside it. A folder holding unrecognised files is kept, not forced.
+outside it. Within a source folder, every non-video leftover is deleted
+unconditionally once at least one video has moved out of it — a movie's
+release folder ships with sidecars (subtitles, `.nfo`, artwork) the move step
+never touches, and leaving those behind made Delete look broken for exactly
+the folder layout Movies commonly use. The one thing kept, never forced, is a
+video file (matching `_VIDEO_EXTS`) that is not itself junk-named: a duplicate
+the move step skipped, a copy that errored, or an extra the scan never picked
+up is real, unmoved content, and cleanup refuses to delete it on faith.
 
 `_jobs` is module-level and the copy runs on a daemon thread that goes on
 calling `_save_jobs()` after the test that started it returns.

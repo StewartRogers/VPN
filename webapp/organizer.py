@@ -172,10 +172,10 @@ def organize_files(source_dir: str, operations: list) -> list:
 
 # ---------------------------------------------------------------- output moves
 
-# Leftovers the delete step is allowed to remove so a source folder can be
-# cleared. Everything here is matched case-insensitively. Keep this list
-# explicit — it is the difference between clearing a release folder and
-# destroying something that was not backed up.
+# Named leftovers, matched case-insensitively. cleanup_source() deletes every
+# non-video file regardless of this list — it exists so scan_directory() can
+# skip sample junk before it is ever scanned as a real video, and so cleanup's
+# result messages can label a deleted file "junk" vs. just "leftover".
 _JUNK_EXTS = {
     ".nfo", ".sfv", ".md5", ".txt", ".url", ".diz",   # metadata sidecars
     ".torrent", ".pad", ".exe",                        # torrent/scene admin
@@ -267,15 +267,23 @@ def _within(path: str, roots: list) -> bool:
 
 
 def cleanup_source(folder: str, source_root: str, exclude_roots=None) -> list:
-    """Remove junk leftovers in `folder`, then the folder itself if it empties.
+    """Remove every leftover in `folder`, then the folder itself if it empties.
+
+    `folder` only gets here once at least one video was already moved out of
+    it, so anything left behind — subtitles, `.nfo`, artwork, samples — is a
+    release-folder sidecar the move step never touches, and is deleted
+    unconditionally. The one thing never deleted on faith is a video file
+    (matching `_VIDEO_EXTS`) that is not itself junk-named: a duplicate the
+    move step skipped, a copy that errored, or an extra the scan never picked
+    up is real, unmoved content, so the folder is kept rather than forced.
 
     Only ever descends inside `source_root`, and never removes source_root
     itself. Nothing at or below `exclude_roots` (the move's destination roots)
-    is ever touched: a destination may legitimately sit inside the source tree,
-    and this step treats .nfo/.jpg/.txt as junk, so walking one strips a filed
-    media library of its artwork and sidecars. The caller cannot enforce this
-    on its own — it only sees the *source* folder of each moved file, which can
-    be an ancestor of a destination rather than inside one.
+    is ever touched: a destination may legitimately sit inside the source
+    tree, and walking one would strip a filed media library of its artwork
+    and sidecars. The caller cannot enforce this on its own — it only sees the
+    *source* folder of each moved file, which can be an ancestor of a
+    destination rather than inside one.
 
     Returns a list of {path, status, message} describing what happened.
     """
@@ -297,14 +305,17 @@ def cleanup_source(folder: str, source_root: str, exclude_roots=None) -> list:
             continue
         for fname in files:
             fpath = os.path.join(root, fname)
-            if is_junk_file(fpath):
-                try:
-                    os.unlink(fpath)
-                    results.append({"path": os.path.relpath(fpath, source_root),
-                                    "status": "deleted", "message": "junk file"})
-                except OSError as exc:
-                    results.append({"path": os.path.relpath(fpath, source_root),
-                                    "status": "error", "message": str(exc)})
+            _, ext = os.path.splitext(fname)
+            if ext.lower() in _VIDEO_EXTS and not is_junk_file(fpath):
+                continue  # a real, unmoved video — never delete on faith
+            try:
+                os.unlink(fpath)
+                results.append({"path": os.path.relpath(fpath, source_root),
+                                "status": "deleted",
+                                "message": "junk file" if is_junk_file(fpath) else "leftover file"})
+            except OSError as exc:
+                results.append({"path": os.path.relpath(fpath, source_root),
+                                "status": "error", "message": str(exc)})
         for dname in dirs:
             dpath = os.path.join(root, dname)
             if _within(os.path.realpath(dpath), excluded):
