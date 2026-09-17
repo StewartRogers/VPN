@@ -133,6 +133,13 @@ is a leak:
    step that cannot be confirmed **halts the sequence** with the kill switch
    left up and a CRITICAL log; it never proceeds on faith. `stop_all()` also
    `join()`s the monitor thread rather than just setting the stop event.
+   Once `stop_vpn()` confirms every step, `stop_all()` runs one `ping
+   google.com` as a plain post-teardown sanity check — ordinary internet
+   access at that point, not a tunnel or leak check — and logs only that it
+   ran and whether it passed or failed, not the raw ping output, before
+   logging the "Stop All complete" line. A failed or halted teardown skips
+   the ping entirely; there is nothing to sanity-check if the kill switch
+   never came down.
 
    That confirmation is only as good as `is_qbittorrent_running()`, which now
    fails in the **opposite direction to the tunnel probes** and must keep doing

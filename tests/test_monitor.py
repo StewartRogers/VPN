@@ -629,8 +629,36 @@ class TestStopAll:
         m = make_monitor()
         m.is_qbittorrent_running = MagicMock(return_value=False)
         m.stop_vpn = MagicMock()
+        m._ping_test = MagicMock()
         m.stop_all()
         assert m._stop_event.is_set()
+
+    def test_stop_all_runs_ping_test_before_the_completion_log(self):
+        """The ping test is a plain post-teardown sanity check, not a leak
+        check — it must run, and its result must be logged, before the
+        completion line so the operator sees the test before the summary."""
+        m = make_monitor()
+        m.is_qbittorrent_running = MagicMock(return_value=False)
+        m.stop_vpn = MagicMock(return_value=True)
+        with patch("subprocess.run", return_value=_proc(0, text_stdout="1 packets transmitted, 1 received")):
+            m.stop_all()
+        messages = [entry.split("] ", 2)[-1] for _, entry in m._logs]
+        assert any("Running connectivity test" in msg for msg in messages)
+        assert not any("packets transmitted" in msg for msg in messages), \
+            "raw ping output must not be logged"
+        assert any("Ping test passed" in msg for msg in messages)
+        ping_idx = next(i for i, msg in enumerate(messages) if "Ping test passed" in msg)
+        complete_idx = next(i for i, msg in enumerate(messages) if "Stop All complete" in msg)
+        assert ping_idx < complete_idx
+
+    def test_stop_all_reports_a_failed_ping(self):
+        m = make_monitor()
+        m.is_qbittorrent_running = MagicMock(return_value=False)
+        m.stop_vpn = MagicMock(return_value=True)
+        with patch("subprocess.run", return_value=_proc(1, text_stdout="Name or service not known")):
+            m.stop_all()
+        messages = [entry.split("] ", 2)[-1] for _, entry in m._logs]
+        assert any("Ping test failed" in msg for msg in messages)
 
     def test_stop_vpn_calls_teardown_killswitch(self):
         m = make_monitor()

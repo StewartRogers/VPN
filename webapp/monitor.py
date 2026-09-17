@@ -1320,7 +1320,30 @@ class VPNMonitor:
         self.log("Monitor stopped")
 
         # Steps 3 and 4: OpenVPN, then restore. stop_vpn() gates them the same way.
-        return self.stop_vpn()
+        ok = self.stop_vpn()
+        if ok:
+            self._ping_test()
+            self.log("Stop All complete — qBittorrent, monitor and OpenVPN "
+                      "stopped; kill switch, IPv6 and DNS restored.")
+        return ok
+
+    def _ping_test(self):
+        """Ping google.com once, as a plain-network sanity check after
+        teardown — the kill switch is down by this point, so this is
+        ordinary internet access, not a tunnel or leak check."""
+        self.log("Running connectivity test: ping google.com ...")
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "-W", "5", "google.com"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except Exception as exc:
+            self.log(f"Ping test error — {exc}", level="WARNING")
+            return
+        if result.returncode == 0:
+            self.log("Ping test passed — network reachable")
+        else:
+            self.log("Ping test failed — network unreachable", level="WARNING")
 
     # ------------------------------------------------------- VPN reconnect
 
