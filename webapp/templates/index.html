@@ -525,9 +525,12 @@
     const qbtUp   = s.qbittorrent;
 
     const rules = {
-      // Start VPN: only when the VPN is not already up and not mid-attempt.
+      // Start VPN: only when the VPN is not already up and not mid-attempt,
+      // and never under a live client — applying the kill switch resets UFW,
+      // which briefly disables it.
       'btn-vpn-start':  busy  ? 'VPN is still starting'
                       : vpnUp ? 'VPN is already running'
+                      : qbtUp ? 'Stop qBittorrent first'
                               : null,
       // Stop VPN: everything above it must be down first.
       'btn-vpn-stop':   busy  ? 'VPN is still starting'

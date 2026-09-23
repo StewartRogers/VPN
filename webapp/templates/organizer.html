@@ -802,7 +802,11 @@
 
     const r = await fetch('/api/files/move', {
       method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ source_dir: _sourceDir, destinations, operations: ops }),
+      // `protect` lists every configured folder, not just the ones this job
+      // uses: step 4 deletes whole source folders and must never reach into
+      // the other library.
+      body: JSON.stringify({ source_dir: _sourceDir, destinations, operations: ops,
+                             protect: Object.values(paths).filter(Boolean) }),
     });
     if (r.status === 401) { showTokenModal(); btn.disabled = false; return; }
     const data = await r.json();
@@ -922,6 +926,13 @@
 
   // ----------------------------------------------------------------- step 4
   async function cleanupSources() {
+    // Step 4 removes each source folder a file moved out of, and everything
+    // still in it, including any video that did not move. That cannot be
+    // undone, so it is never a single click.
+    if (!confirm('Delete every source folder a file was moved out of, and ' +
+                 'EVERYTHING still in it — subtitles, artwork, other files, and ' +
+                 'any video that did not move?\n\nThis cannot be undone. ' +
+                 'Movies/TV folders are never touched.')) return;
     const btn = document.getElementById('btn-delete');
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
@@ -935,7 +946,7 @@
       const del = data.results.filter(x => x.status === 'deleted');
       const kept = data.results.filter(x => x.status === 'kept');
       document.getElementById('move-label').textContent =
-        `Deleted ${del.length} item(s)` + (kept.length ? `; kept ${kept.length} folder(s) with unrecognised files` : '');
+        `Deleted ${del.length} item(s)` + (kept.length ? `; kept ${kept.length} folder(s) that hold a Movies/TV folder or could not be removed` : '');
     } finally {
       btn.textContent = '4. Delete sources';
     }

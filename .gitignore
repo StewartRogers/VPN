@@ -18,6 +18,8 @@ vpn_logs/
 # Local settings. Machine-specific (paths, mounts) — copy from
 # vpn_config.conf.example, which stays tracked as the template.
 vpn_config.conf
+# webapp/monitor.py's atomic rewrite of it; can hold QBT_WEBUI_PASS.
+.vpn_config.*
 
 # qBittorrent runtime state (not a template — regenerated at runtime)
 qBittorrent-data.conf

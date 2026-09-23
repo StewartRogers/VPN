@@ -76,8 +76,14 @@ reset_ufw() {
 #
 # PID-based process stopping
 #
+#
+# Pass "term-only" as $2 to send SIGTERM and leave the wait and any SIGKILL to
+# the caller. qBittorrent needs it: it rewrites qBittorrent.conf on exit, and a
+# SIGKILL one second in truncated that write (the only copy of every WebUI
+# setting). confirm_qbittorrent_stopped() owns its QBT_STOP_GRACE wait.
 stop_service_by_pid() {
     local service=$1
+    local mode=${2:-}
     local pid_file="$PID_DIR/${service}.pid"
 
     if [ -f "$pid_file" ]; then
@@ -86,9 +92,11 @@ stop_service_by_pid() {
             echo "  Stopping $service (PID: $pid)"
             log_message "INFO" "Stopping $service (PID: $pid)"
             kill $pid 2>/dev/null
-            sleep 1
-            if kill -0 $pid 2>/dev/null; then
-                kill -9 $pid 2>/dev/null
+            if [ "$mode" != "term-only" ]; then
+                sleep 1
+                if kill -0 $pid 2>/dev/null; then
+                    kill -9 $pid 2>/dev/null
+                fi
             fi
             rm "$pid_file"
         else
@@ -151,7 +159,7 @@ shutdown_services() {
     echo ""
 
     echo "  [ qBittorrent ]"
-    stop_service_by_pid "qbittorrent"
+    stop_service_by_pid "qbittorrent" term-only
     if ! confirm_qbittorrent_stopped; then
         echo ""
         echo "  CRITICAL: qBittorrent is STILL RUNNING after SIGKILL."

@@ -172,10 +172,10 @@ def organize_files(source_dir: str, operations: list) -> list:
 
 # ---------------------------------------------------------------- output moves
 
-# Named leftovers, matched case-insensitively. cleanup_source() deletes every
-# non-video file regardless of this list — it exists so scan_directory() can
+# Named leftovers, matched case-insensitively. cleanup_source() deletes the
+# whole folder regardless of this list — it exists so scan_directory() can
 # skip sample junk before it is ever scanned as a real video, and so cleanup's
-# result messages can label a deleted file "junk" vs. just "leftover".
+# result messages can label a deleted file "junk" vs. just "file".
 _JUNK_EXTS = {
     ".nfo", ".sfv", ".md5", ".txt", ".url", ".diz",   # metadata sidecars
     ".torrent", ".pad", ".exe",                        # torrent/scene admin
@@ -267,23 +267,27 @@ def _within(path: str, roots: list) -> bool:
 
 
 def cleanup_source(folder: str, source_root: str, exclude_roots=None) -> list:
-    """Remove every leftover in `folder`, then the folder itself if it empties.
+    """Delete `folder` and everything in it.
 
-    `folder` only gets here once at least one video was already moved out of
-    it, so anything left behind — subtitles, `.nfo`, artwork, samples — is a
-    release-folder sidecar the move step never touches, and is deleted
-    unconditionally. The one thing never deleted on faith is a video file
-    (matching `_VIDEO_EXTS`) that is not itself junk-named: a duplicate the
-    move step skipped, a copy that errored, or an extra the scan never picked
-    up is real, unmoved content, so the folder is kept rather than forced.
+    `folder` only gets here once at least one video was confirmed moved out of
+    it, and at that point the operator wants the whole source folder gone —
+    subtitles, `.nfo`, artwork, samples, and anything else still in it,
+    including a video that did not move. That last part is a deliberate
+    choice (2026-09-23): an unmoved video here is lost, so the web UI asks for
+    confirmation before calling this.
 
-    Only ever descends inside `source_root`, and never removes source_root
-    itself. Nothing at or below `exclude_roots` (the move's destination roots)
-    is ever touched: a destination may legitimately sit inside the source
-    tree, and walking one would strip a filed media library of its artwork
-    and sidecars. The caller cannot enforce this on its own — it only sees the
-    *source* folder of each moved file, which can be an ancestor of a
-    destination rather than inside one.
+    Content decides nothing. Three structural guards do, and they hold
+    whatever the folder contains:
+
+    - Only ever descends inside `source_root`, and never removes source_root
+      itself.
+    - Nothing at or below `exclude_roots` (every Movies/TV folder the operator
+      has configured) is ever touched. A destination may legitimately sit
+      inside the source tree, and the caller cannot enforce this on its own —
+      it only sees the *source* folder of each moved file, which can be an
+      ancestor of a destination rather than inside one. A folder holding a
+      destination is emptied around it and kept.
+    - Symlinks are removed, never followed: a linked folder's target survives.
 
     Returns a list of {path, status, message} describing what happened.
     """
@@ -300,51 +304,52 @@ def cleanup_source(folder: str, source_root: str, exclude_roots=None) -> list:
     if not os.path.isdir(folder):
         return results
 
+    def _rel(p):
+        return os.path.relpath(p, source_root)
+
+    # followlinks=False (the default): a symlinked directory is listed in
+    # `dirs` but never entered, and is unlinked below like a file.
     for root, dirs, files in os.walk(folder, topdown=False):
         if _within(os.path.realpath(root), excluded):
             continue
         for fname in files:
             fpath = os.path.join(root, fname)
-            _, ext = os.path.splitext(fname)
-            if ext.lower() in _VIDEO_EXTS and not is_junk_file(fpath):
-                continue  # a real, unmoved video — never delete on faith
             try:
                 os.unlink(fpath)
-                results.append({"path": os.path.relpath(fpath, source_root),
-                                "status": "deleted",
-                                "message": "junk file" if is_junk_file(fpath) else "leftover file"})
+                results.append({"path": _rel(fpath), "status": "deleted",
+                                "message": "junk file" if is_junk_file(fpath) else "file"})
             except OSError as exc:
-                results.append({"path": os.path.relpath(fpath, source_root),
-                                "status": "error", "message": str(exc)})
+                results.append({"path": _rel(fpath), "status": "error",
+                                "message": str(exc)})
         for dname in dirs:
             dpath = os.path.join(root, dname)
-            if _within(os.path.realpath(dpath), excluded):
-                continue
             try:
-                if is_junk_dir(dpath) and not os.listdir(dpath):
-                    os.rmdir(dpath)
-                    results.append({"path": os.path.relpath(dpath, source_root),
-                                    "status": "deleted", "message": "junk folder"})
-                elif not os.listdir(dpath):
-                    os.rmdir(dpath)
-                    results.append({"path": os.path.relpath(dpath, source_root),
-                                    "status": "deleted", "message": "empty folder"})
-            except OSError:
-                pass
+                if os.path.islink(dpath):
+                    os.unlink(dpath)
+                    results.append({"path": _rel(dpath), "status": "deleted",
+                                    "message": "link"})
+                    continue
+                if _within(os.path.realpath(dpath), excluded) or os.listdir(dpath):
+                    continue  # a destination, or holds one — reported below
+                os.rmdir(dpath)
+                results.append({"path": _rel(dpath), "status": "deleted",
+                                "message": "folder"})
+            except OSError as exc:
+                results.append({"path": _rel(dpath), "status": "error",
+                                "message": str(exc)})
 
     try:
         if not os.listdir(folder):
             os.rmdir(folder)
-            results.append({"path": os.path.relpath(folder, source_root),
-                            "status": "deleted", "message": "source folder"})
+            results.append({"path": _rel(folder), "status": "deleted",
+                            "message": "source folder"})
         else:
-            remaining = len(os.listdir(folder))
-            results.append({"path": os.path.relpath(folder, source_root),
-                            "status": "kept",
-                            "message": f"{remaining} unrecognised item(s) left"})
+            results.append({"path": _rel(folder), "status": "kept",
+                            "message": "holds a destination folder, or an item "
+                                       "that could not be deleted"})
     except OSError as exc:
-        results.append({"path": os.path.relpath(folder, source_root),
-                        "status": "error", "message": str(exc)})
+        results.append({"path": _rel(folder), "status": "error",
+                        "message": str(exc)})
     return results
 
 

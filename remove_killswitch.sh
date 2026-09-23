@@ -44,9 +44,12 @@ echo ""
 if pgrep -f "qbittorrent-nox" > /dev/null; then
     echo "Stopping qbittorrent-nox before reopening outbound traffic..."
     sudo pkill -f "qbittorrent-nox"
-    for _ in $(seq 1 10); do
+    # QBT_STOP_GRACE (30s), not 5s: qBittorrent rewrites qBittorrent.conf on
+    # exit and a 5s SIGKILL truncated it on 2026-08-14. The kill switch is
+    # still up here, so the wait costs nothing.
+    for _ in $(seq 1 "${QBT_STOP_GRACE:-30}"); do
         pgrep -f "qbittorrent-nox" > /dev/null || break
-        sleep 0.5
+        sleep 1
     done
     if pgrep -f "qbittorrent-nox" > /dev/null; then
         sudo pkill -9 -f "qbittorrent-nox"
@@ -73,6 +76,13 @@ fi
 echo ""
 
 # --- 2. Firewall ---
+# Re-check at the last moment: a client relaunched since step 1 would make
+# ufw_base.sh refuse, and the fallback below would then disable UFW outright.
+if pgrep -f "qbittorrent-nox" > /dev/null; then
+    echo "CRITICAL: qbittorrent-nox is running again - the kill switch stays ACTIVE."
+    echo "Stop it, then run this script again."
+    exit 1
+fi
 if [ "$FORCE_DISABLE" = true ]; then
     echo "Disabling UFW entirely (--disable)..."
     if sudo ufw --force disable; then

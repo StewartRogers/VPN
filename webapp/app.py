@@ -12,7 +12,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from flask import Flask, Response, jsonify, render_template, request
 
-from monitor import VPNMonitor, detect_external_ip, read_config_value
+from monitor import VPNMonitor, detect_external_ip, has_control_chars, read_config_value
 import organizer as organizer_mod
 from organizer import scan_directory, organize_files
 
@@ -184,6 +184,12 @@ def _ordering_violation(step):
             return "VPN is still starting"
         if monitor.check_openvpn_process():
             return "VPN is already running"
+        # Starting the VPN reapplies the kill switch, and `ufw --force reset`
+        # disables UFW until it is re-enabled: a live client would egress on
+        # the ISP link in that window. Reachable after a fail-stop that halted
+        # with the client still up, or after /api/configure stopped the monitor.
+        if monitor.is_qbittorrent_running():
+            return "Stop qBittorrent before starting the VPN"
     elif step == "vpn_stop":
         if monitor.is_qbittorrent_running():
             return "Stop qBittorrent before stopping the VPN"
@@ -308,6 +314,13 @@ def configure():
     if err:
         return err
     global monitor
+    # Configuring replaces the monitor, stopping the running one — and a
+    # stopped monitor under a live client leaves torrents on a tunnel nothing
+    # is watching. Same rule as stopping the monitor directly.
+    if monitor:
+        bad = _ordering_violation("monitor_stop")
+        if bad:
+            return jsonify({"error": bad}), 409
     data = request.get_json(force=True)
     home_ip = (data.get("home_ip") or "").strip()
     if not home_ip:
@@ -332,6 +345,11 @@ def configure():
         return jsonify({"error": "Invalid interval value"}), 400
 
     save_path = (data.get("save_path") or "").strip()
+    # Persisted into vpn_config.conf, which the shell scripts source (one of
+    # them as root). write_config_value() quotes it; a control character is
+    # refused here so the operator gets a 400, not a silent non-save.
+    if has_control_chars(save_path):
+        return jsonify({"error": "Save path contains a control character"}), 400
     if save_path:
         save_path = os.path.expanduser(save_path)
         try:
@@ -538,6 +556,19 @@ def files_move():
     if not dests:
         return jsonify({"error": "At least one destination folder is required"}), 400
 
+    # Every Movies/TV folder the operator has configured, used by this job or
+    # not. The delete step removes whole source folders, and `destinations`
+    # only carries the labels some row is tagged with — so a movies-only job
+    # would otherwise leave the TV library unprotected when a cleaned folder
+    # is an ancestor of it. Only ever used as an exclusion, so a bogus entry
+    # can make cleanup do less, never more.
+    protect = data.get("protect") or []
+    if not isinstance(protect, list):
+        return jsonify({"error": "protect must be a list"}), 400
+    protected = sorted(set(dests.values()) | {
+        os.path.realpath(p.strip()) for p in protect
+        if isinstance(p, str) and p.strip()})
+
     def _plan(op):
         """Resolve one operation to (src, dst, error)."""
         rel = op.get("original", "")
@@ -573,7 +604,7 @@ def files_move():
            "done_files": 0, "total_files": len(operations),
            "current": None, "current_bytes": 0, "current_total": 0,
            "results": [], "source_dir": source_dir,
-           "destinations": dests,
+           "destinations": dests, "protected": protected,
            "started": time.time(), "finished": None}
     with _jobs_lock:
         _jobs[job_id] = job
@@ -686,9 +717,13 @@ def files_cleanup():
 
     source_dir = job["source_dir"]
     # Destinations may legitimately sit inside the source tree, and the delete
-    # step treats .nfo/.jpg/.txt as junk — so a destination must never be
-    # walked, whatever the results list says.
-    dest_roots = [os.path.realpath(p) for p in (job.get("destinations") or {}).values()]
+    # step removes whole folders — so no configured destination may ever be
+    # walked, whatever the results list says. `protected` covers every folder
+    # the operator configured; jobs recorded before it existed fall back to
+    # the ones the job used.
+    dest_roots = sorted({os.path.realpath(p) for p in
+                         list((job.get("destinations") or {}).values())
+                         + list(job.get("protected") or [])})
 
     def _in_destination(path):
         return any(path == root or path.startswith(root + os.sep) for root in dest_roots)

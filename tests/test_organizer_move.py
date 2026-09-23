@@ -160,24 +160,32 @@ class TestCleanupSource:
         assert not folder.exists()
         assert any(r["status"] == "deleted" for r in results)
 
-    def test_keeps_folder_holding_an_unmoved_video(self, tmp_path):
+    def test_deletes_everything_including_an_unmoved_video(self, tmp_path):
+        """Chosen 2026-09-23: once a video has moved out, the whole source
+        folder goes — an unmoved video, an unscanned type, a half-finished
+        download and anything else with it. The UI confirms first."""
         folder = self._release(tmp_path)
-        (folder / "Keep.This.mkv").write_bytes(b"real")
-        organizer.cleanup_source(str(folder), str(tmp_path))
-        assert folder.exists(), "a folder with a real, unmoved video must survive"
-        assert (folder / "Keep.This.mkv").exists()
-        assert not (folder / "release.nfo").exists(), "junk should still go"
-
-    def test_deletes_non_video_leftovers_even_off_the_junk_list(self, tmp_path):
-        """A movie's release folder commonly ships a subtitle alongside the
-        video. The move step only moves the video, so the subtitle is always
-        left behind — it must not block clearing the folder the way a real,
-        unmoved video does."""
-        folder = self._release(tmp_path)
-        (folder / "Some.Movie.2024.srt").write_bytes(b"subtitle")
+        for name in ("Keep.This.mkv", "Extra.ts", "Next.mkv.!qB", "notes.pdf",
+                     "Some.Movie.2024.srt"):
+            (folder / name).write_bytes(b"x")
+        (folder / "Subs" / "Deep").mkdir(parents=True)
+        (folder / "Subs" / "Deep" / "English.srt").write_bytes(b"s")
         results = organizer.cleanup_source(str(folder), str(tmp_path))
         assert not folder.exists()
-        assert any(r["message"] == "leftover file" for r in results)
+        assert tmp_path.exists()
+        assert not any(r["status"] == "error" for r in results)
+
+    def test_symlinks_are_removed_not_followed(self, tmp_path):
+        src = tmp_path / "src"
+        folder = self._release(src)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "precious.mkv").write_bytes(b"p")
+        (folder / "linked_dir").symlink_to(outside, target_is_directory=True)
+        (folder / "linked_file.mkv").symlink_to(outside / "precious.mkv")
+        organizer.cleanup_source(str(folder), str(src))
+        assert not folder.exists()
+        assert (outside / "precious.mkv").read_bytes() == b"p"
 
     def test_refuses_to_clean_the_source_root_itself(self, tmp_path):
         results = organizer.cleanup_source(str(tmp_path), str(tmp_path))
@@ -483,6 +491,37 @@ class TestPerFileDestinations:
         job["results"].append({"original": "Movies/Film.2024.mkv", "status": "moved"})
         client.post("/api/files/cleanup", json={"job_id": job_id})
         assert art.exists(), "cleanup deleted artwork inside the destination"
+
+    def test_cleanup_protects_a_configured_destination_the_job_did_not_use(
+            self, client, tmp_path):
+        """A movies-only job must still never reach into the TV library, even
+        when the folder being cleaned is an ancestor of it."""
+        src = tmp_path / "src"
+        lib = src / "Library"
+        tv_show = lib / "TV" / "Show"
+        tv_show.mkdir(parents=True)
+        (tv_show / "episode.nfo").write_bytes(b"keep")
+        (lib / "Film.2024.mkv").write_bytes(b"v" * 10)
+        movies = tmp_path / "Movies"
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(movies)},
+            "protect": [str(movies), str(lib / "TV")],
+            "operations": [{"original": "Library/Film.2024.mkv", "dest": "movies"}]})
+        job_id = r.get_json()["job_id"]
+        _wait(client, job_id)
+        client.post("/api/files/cleanup", json={"job_id": job_id})
+        assert (tv_show / "episode.nfo").exists(), "cleanup entered the TV library"
+        assert (movies / "Film.2024.mkv").exists()
+
+    def test_protect_must_be_a_list(self, client, tmp_path):
+        src = _tree(tmp_path)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(tmp_path / "Movies")},
+            "protect": "/mnt",
+            "operations": [{"original": "Film.2024.mkv", "dest": "movies"}]})
+        assert r.status_code == 400
 
     def test_a_job_where_every_file_errored_is_not_complete(self, client, tmp_path):
         """"complete" is what unlocks the delete step, so it must mean something."""

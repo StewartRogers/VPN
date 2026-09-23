@@ -45,6 +45,7 @@ Exit status is 0 unless the file could not be written.
 import argparse
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -243,6 +244,21 @@ def apply_config(config=DEFAULT_CONFIG, template=DEFAULT_TEMPLATE,
     return status, warnings
 
 
+def parse_shell_value(raw):
+    """The value of a KEY=value line as bash's `source` sees it.
+
+    Quotes are removed, including the '\\'' escape both writers use
+    (startvpn.sh's persist_config_value and monitor.py's write_config_value),
+    and a trailing `# comment` is dropped. The old `.strip('"')` kept the
+    comment, so the README's own `QBT_SAVE_PATH="/mnt/x/"   # ...` line became
+    a save path with the comment in it. $VAR is not expanded.
+    """
+    try:
+        return " ".join(shlex.split(raw, comments=True))
+    except ValueError:  # unbalanced quote: fall back to the old behaviour
+        return raw.strip().strip('"').strip("'")
+
+
 def read_shell_config(key, default=""):
     """Read KEY="value" from ~/.vpn_config.conf or ./vpn_config.conf, in that order."""
     for path in (os.path.expanduser("~/.vpn_config.conf"),
@@ -254,7 +270,7 @@ def read_shell_config(key, default=""):
                 for line in f:
                     line = line.strip()
                     if line.startswith(f"{key}="):
-                        return line[len(key) + 1:].strip().strip('"').strip("'")
+                        return parse_shell_value(line[len(key) + 1:])
         except OSError:
             pass
         return default

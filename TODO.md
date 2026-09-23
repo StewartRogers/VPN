@@ -3,16 +3,101 @@
 Open items, known gaps, and things deliberately left alone. What is *already
 implemented* is described in `ENHANCEMENTS.md`, not here.
 
-> **Testing status of the `full-repo-review-2026-09-04` branch:** the Python
-> suite passes on the Pi (224 tests) and every shell script is `bash -n` clean.
-> The shell changes have had **no** end-to-end testing. This branch adds a
-> confirmation gate ahead of the firewall step in `stopvpn.sh`, `stop_web.sh`,
-> `remove_killswitch.sh` and `startvpn.sh`'s Ctrl+C handler, and makes
-> `ufw_killswitch.sh` / `ufw_base.sh` able to fail — so a teardown can now
-> legitimately **stop early and leave the kill switch up**, which is the
-> intended behaviour but will look like a hang if you are not expecting it.
-> Exercise all four teardown paths, plus a Ctrl+C during a live session, on real
-> hardware before trusting them in anger.
+> **Testing status of the `repo-maintenance-2026-09-23` branch:** the Python
+> suite passes on the Pi (246 tests) and every shell script is `bash -n` clean.
+> None of the shell or firewall changes have been exercised on hardware. Before
+> trusting them, check on the Pi:
+>
+> - `sudo ufw status numbered` after Start VPN: the five `DENY IN on tun0`
+>   rules sit **above** the matching `ALLOW` rules, SSH/dashboard/WebUI still
+>   work from the LAN, and there is no `ALLOW IN on tun0` any more.
+> - With qBittorrent running, `sudo bash ufw_base.sh` exits 1 and leaves UFW
+>   as it was; Start VPN in the web UI is disabled and returns 409.
+> - `./startvpn.sh` still connects (`--script-security 0` is now on this
+>   path too).
+> - `./stopvpn.sh` and `./stop_web.sh` now give qBittorrent up to 30s before
+>   SIGKILL, so a busy client makes teardown visibly slower.
+> - Organizer Delete now asks for confirmation, then removes each moved-from
+>   folder **entirely**, unmoved videos included.
+>
+> The `full-repo-review-2026-09-04` teardown gates are still untested end to
+> end as well — exercise all four teardown paths and a Ctrl+C during a live
+> session.
+
+---
+
+## Open — from the 2026-09-23 full review
+
+Found by a four-agent review. The ones that could leak, run code as root, or
+destroy files were fixed on `repo-maintenance-2026-09-23` (see "Resolved").
+These were left for a later pass.
+
+**Teardown and firewall**
+
+- **`stop_web.sh` stops the web app third**, after qBittorrent and OpenVPN.
+  Flask can relaunch the client in between (a Force Reconnect in flight, a
+  stale tab). `ufw_base.sh`'s new refusal now catches that at the firewall
+  step, but stopping Flask first would avoid the halt entirely.
+- **OpenVPN stops are not confirmed** in `stopvpn.sh`, `stop_web.sh`,
+  `stop_vpn()` (an unanswered `pgrep` reads as "stopped") and the fail-stop
+  path; `remove_killswitch.sh` never stops OpenVPN at all. Not a leak —
+  qBittorrent is re-checked first — but at odds with invariant 0.
+- **`startvpn.sh` relaxes UFW with the OpenVPN daemon still running** on its
+  failure paths. An orphaned daemon that connects late makes the *next* run's
+  `capture_home_ip` record the VPN exit IP as the home IP.
+- **After a confirmed-inactive kill-switch trip the monitor never re-applies
+  it**, leaving UFW open, while this file says the monitor "exits with the kill
+  switch still active". Decide whether the urgent path should call
+  `setup_killswitch()` after the kill.
+- **`stop_vpn()` ignores whether restore worked.** `teardown_killswitch()`
+  returns nothing, so a failed `ufw_base.sh` still logs "Stop All complete —
+  kill switch, IPv6 and DNS restored".
+- **`ufw_killswitch.sh` whitelists an IPv6 address** when the VPN host has an
+  AAAA record (`getent hosts` returns it first). Fails closed — OpenVPN dials
+  IPv4 and is blocked — but misdiagnosed. Use `getent ahostsv4`.
+- **No `sudo -n`, and most privileged subprocess calls have no timeout**
+  (`webapp/monitor.py`). A missing sudoers entry blocks on a tty prompt
+  forever; a hung `setup_killswitch` leaves `vpn_starting` stuck True.
+- **`/api/reconnect` is allowed while the monitor runs**, which then fail-stops
+  mid-reconnect; the `start_qbittorrent()` call at the end of
+  `attempt_reconnect()` is effectively unreachable.
+- **`VPNMonitor` never validates `home_ip`.** The `HOME_IP` env path skips the
+  IPv4 check `/api/configure` does; a hostname never equals the exit IP, so
+  every leak check passes.
+
+**qBittorrent config**
+
+- **`qbt_config.py` sets `WebUI\LocalHostAuth=false` on every start**, and it
+  is not in `CLAUDE.md`'s list of owned keys. Any local process gets the API
+  without a password. Only the web path needs it.
+- **`qbt_config.py` prints "bound to tun0" even when the write failed**, and
+  both callers log it as applied.
+- **`--max-active` accepts 0 or negatives.**
+
+**Organizer**
+
+- **An exception in the move thread leaves the job `running` forever**
+  (source vanishes between plan and copy), locking step 4 until a restart.
+- **Cleanup can run on any stored `complete` job, however old** — now more
+  consequential, since it deletes whole folders. Consider a `cleaned` flag or
+  an age limit.
+- **A real film with "sample" in its title** (`Free.Sample.2019.mkv`) is
+  skipped by the scan.
+- **`files_move` resolves `source_dir` before checking it is non-empty**
+  (`realpath("") == cwd`), the same bug class as the destination fix.
+- **`request.get_json(force=True)`** — a `null`/list body returns 500, and in
+  no-token mode accepts `text/plain` cross-site POSTs.
+- **`organize.py` (CLI)** lacks the web path's scan exclusion and
+  "already in a destination" refusal, and its comments still refer to a
+  removed `subdir_kept`.
+
+**Docs**
+
+- `README.md`, `ENHANCEMENTS.md` and `TROUBLESHOOTING.md` still describe the
+  config-file tunnel bind and port 19806 as working; `CLAUDE.md` says neither
+  is applied. `INSTALL.md`'s sudoers template is effectively full root
+  (unrestricted `chmod`/`chown`/`mv`/`rm`/`sysctl`). `QBT_WEBUI_USER`/
+  `QBT_WEBUI_PASS` are undocumented as live keys.
 
 ---
 
@@ -36,7 +121,8 @@ branch stays testable. Nothing here is a leak on its own.
 - **SSRF deny-list omits CGNAT `100.64.0.0/10`** in the web path's
   `_fetch_pinned`. Use `if not ip.is_global` rather than the explicit list.
   (The bash path already uses `is_global`.)
-- **`.ovpn` URLs are logged verbatim** (`webapp/app.py:146`), including any
+- **`.ovpn` URLs are logged verbatim** (`download_ovpn()` in
+  `webapp/monitor.py`), including any
   credential in the query string, into the in-memory log the SSE stream serves.
   Log scheme + host + path only.
 - **`_fetch_pinned` captures `real_getaddrinfo` outside `_dns_pin_lock`**
@@ -73,8 +159,6 @@ branch stays testable. Nothing here is a leak on its own.
   `QBT_SAVE_PATH` silently becomes `""`.
 - **`vpn_active.py` fails open on an empty home IP** — `main("")` never matches
   and reports secure. Validate with `ipaddress.IPv4Address` and exit 2.
-- **`CLAUDE.md` documents `vpn_active.py`'s exit codes inverted** (the code
-  returns 0 for secure).
 
 **Shell**
 
@@ -155,7 +239,7 @@ than *differs from home* — a design decision, not a patch.
 
 ### 4. `/api/files/scan` takes an arbitrary `dir`
 
-`webapp/app.py:311`. Low risk on a LAN-only box with no inbound access, and it
+`files_scan()` in `webapp/app.py`. Low risk on a LAN-only box with no inbound access, and it
 only reads, but it is an unbounded filesystem read for anyone who can reach the
 port. Bounding it to a configured root would cost little.
 
@@ -170,9 +254,12 @@ asked not to change `startvpn.sh`.
 - **`checkip.sh:59-73` checks the kill switch only at startup.** A UFW reset
   from another terminal goes unnoticed while it carries on reporting healthy.
   The web monitor re-checks on the IP-check cadence.
-- **`checkip.sh:101` traps `EXIT` only.** An untrapped `SIGTERM` skips
-  `_exit_handler`, leaving qBittorrent running. Add `trap _exit_handler EXIT
-  TERM INT`.
+- **`checkip.sh` cannot trap SIGINT.** (Corrected 2026-09-23: the earlier
+  claim that SIGTERM skips the `EXIT` trap is wrong — bash runs it, tested.)
+  `startvpn.sh` launches it with `&` from a non-interactive shell, so it starts
+  with SIGINT/SIGQUIT ignored and `trap … INT` would do nothing. The Ctrl+C race
+  `startvpn.sh`'s `cleanup_on_error` guards against therefore only arises from
+  a qBittorrent left over from an earlier session.
 - **No `torrent_start_blocked()` equivalent.** Startup verification is inline
   and correct, but there is no single gate the way the web path has one.
 
@@ -180,7 +267,7 @@ asked not to change `startvpn.sh`.
 
 ## Open — housekeeping
 
-- **Dead config keys.** `vpn_config.conf` ships `SETUP_KILLSWITCH`,
+- **Dead config keys.** `vpn_config.conf.example` ships `SETUP_KILLSWITCH`,
   `PREVENT_DNS_LEAK`, `DISABLE_IPV6`, `BIND_TO_VPN_INTERFACE`,
   `DEFAULT_VIDEO_DEST`, and `VPN_HOME`, none of which are read by any script.
   `SETUP_KILLSWITCH=false` and its comment about an "iptables-based killswitch"
@@ -194,13 +281,11 @@ asked not to change `startvpn.sh`.
   as confusing. Move it to `examples/` or document it in place. It is now only
   used on a first run, when no `~/.config/qBittorrent/qBittorrent.conf` exists;
   after that `qbt_config.py` merges into the live file.
-- **Stale `checkvpn.log` in the repo root.** Nothing writes it anymore — session
-  logs go to `vpn_logs/`. Delete it and add it to `.gitignore`.
 - **No `shellcheck` in CI** on a mostly-bash project. No coverage at all for
   `checkip.sh`, `ufw_killswitch.sh`, or `ufw_base.sh`.
 - **No lockfile.** `pip freeze > requirements-lock.txt` for reproducible
   installs.
-- **No API documentation** for the 21 endpoints in `webapp/app.py`.
+- **No API documentation** for the 26 routes in `webapp/app.py`.
 
 ---
 
@@ -235,6 +320,39 @@ Still differing:
 ## Resolved on this branch
 
 Kept for context on why the code looks the way it does.
+
+### From the 2026-09-23 full review
+
+- **Applying the kill switch disabled UFW under a live client.**
+  `ufw --force reset` turns an enabled UFW off until `enable`, and Start VPN,
+  `/api/configure` → Start VPN, and any teardown racing a relaunched client
+  could all reach it with qBittorrent up. `ufw_base.sh` now refuses while the
+  client runs; Start VPN and `/api/configure` return 409 first. The 2026-09-04
+  entry below claiming "worst case is a brief outage" was only true after
+  `enable`.
+- **The web UI could run code as root through the save path.**
+  `write_config_value()` wrote `KEY="value"` into a file `ufw_killswitch.sh`
+  sources under sudo. Now single-quoted, control characters refused, written
+  atomically.
+- **The CLI ran `.ovpn` scripts as root.** `--script-security 0` was lost from
+  `startvpn.sh` in `cf7ca2d`.
+- **Every service port was reachable over the tunnel.** `allow in on tun0` plus
+  interface-less allows; now denied on tun0 for everything but the peer port.
+- **The bash teardowns SIGKILLed qBittorrent after 1s (`stopvpn.sh`) and 5s
+  (`stop_web.sh`, `remove_killswitch.sh`)** — the config-truncation bug from
+  2026-08-14. Now 30s.
+- **The Delete step's destination guard only covered destinations the job
+  used.** Now every configured folder is protected. At the operator's request
+  the step itself now deletes each moved-from folder entirely, behind a
+  confirmation.
+- **`vpn_active.py` honoured `HTTPS_PROXY`**, so the leak check could measure a
+  proxy's exit IP. The earlier `raise_for_status`/IPv4 fixes also gained the
+  regression tests they lacked.
+- **Config values with a trailing `# comment`** were read with the comment
+  included (the README's own example produced a junk save path). Readers now
+  share `qbt_config.parse_shell_value()`.
+- Doc drift: `vpn_active.py` exit codes in `CLAUDE.md`, test counts,
+  `checkvpn.log` (already gone), stale citations.
 
 ### From the 2026-09-04 full review
 

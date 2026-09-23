@@ -14,6 +14,19 @@ fi
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Never under a live torrent client. `ufw --force reset` below DISABLES an
+# enabled firewall first (ufw's frontend.reset() calls set_enabled(False)), and
+# nothing filters until `ufw --force enable` ~10 calls later - whatever
+# UFW_OUT_POLICY says. Setting the policy before enable (below) only closes the
+# window *after* enable; it does not close this one. Every caller is meant to
+# have stopped qBittorrent already; this is the one choke point that makes
+# that true, including for a client relaunched mid-teardown.
+if pgrep -f qbittorrent-nox > /dev/null 2>&1; then
+    echo "ERROR: qbittorrent-nox is running - refusing to reset UFW." >&2
+    echo "       A reset briefly disables the firewall; stop the client first." >&2
+    exit 1
+fi
+
 # Every "deny outgoing" guarantee this project makes assumes UFW's rules
 # apply to both IPv4 and IPv6. If /etc/default/ufw has IPV6=no, UFW never
 # touches IPv6 traffic at all, and none of the allow/deny rules below have
@@ -67,6 +80,18 @@ ufw --force reset                   > /dev/null 2>&1
 ufw default deny  incoming              > /dev/null 2>&1
 ufw default "$UFW_OUT_POLICY" outgoing  > /dev/null 2>&1
 
+# Nothing but the peer port is reachable from the VPN side. These denies come
+# first because ufw applies the first matching rule, and the service allows
+# below name no interface - so they matched tun0 too, and so did the blanket
+# `allow in on tun0` that used to close this list. Another client on the VPN
+# server's subnet, or a provider port-forward, could reach SSH, the qBittorrent
+# WebUI and the dashboard, whose / page shows the home IP. Replies to our own
+# connections are still accepted by ufw's conntrack rules; only unsolicited
+# inbound is refused. LAN access (eth0/wlan0) is unchanged.
+for svc_port in 22 443 32400 8080 "$PORT"; do
+    ufw deny in on tun0 to any port "$svc_port" proto tcp comment 'no services via VPN' > /dev/null 2>&1
+done
+
 ufw allow 22/tcp    comment 'SSH'              > /dev/null 2>&1
 ufw allow 443/tcp   comment 'HTTPS'            > /dev/null 2>&1
 ufw allow 32400/tcp comment 'Plex'             > /dev/null 2>&1
@@ -74,7 +99,6 @@ ufw allow 8080/tcp  comment 'Web UI'           > /dev/null 2>&1
 ufw allow "$PORT/tcp" comment 'VPN Web UI'     > /dev/null 2>&1
 ufw allow 19806/tcp comment 'qBittorrent peer' > /dev/null 2>&1
 ufw allow 19806/udp comment 'qBittorrent peer' > /dev/null 2>&1
-ufw allow in on tun0 comment 'VPN interface'   > /dev/null 2>&1
 
 ufw --force enable                  > /dev/null 2>&1
 

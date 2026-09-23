@@ -89,8 +89,35 @@ class TestGetExternalIp:
             ):
                 assert vpn_active.main("1.2.3.4") == 2  # error, not secure
 
+    def test_http_error_falls_through(self):
+        # Regression: a 502 error page must not become "the external IP".
+        bad = _response({"ip": "1.2.3.4"}, status=502)
+        bad.raise_for_status.side_effect = Exception("502 Bad Gateway")
+        good = _response({"ip": "5.6.7.8"})
+        with patch("requests.get", side_effect=[bad, good]):
+            assert vpn_active.get_external_ip() == "5.6.7.8"
+
+    def test_ipv6_reply_falls_through(self):
+        # Regression: an IPv6 address never equals an IPv4 home IP, so it
+        # would read as "secure" forever.
+        v6 = _response({"ip": "2001:db8::1"})
+        good = _response({"ip": "5.6.7.8"})
+        with patch("requests.get", side_effect=[v6, good]):
+            assert vpn_active.get_external_ip() == "5.6.7.8"
+
+    def test_non_ip_body_falls_through(self):
+        junk = _response({"ip": "<html>error</html>"})
+        with patch("requests.get", return_value=junk):
+            assert vpn_active.get_external_ip() is None
+
+    def test_ignores_proxy_environment(self):
+        resp = _response({"ip": "1.2.3.4"})
+        with patch("requests.get", return_value=resp) as get:
+            vpn_active.get_external_ip()
+        assert get.call_args.kwargs["proxies"] == {"http": None, "https": None}
+
     def test_strips_proxy_comma_from_httpbin(self):
-        # First two services (ipify, icanhazip) fail; httpbin returns comma-separated IPs
+        # First two services (ipify, api64.ipify) fail; httpbin returns comma-separated IPs
         httpbin_resp = _response({"origin": " 9.10.11.12 , 203.0.113.5"})
         with patch("requests.get", side_effect=[Exception("timeout"), Exception("timeout"), httpbin_resp]):
             assert vpn_active.get_external_ip() == "9.10.11.12"

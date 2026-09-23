@@ -39,9 +39,12 @@ echo "  [ qbittorrent-nox ]"
 if pgrep -f "qbittorrent-nox" > /dev/null; then
     echo "  Stopping qbittorrent-nox"
     sudo pkill -f "qbittorrent-nox"
-    for _ in $(seq 1 10); do
+    # QBT_STOP_GRACE (30s), not 5s: qBittorrent rewrites qBittorrent.conf on
+    # exit and a 5s SIGKILL truncated it on 2026-08-14. The kill switch is
+    # still up here, so the wait costs nothing.
+    for _ in $(seq 1 "${QBT_STOP_GRACE:-30}"); do
         pgrep -f "qbittorrent-nox" > /dev/null || break
-        sleep 0.5
+        sleep 1
     done
     if pgrep -f "qbittorrent-nox" > /dev/null; then
         echo "  Still running - sending SIGKILL"

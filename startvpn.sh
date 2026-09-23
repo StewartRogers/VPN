@@ -709,8 +709,13 @@ for ATTEMPT in $(seq 1 "$MAX_STARTUP_ATTEMPTS"); do
     echo "  Starting OpenVPN..."
     log_message "INFO" "Starting OpenVPN: $(basename "$XCONFIGFILE")"
     sudo rm -f "$XVPNLOGFILE"
+    # --script-security 0 comes AFTER --config so it overrides anything the
+    # .ovpn sets: an `up`/`route-up` line in a downloaded config would
+    # otherwise run as root. The web path has always passed it; this one lost
+    # it in cf7ca2d. See CLAUDE.md - it does not break the tunnel.
     sudo openvpn \
         --config "$XCONFIGFILE" \
+        --script-security 0 \
         --log "$XVPNLOGFILE" \
         --daemon \
         --ping 10 \

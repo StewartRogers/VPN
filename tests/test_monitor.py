@@ -601,6 +601,18 @@ class TestTeardownGating:
         assert m.attempt_reconnect() is False
         m._openvpn_start.assert_not_called()
 
+    def test_openvpn_start_refuses_under_a_live_client(self, tmp_path):
+        """Start VPN reapplies the kill switch; ufw --force reset disables UFW
+        until re-enabled, so it must never run under a live client."""
+        m = make_monitor()
+        ovpn = tmp_path / "a.ovpn"
+        ovpn.write_text("remote x 1194\n")
+        m.is_qbittorrent_running = MagicMock(return_value=True)
+        m.setup_killswitch = MagicMock()
+        with patch("glob.glob", return_value=[str(ovpn)]):
+            assert m._openvpn_start() is False
+        m.setup_killswitch.assert_not_called()
+
 
 # ------------------------------------------------------------------ stop_all ordering
 
@@ -1118,3 +1130,47 @@ class TestSsScopeParsing:
              patch.object(VPNMonitor, "_qbt_peer_port", return_value=19806), \
              patch("subprocess.run", return_value=r):
             assert m.verify_tunnel_bind() == "bound"
+
+
+# ------------------------------------------------------------------ config writer
+
+class TestWriteConfigValue:
+    """vpn_config.conf is `source`d by the shell scripts — ufw_killswitch.sh as
+    root — so whatever the web UI writes into it must stay a literal value."""
+
+    @pytest.fixture
+    def conf(self, tmp_path, monkeypatch):
+        path = tmp_path / "vpn_config.conf"
+        path.write_text('# VPN Configuration File\nLAN_CIDRS="10.0.0.0/8"\n')
+        monkeypatch.setattr(mon, "_shell_config_path", lambda: str(path))
+        return path
+
+    def _bash_value(self, path, key):
+        import subprocess as sp
+        out = sp.run(["bash", "-c", f'source "$1"; printf %s "${key}"', "_", str(path)],
+                     capture_output=True, text=True, timeout=5, cwd=path.parent)
+        return out.stdout
+
+    @pytest.mark.parametrize("value", [
+        "/mnt/$(touch pwned)", "/mnt/`touch pwned`", '/mnt/a"b', "/mnt/it's",
+        "/mnt/$HOME", "/mnt/My Drive", "/mnt/#x",
+    ])
+    def test_value_is_literal_to_bash_and_round_trips(self, conf, value):
+        assert mon.write_config_value("QBT_SAVE_PATH", value) is True
+        assert self._bash_value(conf, "QBT_SAVE_PATH") == value
+        assert not (conf.parent / "pwned").exists()
+        assert mon.read_config_value("QBT_SAVE_PATH") == value
+
+    def test_newline_cannot_inject_a_second_key(self, conf):
+        with pytest.raises(ValueError):
+            mon.write_config_value("QBT_SAVE_PATH", '/x"\nLAN_CIDRS="0.0.0.0/0')
+        assert self._bash_value(conf, "LAN_CIDRS") == "10.0.0.0/8"
+
+    def test_existing_key_is_replaced_not_duplicated(self, conf):
+        mon.write_config_value("LAN_CIDRS", "192.168.1.0/24")
+        assert conf.read_text().count("LAN_CIDRS=") == 1
+        assert self._bash_value(conf, "LAN_CIDRS") == "192.168.1.0/24"
+
+    def test_reader_drops_a_trailing_comment(self, conf):
+        conf.write_text('QBT_SAVE_PATH="/mnt/hdd/"   # blank = default\n')
+        assert mon.read_config_value("QBT_SAVE_PATH") == "/mnt/hdd/"

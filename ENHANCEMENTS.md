@@ -102,7 +102,7 @@ the same search order. See README.md for the live keys.
 
 ## Code quality
 
-- **Test suite** — 79 pytest unit tests covering the monitor loop, kill-switch
+- **Test suite** — 246 pytest unit tests covering the monitor loop, kill-switch
   state machine, IP leak detection, the SSRF guard, logging, the torrent start
   gate, and the qBittorrent config merge.
 - **CI** — GitHub Actions runs `flake8 --select=E9,F` and pytest on every push

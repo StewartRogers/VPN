@@ -145,7 +145,11 @@ def get_external_ip():
     ]
     for url, key in services:
         try:
-            response = requests.get(url, timeout=3)
+            # proxies=None: an exported HTTP(S)_PROXY would make this measure
+            # the proxy's exit IP rather than this box's, and the leak check
+            # would pass while traffic was on the ISP link.
+            response = requests.get(url, timeout=3,
+                                    proxies={"http": None, "https": None})
             response.raise_for_status()
             ip = response.json().get(key, "").split(",")[0].strip()
             if not ip:

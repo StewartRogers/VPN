@@ -34,6 +34,12 @@ class TestStartOrdering:
     def test_vpn_start_allowed_when_nothing_is_up(self):
         assert _violation("vpn_start") is None
 
+    def test_vpn_start_refused_while_qbittorrent_runs(self):
+        """Starting the VPN reapplies the kill switch, and `ufw --force reset`
+        disables UFW until it is re-enabled — a live client would egress on
+        the ISP link. Reachable after a fail-stop left the client up."""
+        assert _violation("vpn_start", qbt=True) is not None
+
 
 class TestStopOrdering:
     """'If I start qbit, then I cannot stop VPN or monitor.'"""
@@ -78,3 +84,12 @@ class TestEndpointsReturn409:
             r = client.post("/api/vpn/stop")
         assert r.status_code == 409
         assert "qBittorrent" in r.get_json()["error"]
+
+    def test_configure_returns_409_while_qbittorrent_runs(self, client):
+        """Configure replaces (and stops) the monitor — never under a live client."""
+        m = _monitor(vpn=True, monitor_running=True, qbt=True)
+        with patch.object(webapp, "monitor", m), \
+             patch.object(webapp, "_auth", return_value=None):
+            r = client.post("/api/configure", json={"home_ip": "203.0.113.7"})
+        assert r.status_code == 409
+        m.stop.assert_not_called()

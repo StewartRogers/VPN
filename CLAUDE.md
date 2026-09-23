@@ -33,9 +33,9 @@ difference is a bug you just found.
 ./checkip.sh <home_ip>         # monitor alone (requires kill switch already up)
 ./setup_venv.sh                # create ./.venv from webapp/requirements.txt
 
-.venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 1 = secure, 0 = not
+.venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 224 tests
+.venv/bin/python -m pytest -q     # 246 tests
 ```
 
 `start_web.sh` generates a `VPN_API_TOKEN` on first run and saves it to
@@ -171,7 +171,11 @@ is a leak:
      `qBittorrent.conf` — the only copy of everything set via its WebUI.
 
    Do not shorten the grace period to make teardown feel snappier. A 5s window
-   is what truncated the config write on 2026-08-14.
+   is what truncated the config write on 2026-08-14. The bash teardowns honour
+   it too: `stop_web.sh` and `remove_killswitch.sh` wait `QBT_STOP_GRACE`, and
+   `stopvpn.sh` sends SIGTERM only (`stop_service_by_pid ... term-only`) and
+   leaves the wait to `confirm_qbittorrent_stopped()`. Until 2026-09-23 they
+   SIGKILLed after 5s and 1s respectively.
 
 1. **The kill switch goes up before OpenVPN starts** and comes down only after
    qBittorrent and OpenVPN are confirmed stopped. Every teardown path
@@ -186,6 +190,16 @@ is a leak:
    `UFW_OUT_POLICY=deny` (passed by `ufw_killswitch.sh`) must never be applied
    after enabling — that was a fail-open window on every kill-switch
    application.
+
+   That does **not** make applying the kill switch fail-closed on its own.
+   `ufw --force reset`, the script's first step, *disables* an already-enabled
+   UFW (ufw's `frontend.reset()` calls `set_enabled(False)`), and nothing
+   filters until `enable` ~10 calls later. So `ufw_base.sh` **refuses to run
+   while `qbittorrent-nox` is alive** — the one choke point every kill-switch
+   application and every teardown goes through. Start VPN and
+   `/api/configure` refuse the same state earlier with a clearer message, and
+   `remove_killswitch.sh` re-checks before its `ufw disable` fallback so a
+   refusal never escalates into an unfirewalled host.
 3. **Torrenting starts only through `torrent_start_blocked()`**, which requires
    monitor running → OpenVPN alive → `tun0` up → default route on `tun0` → kill
    switch active → external IP resolves and differs from home IP.
@@ -251,6 +265,15 @@ and auto-corrects this on every run — it is the single line every kill-switch
 guarantee depends on. IPv6 is also disabled at the kernel level
 (`sysctl net.ipv6.conf.*.disable_ipv6=1`) before OpenVPN starts, as defense in
 depth.
+
+### Nothing is reachable over the tunnel but the peer port
+
+`ufw_base.sh` denies 22, 443, 32400, 8080 and the dashboard `PORT` inbound
+**on tun0**, ahead of the interface-less allows for the same ports (ufw uses
+the first match). It used to end with a blanket `allow in on tun0`, so another
+client on the VPN server's subnet could reach SSH, the qBittorrent WebUI and
+the dashboard, whose `/` page carries the home IP. LAN access is unchanged;
+replies to our own connections pass via ufw's conntrack rules.
 
 ## DNS placement
 
@@ -374,7 +397,13 @@ enforced in two places, and both are required:
 - `applyButtonState()` in `templates/index.html` disables the buttons and puts
   the reason in the tooltip.
 - `_ordering_violation()` in `app.py` returns 409 on `/api/vpn/start`,
-  `/api/vpn/stop`, `/api/stop` and `/api/reconnect`.
+  `/api/vpn/stop`, `/api/stop` and `/api/reconnect`. `/api/configure` runs the
+  `monitor_stop` check too, because it replaces (and so stops) the monitor.
+
+Start VPN is refused while qBittorrent is running, not only while OpenVPN is.
+It reapplies the kill switch, and see invariant 2 for why that must never
+happen under a live client — reachable after a fail-stop that halted with the
+client still up.
 
 The server check is the real control. A disabled button is a hint that curl, a
 stale tab, or a state change between 3s status polls all bypass.
@@ -424,10 +453,14 @@ guards address it directly. Keep all three; each one alone is insufficient:
    library. Guards 1 and 2 do not help: they keep destination files from being
    *scanned and moved*, not a parent folder from being *cleaned*.
 
-The thing being protected: `cleanup_source()` deletes every non-video leftover
-unconditionally (subtitles, `.nfo`, `.jpg`, whatever else a release folder
-ships with), so walking a destination strips a media library of its artwork
-and sidecars.
+The thing being protected: `cleanup_source()` deletes a source folder and
+*everything* in it, so walking a destination would delete the library itself.
+
+`dest_roots` is every Movies/TV folder the operator has **configured**, not
+just the ones the job used. The page sends both as `protect`, stored on the job
+as `protected`. `destinations` only carries labels some row is tagged with, so
+a movies-only job used to leave the TV library unprotected whenever a cleaned
+folder was an ancestor of it.
 
 The move job reports `done_bytes`/`total_bytes` **and** `current_bytes`/
 `current_total`/`done_files`/`total_files`, because the UI draws two bars. On a
@@ -471,21 +504,27 @@ or partial copy leaves the source intact. That verification is what makes the
 delete step safe, and it is why the delete step is gated on the move job
 reporting `state == "complete"` rather than on the request having returned.
 
-`scan_directory(skip_junk=True)` and `cleanup_source()` share one definition of
-junk (`_JUNK_EXTS`, `_JUNK_DIRS`, `_JUNK_NAME_RE`). They must agree: when the
-scan picked up `Sample/sample.mkv`, the move put a 30-second sample in the
-output folder and the cleanup then deleted the folder it came from. Anything
-the scan returns must never be classified as junk.
+`scan_directory(skip_junk=True)` is what the junk definition (`_JUNK_EXTS`,
+`_JUNK_DIRS`, `_JUNK_NAME_RE`) actually decides: when the scan picked up
+`Sample/sample.mkv`, the move put a 30-second sample in the output folder.
+Anything the scan returns must never be classified as junk.
+`cleanup_source()` now uses it only to label what it deleted.
 
 `cleanup_source()` never touches the source root itself and refuses any path
-outside it. Within a source folder, every non-video leftover is deleted
-unconditionally once at least one video has moved out of it — a movie's
-release folder ships with sidecars (subtitles, `.nfo`, artwork) the move step
-never touches, and leaving those behind made Delete look broken for exactly
-the folder layout Movies commonly use. The one thing kept, never forced, is a
-video file (matching `_VIDEO_EXTS`) that is not itself junk-named: a duplicate
-the move step skipped, a copy that errored, or an extra the scan never picked
-up is real, unmoved content, and cleanup refuses to delete it on faith.
+outside it. Within that, **once a video has moved out of a folder, the whole
+folder goes** — subtitles, `.nfo`, artwork, unrelated files, and any video
+still in it, including one whose copy errored, a type the scan does not know
+(`.ts`, `.iso`), or a half-finished `.!qB` download. That is the operator's
+explicit choice (2026-09-23), made knowing an unmoved video there is lost. Do
+not reintroduce content-based keeps without asking. What stays is structural
+only: the source root, destinations (guard 3), and symlink targets — links are
+unlinked, never followed. Because it is this destructive, the page asks for
+confirmation before calling `/api/files/cleanup`.
+
+Note what "folder" means: the parent directory of each moved file. For a
+torrent saved in its own release folder that is the release folder; for a file
+sitting in a shared `Downloads/` subfolder of the source, it is all of
+`Downloads/`.
 
 `_jobs` is module-level and the copy runs on a daemon thread that goes on
 calling `_save_jobs()` after the test that started it returns.
@@ -502,7 +541,19 @@ app user can read — the user chose that over an allowlist. It is still behind
 
 ## Notes for changes
 
-- `--script-security 0` is intentional. Commit `4c165a2` claimed it breaks the
+- **`vpn_config.conf` is `source`d — by `ufw_killswitch.sh` as root.** Every
+  writer must single-quote with `'\''` escaping: `persist_config_value` in
+  `startvpn.sh`, and `write_config_value()` in `webapp/monitor.py`, which also
+  refuses control characters. The Python writer used `KEY="value"` until
+  2026-09-23, so a web-UI save path of `$(cmd)` ran as root, and one with `"`
+  plus a newline could append `LAN_CIDRS="0.0.0.0/0"`. Readers go through
+  `qbt_config.parse_shell_value()` (shlex), which undoes that quoting and drops
+  a trailing `# comment`.
+
+- `--script-security 0` is intentional, on **both** paths, and must come
+  after `--config` so it overrides the `.ovpn`. `startvpn.sh` lost it in
+  `cf7ca2d` and ran any `up` line in a downloaded config as root until
+  2026-09-23. Commit `4c165a2` claimed it breaks the
   tunnel; the confirmed-working tree still contains it, so the theory does not
   hold. On OpenVPN 2.6 interface setup goes through netlink, not external `ip`
   calls. Keep it.

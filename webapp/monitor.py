@@ -6,6 +6,7 @@ import re
 import socket
 import subprocess
 import sys
+import shutil
 import tempfile
 import threading
 import time
@@ -107,17 +108,34 @@ def read_config_value(key, default=""):
             for line in f:
                 line = line.strip()
                 if line.startswith(f"{key}="):
-                    return line[len(key) + 1:].strip().strip('"').strip("'")
+                    return qbt_config.parse_shell_value(line[len(key) + 1:])
     except Exception:
         pass
     return default
 
 
+def has_control_chars(value):
+    """True if `value` holds a newline or other control character."""
+    return any(ord(c) < 32 or ord(c) == 127 for c in value)
+
+
 def write_config_value(key, value):
-    """Update or append KEY="value" in the shell-style vpn_config.conf, so checkip.sh
-    picks up the same value the web UI just set."""
+    """Update or append KEY='value' in the shell-style vpn_config.conf, so checkip.sh
+    picks up the same value the web UI just set. Returns True once written.
+
+    The file is `source`d by the shell scripts — by ufw_killswitch.sh as root —
+    so the value is single-quoted with '\\'' escaping, exactly as
+    startvpn.sh's persist_config_value does it. It used to be written as
+    KEY="value": a save path of `$(cmd)` then ran as root on the next
+    kill-switch apply, and one containing `"` plus a newline could append any
+    key — LAN_CIDRS="0.0.0.0/0" included. Control characters are refused
+    outright; no legitimate path contains one.
+    """
+    if has_control_chars(value):
+        raise ValueError(f"{key} contains a control character")
     path = _shell_config_path() or os.path.join(_VPN_DIR, "vpn_config.conf")
-    line = f'{key}="{value}"\n'
+    quoted = "'" + value.replace("'", "'\\''") + "'"
+    line = f"{key}={quoted}\n"
     try:
         lines = open(path).readlines() if os.path.isfile(path) else ["# VPN Configuration File\n"]
         for i, existing in enumerate(lines):
@@ -126,10 +144,20 @@ def write_config_value(key, value):
                 break
         else:
             lines.append(line)
-        with open(path, "w") as f:
-            f.writelines(lines)
-    except Exception:
-        pass
+        # Temp file + os.replace, so a failed write never truncates the config.
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".vpn_config.")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.writelines(lines)
+            if os.path.isfile(path):
+                shutil.copymode(path, tmp)
+            os.replace(tmp, path)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+        return True
+    except OSError:
+        return False
 
 
 def detect_external_ip():
@@ -500,7 +528,9 @@ class VPNMonitor:
     def set_save_path(self, path):
         """Update and persist the qBittorrent download location for future starts."""
         self.save_path = path
-        write_config_value("QBT_SAVE_PATH", path)
+        if not write_config_value("QBT_SAVE_PATH", path):
+            self.log("Could not save the download location to vpn_config.conf "
+                     "— the CLI path will not see it", level="WARNING")
 
     def torrent_start_blocked(self):
         """Return a reason string if it is not safe to start the torrent client,
@@ -917,6 +947,14 @@ class VPNMonitor:
         self.log(f"Using config: {config}")
 
         # 2. Apply / update kill switch BEFORE stopping existing OpenVPN.
+        # Never under a live client: setup_killswitch() runs ufw_base.sh, whose
+        # `ufw --force reset` disables UFW until it is re-enabled. ufw_base.sh
+        # refuses too; checking here says why instead of "kill switch failed".
+        if self.is_qbittorrent_running():
+            self.log("Refusing to apply the kill switch while qBittorrent is "
+                     "running — resetting UFW briefly disables it. Stop "
+                     "qBittorrent first.", level="ERROR")
+            return False
         try:
             self.setup_killswitch()
         except RuntimeError as e:
