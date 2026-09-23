@@ -66,6 +66,13 @@ These were left for a later pass.
   IPv4 check `/api/configure` does; a hostname never equals the exit IP, so
   every leak check passes.
 
+- **OpenVPN does not verify the server certificate.** Seen on hardware
+  2026-09-23: `WARNING: No server certificate verification method has been
+  enabled` with a VPN Gate `.ovpn`. Nothing checks that the server's
+  certificate belongs to a server, which leaves room for a man-in-the-middle.
+  Add `--remote-cert-tls server` after `--config` in both `startvpn.sh` and
+  `_openvpn_start()`, then test that VPN Gate servers still connect.
+
 **qBittorrent config**
 
 - **`qbt_config.py` sets `WebUI\LocalHostAuth=false` on every start**, and it
