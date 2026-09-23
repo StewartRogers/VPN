@@ -514,6 +514,46 @@ class TestPerFileDestinations:
         assert (tv_show / "episode.nfo").exists(), "cleanup entered the TV library"
         assert (movies / "Film.2024.mkv").exists()
 
+    def test_cleanup_removes_the_release_folder_a_rename_flattened(self, client, tmp_path):
+        """Rename (step 2) flattens a subfolder file to the source root by
+        default, so at move time its folder is the root, which cleanup never
+        touches. The release folder it came from must still be deleted."""
+        src = tmp_path / "src"
+        rel = src / "Test.Movie.2024"
+        rel.mkdir(parents=True)
+        (rel / "Test.Movie.2024.1080p.mkv").write_bytes(b"v" * 10)
+        (rel / "Test.Movie.2024.srt").write_bytes(b"s")
+        movies = tmp_path / "Movies"
+        r = client.post("/api/files/organize", json={
+            "source_dir": str(src),
+            "files": [{"original": "Test.Movie.2024/Test.Movie.2024.1080p.mkv",
+                       "rename_to": "Test.Movie.2024.mkv", "flatten": True}]})
+        assert r.get_json()["results"][0]["renamed_to"] == "Test.Movie.2024.mkv"
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(movies)},
+            "operations": [{"original": "Test.Movie.2024.mkv", "dest": "movies"}]})
+        job_id = r.get_json()["job_id"]
+        _wait(client, job_id)
+        client.post("/api/files/cleanup", json={"job_id": job_id})
+        assert (movies / "Test.Movie.2024.mkv").exists()
+        assert not rel.exists(), "the flattened file's release folder survived Delete"
+        assert src.exists()
+
+    def test_client_cannot_name_a_folder_for_deletion(self, client, tmp_path):
+        """from_folder is recorded server-side only; one sent in an operation
+        is ignored."""
+        src = _tree(tmp_path)
+        r = client.post("/api/files/move", json={
+            "source_dir": str(src),
+            "destinations": {"movies": str(tmp_path / "Movies")},
+            "operations": [{"original": "Film.2024.mkv", "dest": "movies",
+                            "from_folder": "Show"}]})
+        job_id = r.get_json()["job_id"]
+        _wait(client, job_id)
+        client.post("/api/files/cleanup", json={"job_id": job_id})
+        assert (src / "Show" / "Show.S01E01.mkv").exists()
+
     def test_protect_must_be_a_list(self, client, tmp_path):
         src = _tree(tmp_path)
         r = client.post("/api/files/move", json={

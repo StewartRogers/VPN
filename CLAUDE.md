@@ -518,13 +518,23 @@ still in it, including one whose copy errored, a type the scan does not know
 explicit choice (2026-09-23), made knowing an unmoved video there is lost. Do
 not reintroduce content-based keeps without asking. What stays is structural
 only: the source root, destinations (guard 3), and symlink targets — links are
-unlinked, never followed. Because it is this destructive, the page asks for
-confirmation before calling `/api/files/cleanup`.
+unlinked, never followed. There is deliberately **no confirmation prompt**:
+the operator tried one and asked for it to go.
 
-Note what "folder" means: the parent directory of each moved file. For a
-torrent saved in its own release folder that is the release folder; for a file
-sitting in a shared `Downloads/` subfolder of the source, it is all of
-`Downloads/`.
+Note what "folder" means: the parent directory of each moved file **before
+step 2 touched it**. The rename step flattens a subfolder file to the source
+root by default (the "flatten" box is pre-ticked), so at move time its parent
+is the root, which cleanup never removes. `files_organize()` therefore records
+each flattened file's release folder in `_flattened` (server-side, in memory),
+the move job copies it onto the result as `from_folder`, and
+`files_cleanup()` cleans that folder too. Until 2026-09-23 it did not, so with
+the default settings Delete never removed a single release folder. The client
+cannot supply `from_folder`; after a web-app restart a flattened file's
+folder is simply left alone.
+
+For a torrent saved in its own release folder that folder is the release
+folder; for a file sitting in a shared `Downloads/` subfolder of the source,
+it is all of `Downloads/`.
 
 `_jobs` is module-level and the copy runs on a daemon thread that goes on
 calling `_save_jobs()` after the test that started it returns.

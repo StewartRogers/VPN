@@ -17,8 +17,9 @@ implemented* is described in `ENHANCEMENTS.md`, not here.
 >   path too).
 > - `./stopvpn.sh` and `./stop_web.sh` now give qBittorrent up to 30s before
 >   SIGKILL, so a busy client makes teardown visibly slower.
-> - Organizer Delete now asks for confirmation, then removes each moved-from
->   folder **entirely**, unmoved videos included.
+> - Organizer Delete removes each moved-from folder **entirely**, unmoved
+>   videos included, with no prompt - including the release folder a Rename
+>   flattened the video out of.
 >
 > The `full-repo-review-2026-09-04` teardown gates are still untested end to
 > end as well — exercise all four teardown paths and a Ctrl+C during a live
@@ -343,8 +344,11 @@ Kept for context on why the code looks the way it does.
   2026-08-14. Now 30s.
 - **The Delete step's destination guard only covered destinations the job
   used.** Now every configured folder is protected. At the operator's request
-  the step itself now deletes each moved-from folder entirely, behind a
-  confirmation.
+  the step itself now deletes each moved-from folder entirely, with no prompt.
+- **Delete never removed a release folder with default settings.** Rename
+  flattens subfolder files to the source root, so the move saw the root as the
+  file's folder and cleanup skipped it. The release folder is now recorded at
+  rename time and cleaned. Found on hardware, 2026-09-23.
 - **`vpn_active.py` honoured `HTTPS_PROXY`**, so the leak check could measure a
   proxy's exit IP. The earlier `raise_for_status`/IPv4 fixes also gained the
   regression tests they lacked.

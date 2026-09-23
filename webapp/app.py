@@ -411,9 +411,27 @@ def files_organize():
         return jsonify({"error": "Directory not found"}), 404
     try:
         results = organize_files(source_dir, operations)
-        return jsonify({"results": results})
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
+    # Remember the release folder of every file the rename step flattened out
+    # of one, so the delete step can clean it. Without this the move sees the
+    # file at the source root, cleanup skips the root, and the emptied release
+    # folder (subtitles, .nfo, artwork) is never deleted - which, with
+    # "flatten" ticked by default for subfolder files, was every movie.
+    # Recorded server-side from what actually moved on disk; the client never
+    # gets to name a folder for deletion.
+    with _flattened_lock:
+        for res in results:
+            if res.get("status") != "ok" or not res.get("renamed_to"):
+                continue
+            old = os.path.realpath(os.path.join(source_dir, res["original"]))
+            new = os.path.realpath(os.path.join(source_dir, res["renamed_to"]))
+            if os.path.dirname(old) != os.path.dirname(new):
+                # A second rename keeps the first origin.
+                _flattened[new] = _flattened.pop(old, os.path.dirname(old))
+            elif old in _flattened:
+                _flattened[new] = _flattened.pop(old)
+    return jsonify({"results": results})
 
 
 # ------------------------------------------------- organizer: browse / move / clean
@@ -428,6 +446,12 @@ def files_organize():
 # and step 4 could never unlock.
 _jobs = {}
 _jobs_lock = threading.Lock()
+
+# Flattened file (realpath) -> the release folder the rename step moved it out
+# of. In memory only: after a restart a flattened file's folder is simply not
+# cleaned, which is the safe direction.
+_flattened = {}
+_flattened_lock = threading.Lock()
 
 _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _JOBS_FILE = (os.environ.get("ORGANIZER_JOBS_FILE", "").strip()
@@ -635,6 +659,11 @@ def files_move():
             job["done_files"] += 1
             res["original"] = rel
             res["destination"] = dst
+            if res.get("status") == "moved":
+                with _flattened_lock:
+                    origin = _flattened.pop(src, None)
+                if origin:
+                    res["from_folder"] = os.path.relpath(origin, source_dir)
             job["results"].append(res)
             _save_jobs()
         job["current"] = None
@@ -730,9 +759,14 @@ def files_cleanup():
 
     folders, results = [], []
     for r in moved:
-        d = os.path.dirname(os.path.realpath(os.path.join(source_dir, r["original"])))
-        if d != source_dir and d not in folders and not _in_destination(d):
-            folders.append(d)
+        # The folder the file sat in when it moved, and - if the rename step
+        # had flattened it out to the root - the release folder it came from.
+        candidates = [os.path.dirname(os.path.realpath(os.path.join(source_dir, r["original"])))]
+        if r.get("from_folder"):
+            candidates.append(os.path.realpath(os.path.join(source_dir, r["from_folder"])))
+        for d in candidates:
+            if d != source_dir and d not in folders and not _in_destination(d):
+                folders.append(d)
     # dest_roots is passed down as well, and that is the guard that actually
     # holds: this loop only rejects a folder *inside* a destination, but a
     # source folder can just as easily be an *ancestor* of one (source

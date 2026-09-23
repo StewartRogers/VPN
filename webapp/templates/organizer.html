@@ -926,13 +926,6 @@
 
   // ----------------------------------------------------------------- step 4
   async function cleanupSources() {
-    // Step 4 removes each source folder a file moved out of, and everything
-    // still in it, including any video that did not move. That cannot be
-    // undone, so it is never a single click.
-    if (!confirm('Delete every source folder a file was moved out of, and ' +
-                 'EVERYTHING still in it — subtitles, artwork, other files, and ' +
-                 'any video that did not move?\n\nThis cannot be undone. ' +
-                 'Movies/TV folders are never touched.')) return;
     const btn = document.getElementById('btn-delete');
     btn.disabled = true; btn.textContent = 'Deleting…';
     try {
