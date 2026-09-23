@@ -4,26 +4,43 @@ Open items, known gaps, and things deliberately left alone. What is *already
 implemented* is described in `ENHANCEMENTS.md`, not here.
 
 > **Testing status of the `repo-maintenance-2026-09-23` branch:** the Python
-> suite passes on the Pi (246 tests) and every shell script is `bash -n` clean.
-> None of the shell or firewall changes have been exercised on hardware. Before
-> trusting them, check on the Pi:
+> suite passes on the Pi (248 tests) and every shell script is `bash -n` clean.
 >
-> - `sudo ufw status numbered` after Start VPN: the five `DENY IN on tun0`
->   rules sit **above** the matching `ALLOW` rules, SSH/dashboard/WebUI still
->   work from the LAN, and there is no `ALLOW IN on tun0` any more.
-> - With qBittorrent running, `sudo bash ufw_base.sh` exits 1 and leaves UFW
->   as it was; Start VPN in the web UI is disabled and returns 409.
-> - `./startvpn.sh` still connects (`--script-security 0` is now on this
->   path too).
-> - `./stopvpn.sh` and `./stop_web.sh` now give qBittorrent up to 30s before
->   SIGKILL, so a busy client makes teardown visibly slower.
-> - Organizer Delete removes each moved-from folder **entirely**, unmoved
->   videos included, with no prompt - including the release folder a Rename
->   flattened the video out of.
+> **Passed on hardware (RPI5, 2026-09-23):**
 >
-> The `full-repo-review-2026-09-04` teardown gates are still untested end to
-> end as well — exercise all four teardown paths and a Ctrl+C during a live
-> session.
+> - **Tunnel rules.** After Start VPN (web) and `./startvpn.sh` (CLI), the
+>   five `DENY IN on tun0` rules (plus IPv6 copies) sit above the matching
+>   `ALLOW` rules, there is no `ALLOW IN on tun0`, and SSH and the dashboard
+>   still work from the LAN.
+> - **Reset guard.** With qBittorrent running (torrents paused),
+>   `sudo env UFW_OUT_POLICY=deny bash ufw_base.sh` refused with exit 1; the
+>   rules, the deny-outgoing policy and the tunnel were unchanged. (Test it
+>   this way, never with the plain command: if the guard ever broke, the plain
+>   one would leave outgoing *allowed* under a live client.)
+> - **CLI connects** with `--script-security 0`.
+> - **`./stopvpn.sh` and `./stop_web.sh`** stopped qBittorrent → monitor →
+>   OpenVPN → firewall in order, qBittorrent exited on SIGTERM (no SIGKILL),
+>   and `qBittorrent.conf` was rewritten intact at shutdown both times.
+> - **Organizer Delete** with Rename's flatten ticked: the release folder and
+>   its subtitle were removed, the movie landed in Movies, and the unused TV
+>   folder was untouched. No prompt. (The first attempt found the flatten bug
+>   fixed in `b95fb26`.)
+>
+> **Still to do on hardware:**
+>
+> - **Stop All** in the web UI from a full session (VPN, monitor,
+>   qBittorrent up).
+> - **`./remove_killswitch.sh`** from a live session: stops qBittorrent first,
+>   then relaxes the firewall.
+> - **Ctrl+C** during `./startvpn.sh` while it is still connecting: cleans up,
+>   and relaxes the firewall only once nothing is left running.
+> - **qBittorrent WebUI login** still works after a stop (the saved config
+>   looked intact; a login confirms it). Also open the WebUI from another LAN
+>   machine to finish the "LAN access unchanged" check.
+>
+> The Start VPN "Stop qBittorrent first" refusal only appears with the VPN down
+> and qBittorrent up, which can't safely be set up by hand; the automated tests
+> cover it.
 
 ---
 
