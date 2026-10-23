@@ -35,7 +35,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 246 tests
+.venv/bin/python -m pytest -q     # 248 tests
 ```
 
 `start_web.sh` generates a `VPN_API_TOKEN` on first run and saves it to
