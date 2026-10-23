@@ -234,9 +234,26 @@ branch stays testable. Nothing here is a leak on its own.
   the least-privilege design is currently theatre. Deployment fix, not a code
   change.
 
-Clean, for the record: no secrets in the working tree or git history, and no
-known CVEs in the installed dependency set (Flask 3.1.3, Werkzeug 3.1.8,
-Jinja2 3.1.6, requests 2.34.2, urllib3 2.7.0).
+Clean, for the record: no secrets in the working tree or git history.
+
+Dependency audit 2026-10-23 (`pip-audit`): the 2026-09-23 claim of no known
+CVEs no longer held. Fixed by raising floors in `webapp/requirements.txt`:
+
+- certifi 2026.7.22 → 2026.10.19 (GHSA-6q48-6c7w-9gw2, critical). Trusted the
+  emSign root whose eMudhra intermediates had their keys stolen; reachable via
+  the `.ovpn` download in `webapp/monitor.py`, which decides the tunnel
+  endpoint. The bash path uses Debian's store, which lacks that root.
+- urllib3 2.7.0 → 2.8.0 (GHSA-vxq7-64xx-v4gw, GHSA-gh4c-6fx4-qh6g,
+  GHSA-8988-9cw3-xx77). The first two are reachable through the streamed
+  `.ovpn` fetch; the proxy one is not, since every call disables proxies.
+  2.8.0 needs Python 3.10, so the floor is skipped on 3.9 and **CI (3.9) still
+  installs 2.7.0** — moving CI off 3.9 is the remaining fix.
+- Werkzeug 3.1.8 → 3.1.9 (GHSA-g6x2-hccm-hh4m). Windows-only; taken for free.
+
+Still open, outside the repo: system `libbrotli1` 1.1.0 (CVE-2026-111497) is
+unfixed in Debian trixie. No script here passes `curl --compressed`, so curl
+never decodes Brotli; `apt upgrade` once Debian ships the fix. The Python
+`brotli` package is not installed, and should stay that way until ≥1.2.1.
 
 ---
 
