@@ -32,8 +32,8 @@ fi
 
 py_major=$(python3 -c "import sys; print(sys.version_info.major)")
 py_minor=$(python3 -c "import sys; print(sys.version_info.minor)")
-if [ "$py_major" -lt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -lt 9 ]; }; then
-    echo "ERROR: Python 3.9 or higher is required (found: $py_major.$py_minor)"
+if [ "$py_major" -lt 3 ] || { [ "$py_major" -eq 3 ] && [ "$py_minor" -lt 10 ]; }; then
+    echo "ERROR: Python 3.10 or higher is required (found: $py_major.$py_minor)"
     exit 1
 fi
 echo "  Python: $py_major.$py_minor"

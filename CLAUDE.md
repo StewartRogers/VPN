@@ -329,7 +329,7 @@ The web app keeps its log in memory and streams it over SSE.
 
 ## Dependencies
 
-`python3` (3.9+) and `python3-venv`; `openvpn`, `qbittorrent-nox`, `ufw`; and
+`python3` (3.10+) and `python3-venv`; `openvpn`, `qbittorrent-nox`, `ufw`; and
 `pgrep`, `ip`, `curl`, `ss`, `sudo`.
 
 `requests` and `flask` are **not** system packages — they live in `./.venv`,

@@ -223,11 +223,6 @@ branch stays testable. Nothing here is a leak on its own.
   `GITHUB_TOKEN` gets the repo default; actions pinned to floating tags
   (`@v4`, `@v5`) rather than SHAs; `pip install` unpinned; `organize.py` and
   `qbt_config.py` are tracked Python but absent from the flake8 file list.
-- **3.9 is claimed but no longer tested.** CI moved to 3.13 (matching the Pi)
-  on 2026-10-23, but `setup_venv.sh`, `start_web.sh`, README, INSTALL and
-  CLAUDE.md still say 3.9+. 3.9 is end-of-life and cannot install the patched
-  urllib3. Either raise the stated minimum to 3.10, or add 3.9 back as a CI
-  matrix entry.
 - **Repo files are group-writable** (umask 002). Combined with a `NOPASSWD`
   sudoers entry for `ufw_killswitch.sh`, any member of group `pi` could replace
   it. `chmod -R g-w` on the shell scripts closes it.
@@ -250,8 +245,8 @@ CVEs no longer held. Fixed by raising floors in `webapp/requirements.txt`:
 - urllib3 2.7.0 → 2.8.0 (GHSA-vxq7-64xx-v4gw, GHSA-gh4c-6fx4-qh6g,
   GHSA-8988-9cw3-xx77). The first two are reachable through the streamed
   `.ovpn` fetch; the proxy one is not, since every call disables proxies.
-  2.8.0 needs Python 3.10, so the floor carries a `python_version` marker and
-  a 3.9 install still gets 2.7.0. CI runs 3.13 and gets the fix.
+  2.8.0 needs Python 3.10, which is why the project minimum moved from 3.9
+  (end-of-life) to 3.10 and CI from 3.9 to 3.13.
 - Werkzeug 3.1.8 → 3.1.9 (GHSA-g6x2-hccm-hh4m). Windows-only; taken for free.
 
 Still open, outside the repo: system `libbrotli1` 1.1.0 (CVE-2026-111497) is

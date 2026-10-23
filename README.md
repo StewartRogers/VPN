@@ -201,7 +201,7 @@ The web app keeps its log in memory and streams it to the browser.
 ## Requirements
 
 Debian/Ubuntu (developed on Raspberry Pi OS), `openvpn`, `qbittorrent-nox`,
-`ufw`, `python3` (3.9+) and `python3-venv`, plus `curl`, `pgrep`, `ip`, and
+`ufw`, `python3` (3.10+) and `python3-venv`, plus `curl`, `pgrep`, `ip`, and
 `ss`. Python dependencies (`requests`, `flask`) install into a project venv via
 `./setup_venv.sh` — nothing is installed system-wide. The web app needs
 passwordless sudo for several operations — see [INSTALL.md](INSTALL.md).

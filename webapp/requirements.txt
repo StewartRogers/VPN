@@ -5,4 +5,4 @@ pytest>=8.0
 # Transitive, pinned here only to set security floors (audit 2026-10-23).
 certifi>=2026.10.19                        # GHSA-6q48-6c7w-9gw2
 werkzeug>=3.1.9                            # GHSA-g6x2-hccm-hh4m
-urllib3>=2.8.0; python_version >= "3.10"   # GHSA-vxq7-64xx-v4gw et al.; 2.8.0 needs 3.10+
+urllib3>=2.8.0                             # GHSA-vxq7-64xx-v4gw et al.

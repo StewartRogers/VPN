@@ -6,7 +6,7 @@
 - `sudo` access
 - An OpenVPN provider that issues `.ovpn` config files
 
-Packages: `openvpn`, `qbittorrent-nox`, `ufw`, `python3` (3.9 or newer),
+Packages: `openvpn`, `qbittorrent-nox`, `ufw`, `python3` (3.10 or newer),
 `python3-venv`, `curl`. The Python libraries (`flask`, `requests`) go into a
 project virtualenv, not into the system Python.
 
