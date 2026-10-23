@@ -221,7 +221,7 @@ branch stays testable. Nothing here is a leak on its own.
 
 - **CI (`.github/workflows/ci.yml`)**: no `permissions:` block, so
   `GITHUB_TOKEN` gets the repo default; actions pinned to floating tags
-  (`@v4`, `@v5`) rather than SHAs; `pip install` unpinned; `organize.py` and
+  (`@v7`) rather than SHAs; `pip install` unpinned; `organize.py` and
   `qbt_config.py` are tracked Python but absent from the flake8 file list.
 - **Repo files are group-writable** (umask 002). Combined with a `NOPASSWD`
   sudoers entry for `ufw_killswitch.sh`, any member of group `pi` could replace
