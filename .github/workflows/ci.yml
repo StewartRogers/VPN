@@ -31,3 +31,6 @@ jobs:
 
       - name: Test
         run: python -m pytest -v
+
+      - name: Audit dependencies for known vulnerabilities
+        run: pip-audit -r webapp/requirements.txt
