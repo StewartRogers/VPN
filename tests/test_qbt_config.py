@@ -146,9 +146,10 @@ def test_configured_max_active_reads_the_config_file(monkeypatch):
 # ----------------------------------------------------- local WebUI API access
 
 def test_localhost_auth_is_disabled(conf):
-    """The interface keys above do not actually bind anything on qBittorrent
-    4.2.5 — the real bind is applied over the WebUI API by the monitor, and
-    this is what lets it do that without storing a password."""
+    """The interface keys above are ignored by qBittorrent 4.2.5 (5.1.0
+    honours them) — the bind is applied and confirmed over the WebUI API by
+    the monitor, and this is what lets it do that without storing a
+    password."""
     apply(conf)
     assert keys(conf, "Preferences")["WebUI\\LocalHostAuth"] == "false"
 

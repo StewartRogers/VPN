@@ -350,13 +350,26 @@ Without the `ufw` and `bash` entries, `setup_killswitch()` fails,
 
 ### Binding qBittorrent to the tunnel
 
-**The config file cannot do this.** Verified directly on qBittorrent 4.2.5:
-values written to `Session\Interface`, `Session\InterfaceAddress` and
-`Session\Port` are *preserved in the file* but never applied. The client
-reports `current_network_interface = ''`, picks a random listen port, and
-listens on every address. This was silently true for the whole life of the
-project — the kill switch was the only layer actually working, and the UFW
-rules for the configured peer port never matched the port in use.
+**Whether the config file does this depends on the qBittorrent version.**
+
+- **4.2.5: it does not.** Values written to `Session\Interface`,
+  `Session\InterfaceAddress` and `Session\Port` are *preserved in the file* but
+  never applied. The client reports `current_network_interface = ''`, picks a
+  random listen port, and listens on every address. This was silently true for
+  a long stretch of the project — the kill switch was the only layer actually
+  working, and the UFW rules for the configured peer port never matched the
+  port in use.
+- **5.1.0 (Debian trixie's `5.1.0-2`, the version on the Pi now): it does.**
+  Re-checked 2026-11-06 with a throwaway `--profile` holding only
+  `Session\Interface=lo`, `Session\InterfaceAddress=127.0.0.1` and
+  `Session\Port=46991` (no torrents, DHT/PeX/LSD/UPnP off): the API reported
+  `lo` / `127.0.0.1` / `46991`, and `ss` showed the peer sockets on
+  `127.0.0.1%lo:46991` only — nothing on `0.0.0.0`. Tested with `lo`, not
+  `tun0`; the mechanism is the same.
+
+On 5.1.0 that means the CLI path (`checkip.sh`, which writes the keys via
+`qbt_config.py` but never calls the API) is bound too, which it never was on
+4.2.5. It still does not *verify* the bind the way the web path does.
 
 `apply_tunnel_bind()` in `webapp/monitor.py` sets it over the WebUI API
 (`/api/v2/app/setPreferences`) after startup, then **reads the preferences back
@@ -366,8 +379,11 @@ unauthenticated localhost path first (`WebUI\LocalHostAuth=false`) and falls
 back to `QBT_WEBUI_USER` / `QBT_WEBUI_PASS` from `vpn_config.conf`. If the bind
 cannot be applied and confirmed, qBittorrent is stopped.
 
-`qbt_config.py` still writes those keys in case a later qBittorrent honours
-them, but do not treat writing them as having bound anything.
+Keep `apply_tunnel_bind()` even though 5.1.0 honours the file. Its job is
+the read-back, not only the write: an older client, a package downgrade, or a
+config that qBittorrent rewrote on exit would otherwise go unnoticed, exactly
+as the 4.2.5 failure did. Writing the keys is still not the same as having
+confirmed the bind.
 
 ### Verifying the tunnel bind
 

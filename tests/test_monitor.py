@@ -1045,7 +1045,9 @@ class TestApplyTunnelBind:
     """qBittorrent 4.2.5 ignores Session\\Interface / InterfaceAddress / Port
     when they are written to qBittorrent.conf — verified directly: it keeps the
     keys in the file, reports an empty interface, picks a random listen port and
-    listens on every address. The bind has to go through the WebUI API."""
+    listens on every address. 5.1.0 honours them, but the bind is still applied
+    and confirmed over the WebUI API so a client that ignores the file is
+    caught."""
 
     def _monitor(self):
         m = make_monitor()

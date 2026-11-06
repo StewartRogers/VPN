@@ -671,13 +671,14 @@ class VPNMonitor:
     def apply_tunnel_bind(self):
         """Bind qBittorrent to tun0 through its WebUI API. Returns True on success.
 
-        This cannot be done through qBittorrent.conf. Verified on 4.2.5: values
-        written to Session\\Interface, Session\\InterfaceAddress and Session\\Port
-        are preserved in the file but never applied — the client reports an empty
-        interface, picks a random listen port, and listens on every address.
-        Setting the same three values over the API binds it to a single address
-        immediately. qbt_config.py still writes the keys in case a later
-        qBittorrent honours them, but this is what actually takes effect.
+        On qBittorrent 4.2.5 this cannot be done through qBittorrent.conf:
+        values written to Session\\Interface, Session\\InterfaceAddress and
+        Session\\Port are preserved in the file but never applied — the client
+        reports an empty interface, picks a random listen port, and listens on
+        every address. 5.1.0 does honour them (re-checked 2026-11-06). Setting
+        the same three values over the API binds it to a single address
+        immediately on both, and the read-back below is what confirms the bind
+        whichever version is installed.
         """
         tun0_ip = qbt_config.detect_tun0_ip()
         if not tun0_ip:
