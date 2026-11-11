@@ -99,6 +99,17 @@ once the tunnel verifies, and `checkip.sh` starts qBittorrent after its own
 startup verification. That flow is a single foreground session where the
 operator is watching the output, so the ordering is visible as it happens.
 
+## Auto-removing finished torrents (web path)
+
+With `QBT_AUTO_REMOVE=true`, the web app checks qBittorrent every
+`QBT_AUTO_REMOVE_INTERVAL` seconds (default 30, minimum 5) and removes every
+finished torrent, logging `Removed torrent (files kept): <name>` to the
+dashboard. The downloaded files are always left on disk — `deleteFiles=false`
+is hardcoded — and nothing seeds. Torrents that are moving or being rechecked
+are left for a later check. It is quiet while qBittorrent is off and warns
+once, not every cycle, if the WebUI cannot be reached. Files the organizer
+moves away no longer leave qBittorrent complaining about missing data.
+
 ## Configuration
 
 `~/.vpn_config.conf` takes precedence over `./vpn_config.conf`. Both paths use
@@ -106,9 +117,9 @@ the same search order. See README.md for the live keys.
 
 ## Code quality
 
-- **Test suite** — 248 pytest unit tests covering the monitor loop, kill-switch
+- **Test suite** — 337 pytest unit tests covering the monitor loop, kill-switch
   state machine, IP leak detection, the SSRF guard, logging, the torrent start
-  gate, and the qBittorrent config merge.
+  gate, the qBittorrent config merge, and finished-torrent removal.
 - **CI** — GitHub Actions runs `flake8 --select=E9,F` and pytest on every push
   and PR to `master`. No `shellcheck` yet, on a mostly-bash project — see
   `TODO.md`.

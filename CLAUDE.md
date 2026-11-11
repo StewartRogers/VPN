@@ -21,6 +21,7 @@ usually means checking the other.
 | Leak check | `vpn_active.py` | `VPNMonitor.get_external_ip()` |
 | Teardown | `stopvpn.sh` | `stop_web.sh` |
 | qBittorrent config | `qbt_config.py` | `qbt_config.py` |
+| Finished-torrent removal | — | `webapp/torrent_cleanup.py` |
 
 Known drift between them is tracked in `TODO.md` — read it before assuming a
 difference is a bug you just found.
@@ -35,7 +36,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 297 tests
+.venv/bin/python -m pytest -q     # 337 tests
 .venv/bin/pip-audit               # known-CVE scan of the venv (CI audits requirements.txt)
 ```
 
@@ -344,7 +345,8 @@ describes the opposite of current behaviour: the kill switch is mandatory.
 
 Live keys: `FAST_CHECK_INTERVAL`, `IP_CHECK_INTERVAL`, `MAX_STARTUP_ATTEMPTS`,
 `MAX_SESSIONS`, `VPN_CLIENT_HOME`, `VPN_LOG_FILE`, `PID_DIR`, `LOG_DIR`,
-`BACKUP_DIR`, `QBT_SAVE_PATH`, `QBT_MAX_ACTIVE_DOWNLOADS`, `LAN_CIDRS`.
+`BACKUP_DIR`, `QBT_SAVE_PATH`, `QBT_MAX_ACTIVE_DOWNLOADS`, `QBT_AUTO_REMOVE`,
+`QBT_AUTO_REMOVE_INTERVAL`, `LAN_CIDRS`.
 
 ## Logs
 
@@ -413,7 +415,30 @@ config that qBittorrent rewrote on exit would otherwise go unnoticed, exactly
 as the 4.2.5 failure did. Writing the keys is still not the same as having
 confirmed the bind.
 
-### Verifying the tunnel bind
+### Auto-removing finished torrents (web path only)
+
+`webapp/torrent_cleanup.py` runs one background thread, started once from
+`app.py`'s `__main__` block (never at import, so tests get no live poller).
+Every `QBT_AUTO_REMOVE_INTERVAL` seconds, when `QBT_AUTO_REMOVE` is true, it
+lists `filter=completed` torrents over the WebUI API and removes each with
+`deleteFiles=false`, one per call, logging `Removed torrent (files kept):
+<name>`. Both keys are re-read every cycle.
+
+- **`deleteFiles` is hardcoded `"false"`.** No setting may change it.
+- States `moving`, `checkingUP` and `checkingResumeData` are skipped for a
+  later cycle, and `progress < 1` is never removed whatever the filter says.
+- It goes through the module-level `qbt_api()` in `monitor.py` (lifted from
+  `VPNMonitor._qbt_api`, which is now a wrapper), because it must work while
+  `monitor` is `None`. It logs to the current monitor's dashboard log, or
+  stdout when none exists yet.
+- Silent while `qbittorrent-nox` is not running. When it is running but the
+  API fails, one WARNING after `OUTAGE_GRACE_CYCLES` (2) consecutive failures
+  — the WebUI is briefly unreachable after every launch — and one line on
+  recovery. A client stopping mid-outage clears it silently.
+- It touches nothing safety-relevant: localhost only, no tunnel, kill-switch
+  or `qBittorrent.conf` changes.
+
+
 
 `verify_tunnel_bind()` checks **only the BitTorrent peer port** (`Session\Port`,
 via `_qbt_peer_port()`). qBittorrent has two listeners and they have opposite

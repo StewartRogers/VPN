@@ -28,6 +28,12 @@ BIND_TO_VPN_INTERFACE=true
 QBT_SAVE_PATH=""
 # How many torrents may download at once. Turns qBittorrent's queueing system on.
 QBT_MAX_ACTIVE_DOWNLOADS=5
+# Web app only: remove torrents from qBittorrent as soon as they finish. The
+# downloaded files are always kept on disk; only the torrent entry goes, so
+# nothing seeds. Read fresh every cycle, so no restart is needed.
+QBT_AUTO_REMOVE=false
+# Seconds between checks (minimum 5).
+QBT_AUTO_REMOVE_INTERVAL=30
 
 # LAN ranges the kill switch allows out on eth0/wlan0, space-separated.
 # Default covers all of RFC1918 (10/8, 172.16/12, 192.168/16). Narrow this if

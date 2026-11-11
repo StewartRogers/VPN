@@ -181,6 +181,9 @@ BACKUP_DIR="$HOME/.vpn_backups"
 QBT_SAVE_PATH="/mnt/hdddisk/"   # blank = qBittorrent's own default
 QBT_MAX_ACTIVE_DOWNLOADS=5      # torrents downloading at once; unset = leave
                                 # qBittorrent's own queue settings alone
+QBT_AUTO_REMOVE=false           # web app: remove finished torrents from
+                                # qBittorrent (files always kept, no seeding)
+QBT_AUTO_REMOVE_INTERVAL=30     # seconds between checks, minimum 5
 
 # LAN ranges the kill switch allows out on the physical NIC.
 # Default is all of RFC1918; narrow it if you want.
@@ -215,7 +218,7 @@ The shell scripts use `./.venv` when it exists and fall back to the system
 ./.venv/bin/python -m pytest -q
 ```
 
-297 tests covering the monitor loop, the kill-switch state machine, leak
+337 tests covering the monitor loop, the kill-switch state machine, leak
 detection, the SSRF guard on `.ovpn` downloads, and the torrent start gate. CI
 runs `flake8 --select=E9,F` and pytest on every push and PR to `master`.
 

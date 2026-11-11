@@ -14,6 +14,7 @@ from flask import Flask, Response, jsonify, render_template, request
 
 from monitor import VPNMonitor, detect_external_ip, has_control_chars, read_config_value
 import organizer as organizer_mod
+from torrent_cleanup import TorrentCleaner
 from organizer import scan_directory, organize_files
 
 load_dotenv()
@@ -813,10 +814,27 @@ def files_cleanup():
 
 # ------------------------------------------------------------------ main
 
+def _cleanup_log(message, level=None):
+    """Log sink for the torrent cleaner: the dashboard log when a monitor
+    exists, stdout otherwise. Looks `monitor` up on every call because
+    /api/configure replaces it."""
+    current = monitor
+    if current is not None:
+        current.log(message, source="QBIT", level=level)
+    else:
+        tag = f" [{level}]" if level else ""
+        print(f"[QBIT]{tag} {message}", flush=True)
+
+
 if __name__ == "__main__":
     home_ip = os.environ.get("HOME_IP", "").strip()
     if home_ip:
         monitor = VPNMonitor(home_ip)
+
+    # Started here, once, rather than at import time: tests import this module
+    # and must not get a live poller. Single process (threaded=True, no
+    # workers), so this is the only instance.
+    TorrentCleaner(_cleanup_log).start()
 
     bind_host = os.environ.get("BIND_HOST", "0.0.0.0").strip()
     port = int(os.environ.get("PORT", "5000").strip())
