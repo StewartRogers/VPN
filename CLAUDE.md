@@ -438,7 +438,7 @@ lists `filter=completed` torrents over the WebUI API and removes each with
 - It touches nothing safety-relevant: localhost only, no tunnel, kill-switch
   or `qBittorrent.conf` changes.
 
-
+### Verifying the tunnel bind
 
 `verify_tunnel_bind()` checks **only the BitTorrent peer port** (`Session\Port`,
 via `_qbt_peer_port()`). qBittorrent has two listeners and they have opposite
