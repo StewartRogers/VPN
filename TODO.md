@@ -338,6 +338,80 @@ asked not to change `startvpn.sh`.
 
 ---
 
+## Planned — auto-remove finished torrents (web path)
+
+Planned 2026-11-11, not started. Goal: while `start_web.sh` is running, any
+torrent that reaches 100% is removed from qBittorrent **with its downloaded
+files left on disk**.
+
+### Design
+
+- **New `webapp/torrent_cleanup.py`** — one background thread started once from
+  `app.py`'s `__main__` block. The web app is a single Flask process
+  (`app.run(threaded=True)`), so a start-once guard is all the "only one
+  poller" protection needed; no gunicorn workers, no lock file.
+- **Each cycle:**
+  1. `GET /api/v2/torrents/info?filter=completed`.
+  2. Skip `state == "moving"` and `checkingUP` (completed but being rechecked).
+  3. `POST /api/v2/torrents/delete` with `deleteFiles=false`, **one torrent per
+     call**, so each log line names a torrent that was actually removed.
+  4. Log `Removed torrent (files kept): <name>` to the dashboard log.
+- **`deleteFiles` is hardcoded `false`.** No setting may change it.
+- **Plain `requests`, no `qbittorrent-api`.** Reuse `_qbt_api()`
+  (`webapp/monitor.py`), which already handles the localhost no-auth path
+  (`WebUI\LocalHostAuth=false`, which the live config has) and falls back to
+  `QBT_WEBUI_USER` / `QBT_WEBUI_PASS`. Lift it to module level (keep the method
+  as a thin wrapper), because the cleaner must work while `monitor` is `None`
+  — before a home IP has been configured.
+- **Host is always `127.0.0.1`**; the port comes from `WebUI\Port` in
+  `qBittorrent.conf` (default 8080), same as `_qbt_webui_port()`. No new host
+  or password settings.
+- **Quiet when qBittorrent is simply off.** It is off whenever the VPN is, so
+  a warning every 30s would flood the 500-line in-memory log. Skip silently
+  while `qbittorrent-nox` is not running; when it *is* running but the API or
+  login fails, warn once when the outage starts and log once on recovery.
+  Never raise out of the thread.
+- **Touches nothing safety-relevant:** localhost only, no tunnel, kill-switch
+  or `qBittorrent.conf` changes.
+- **Side benefit:** files the organizer moves no longer leave qBittorrent
+  complaining about missing data.
+
+### Settings (`vpn_config.conf`, read fresh every cycle)
+
+- `QBT_AUTO_REMOVE=true|false` — on in the live config, `false` in
+  `vpn_config.conf.example`.
+- `QBT_AUTO_REMOVE_INTERVAL=30` — seconds, clamped to a minimum of 5.
+
+Add both to CLAUDE.md's "Live keys" list.
+
+### Tests
+
+Completed torrents removed; `moving`/`checkingUP` skipped; every delete call
+carries `deleteFiles=false`; an outage logs one warning, not one per cycle;
+disabled means zero API calls; interval parsing and clamping.
+
+### Open questions (answer before building)
+
+1. **Seeding.** Removing at 100% means no seeding at all. Any private trackers
+   that need a ratio or seed time? Default: remove immediately.
+2. **Exemptions.** Skip torrents tagged `keep`? Default: no exemptions.
+
+Alternative considered: qBittorrent's own seeding limit (Options → BitTorrent
+→ "Remove torrent" at ratio 0). No code, but removals would not appear on the
+dashboard and nothing guarantees a `moving` torrent is left alone.
+
+### Path drift
+
+Web path only — `startvpn.sh` / `checkip.sh` get no equivalent. Add it to the
+drift list below once built.
+
+### When built
+
+Work on a branch; stop for hardware testing before anything reaches master.
+Include a safe single-torrent test: a small legal torrent (e.g. a Debian
+netinst ISO), interval set low, confirm the log line, the torrent gone from the
+WebUI, and the file still in `QBT_SAVE_PATH`.
+
 ## Path drift (item 10, partly closed)
 
 Closed: stop paths now match, IPv4 validation now matches, all three config
