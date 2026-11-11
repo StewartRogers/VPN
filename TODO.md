@@ -37,6 +37,14 @@ implemented* is described in `ENHANCEMENTS.md`, not here.
 > - **qBittorrent WebUI login** still works after a stop (the saved config
 >   looked intact; a login confirms it). Also open the WebUI from another LAN
 >   machine to finish the "LAN access unchanged" check.
+> - **Web start retry / Cancel & Reset** (2026-11-11 change; a normal start
+>   was confirmed, the failure paths were not). With a `.ovpn` whose server
+>   will not answer: each failed attempt shows "Resetting…" before the next;
+>   after the last one `sudo ufw status verbose` is back to the base state,
+>   `pgrep openvpn` finds nothing, and Start VPN is clickable. Cancel & Reset
+>   ~10s into an attempt stops within ~2s, resets, and a new `.ovpn` then
+>   downloads and starts. With no `.ovpn` present, Start VPN stops at once
+>   without retrying.
 >
 > The Start VPN "Stop qBittorrent first" refusal only appears with the VPN down
 > and qBittorrent up, which can't safely be set up by hand; the automated tests
@@ -360,6 +368,32 @@ Still differing:
 
 ## Resolved on this branch
 
+### From the 2026-11-11 web retry review
+
+- **A failed web start opened UFW with OpenVPN still running.**
+  `_openvpn_start()`'s failure paths called
+  `_revert_killswitch_after_failed_start()`, which tore down the kill switch
+  but never stopped the `openvpn --daemon` it had launched; it kept dialling
+  unfirewalled. Every failure now runs `_reset_after_failed_start()`
+  (`stop_vpn()`: OpenVPN confirmed stopped *before* UFW opens, then IPv6 and
+  DNS restored), between attempts, after the last one, after a cancel, and
+  after a failed Force Reconnect.
+- **After a failed start, Start VPN was locked** ("VPN is already running")
+  by that leftover daemon. The reset removes it, so Start VPN is available
+  again straight away.
+- **Cancel only worked in a 5s gap** out of every ~35s attempt, and did not
+  reset anything. It is now Cancel & Reset, visible for the whole start,
+  checked on every tun0 poll, and followed by the full reset.
+- **Stop All, Force Reconnect, Configure and `.ovpn` download/upload were
+  accepted mid-start**, racing the retry loop. They now return 409 while
+  `vpn_starting`.
+- **`MAX_STARTUP_ATTEMPTS=0` gave up without trying; a non-number crashed the
+  start thread silently.** Clamped to at least 1, with a logged fallback to 3.
+- **"No .ovpn" and "qBittorrent running" were retried**, though waiting
+  cannot fix them. `_start_blocker()` ends the loop before an attempt.
+- **`vpn_starting` was set inside the start thread**, so two quick Start VPN
+  clicks could both pass the ordering gate. It is set before the thread starts.
+
 Kept for context on why the code looks the way it does.
 
 ### From the 2026-09-23 full review
@@ -445,7 +479,8 @@ Kept for context on why the code looks the way it does.
 - **`_openvpn_start()` tore down the kill switch with no qBittorrent check** on
   both failure paths, unlike `attempt_reconnect()`. A fail-stop halted at step 1
   leaves the client alive; a failed Start VPN then relaxed UFW underneath it.
-  Now gated by `_revert_killswitch_after_failed_start()`.
+  Now gated by `_revert_killswitch_after_failed_start()` — since replaced by
+  `_reset_after_failed_start()`; see the 2026-11-11 entry below.
 - **A race could skip the entire fail-stop teardown.** The teardown keyed off
   `not self._stop_event.is_set()`, so a `stop()` landing between a `break` and
   that test made it vanish — including the urgent path, where UFW is confirmed

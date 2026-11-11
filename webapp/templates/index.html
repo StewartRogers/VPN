@@ -383,11 +383,11 @@
         <div class="step-label">Step 1 — VPN Config</div>
         <div class="step-btns">
           <input type="text" id="ovpn-url" class="text-input" placeholder="Paste .ovpn URL" style="flex:1;min-width:0">
-          <button class="btn-save" onclick="downloadConfig()">Download</button>
+          <button class="btn-save" id="btn-ovpn-download" onclick="downloadConfig()">Download</button>
         </div>
         <div class="step-btns">
           <input type="file" id="ovpn-file" accept=".ovpn" class="text-input" style="flex:1;min-width:0">
-          <button class="btn-save" onclick="uploadConfig()">Upload</button>
+          <button class="btn-save" id="btn-ovpn-upload" onclick="uploadConfig()">Upload</button>
         </div>
       </div>
 
@@ -396,7 +396,7 @@
         <div class="step-btns">
           <button class="btn-vpn-start" id="btn-vpn-start" onclick="vpnAction('start')">Start VPN</button>
           <button class="btn-vpn-stop"  id="btn-vpn-stop"  onclick="vpnAction('stop')">Stop VPN</button>
-          <button class="btn-vpn-stop"  id="btn-vpn-cancel-retry" onclick="cancelRetry()" style="display:none">Cancel Retry</button>
+          <button class="btn-vpn-stop"  id="btn-vpn-cancel-retry" onclick="cancelRetry()" style="display:none" title="Abandon the start, stop OpenVPN and restore the firewall, IPv6 and DNS">Cancel &amp; Reset</button>
         </div>
       </div>
 
@@ -488,7 +488,9 @@
     set('s-running', s.running ? 'Running' : 'Stopped', s.running ? 'ok' : 'fail');
 
     if (s.vpn_starting) {
-      set('s-proc',  'Starting…', 'warn');
+      set('s-proc',  s.vpn_resetting  ? 'Resetting…'
+                   : s.vpn_cancelling ? 'Cancelling…'
+                   : 'Starting…', 'warn');
       set('s-iface', 'Waiting…',  'warn');
       set('s-route', '—',         'dim');
     } else {
@@ -509,7 +511,12 @@
     set('s-ip',  s.external_ip || '—', s.external_ip ? 'info' : 'dim');
     set('s-qbt', s.qbittorrent ? 'Running' : 'Stopped', s.qbittorrent ? 'ok' : 'dim');
 
-    document.getElementById('btn-vpn-cancel-retry').style.display = s.vpn_retry_pending ? '' : 'none';
+    // Cancel & Reset is available for the whole start — mid-attempt, during a
+    // reset, and in the pause between attempts — not only in that pause.
+    const cancelBtn = document.getElementById('btn-vpn-cancel-retry');
+    cancelBtn.style.display = s.vpn_starting ? '' : 'none';
+    cancelBtn.disabled = !!s.vpn_cancelling;
+    cancelBtn.textContent = s.vpn_cancelling ? 'Cancelling…' : 'Cancel & Reset';
     applyButtonState(s);
   }
 
@@ -554,6 +561,10 @@
       'btn-reconnect':  busy  ? 'VPN is still starting'
                       : qbtUp ? 'Stop qBittorrent first'
                               : null,
+      // Installing a config deletes the old .ovpn first, which races an
+      // attempt that is choosing one. Cancel & Reset, then change it.
+      'btn-ovpn-download': busy ? 'VPN is starting — Cancel & Reset first' : null,
+      'btn-ovpn-upload':   busy ? 'VPN is starting — Cancel & Reset first' : null,
     };
 
     for (const [id, reason] of Object.entries(rules)) {
@@ -566,9 +577,13 @@
     // Stop All is the deliberate escape hatch: it performs the whole ordered
     // teardown itself, so it stays available whenever anything is up.
     const stopAll = document.getElementById('btn-stop-all');
+    // The one exception is a start in progress: the retry loop would re-apply
+    // the kill switch and relaunch OpenVPN behind it. Cancel & Reset is the
+    // stop for that state.
     if (stopAll) {
-      stopAll.disabled = !(vpnUp || monUp || qbtUp);
-      stopAll.title = stopAll.disabled ? 'Nothing is running' : '';
+      stopAll.disabled = busy || !(vpnUp || monUp || qbtUp);
+      stopAll.title = busy ? 'VPN is starting — use Cancel & Reset'
+                    : stopAll.disabled ? 'Nothing is running' : '';
     }
   }
 

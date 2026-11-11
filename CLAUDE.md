@@ -35,7 +35,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 248 tests
+.venv/bin/python -m pytest -q     # 297 tests
 .venv/bin/pip-audit               # known-CVE scan of the venv (CI audits requirements.txt)
 ```
 
@@ -120,6 +120,34 @@ There is no `MAX_RECONNECT_ATTEMPTS`. Do not reintroduce one, and do not
 when leaks slip through. `MAX_STARTUP_ATTEMPTS` governs retries during
 *initial* connection only. `attempt_reconnect()` in `webapp/monitor.py` exists
 solely for the manual **Force Reconnect** button.
+
+### Web start-up retries: every failure resets, then starts over
+
+`start_vpn()` → `_start_with_retries()` runs up to `MAX_STARTUP_ATTEMPTS`
+(never fewer than 1). **Every attempt that fails is followed by
+`_reset_after_failed_start()`, which is `stop_vpn()`** — qBittorrent
+confirmed gone → OpenVPN confirmed gone → UFW, IPv6, DNS restored — so each
+attempt starts from the same clean state as the first. Giving up after the
+last attempt resets too. If a reset cannot be confirmed, retrying stops at
+once with the kill switch up.
+
+`_openvpn_start()` does **not** clean up after itself; the caller does. It used
+to call `_revert_killswitch_after_failed_start()`, which opened UFW and left the
+`openvpn --daemon` it had just launched dialling with no kill switch behind it
+— and since that process was alive, the UI then refused Start VPN as "already
+running". Do not put a firewall teardown back inside `_openvpn_start()`.
+`attempt_reconnect()` resets on failure the same way.
+
+**Cancel & Reset** (`/api/vpn/cancel-retry`, `cancel_retry()`) works for the
+whole start, not only the pause between attempts: `_openvpn_start()` checks
+`_retry_cancel` on every `TUN0_POLL_INTERVAL` poll, so the attempt is
+abandoned within ~2s, the reset runs, and the loop ends ready for a new
+`.ovpn`. A reset in progress is never interrupted. `cancel_retry()` is a no-op
+(409) when nothing is starting, and both entry points clear the event, so a
+stray cancel cannot abort a later start.
+
+Problems waiting cannot fix — no `.ovpn`, qBittorrent running — end the loop
+via `_start_blocker()` before an attempt, with nothing to reset.
 
 ### Ordering invariants
 
@@ -415,7 +443,13 @@ enforced in two places, and both are required:
   the reason in the tooltip.
 - `_ordering_violation()` in `app.py` returns 409 on `/api/vpn/start`,
   `/api/vpn/stop`, `/api/stop` and `/api/reconnect`. `/api/configure` runs the
-  `monitor_stop` check too, because it replaces (and so stops) the monitor.
+  `configure` check — `monitor_stop`'s qBittorrent rule, because it replaces
+  (and so stops) the monitor, plus a start-in-progress rule.
+- **While a VPN start is in progress** (`vpn_starting`), `/api/stop-all`,
+  `/api/reconnect`, `/api/configure` and both `.ovpn` download/upload routes
+  return 409. The retry loop would otherwise re-apply the kill switch and
+  relaunch OpenVPN behind a Stop All, or race a config install that deletes
+  the old `.ovpn` first. Cancel & Reset is the way out of that state.
 
 Start VPN is refused while qBittorrent is running, not only while OpenVPN is.
 It reapplies the kill switch, and see invariant 2 for why that must never

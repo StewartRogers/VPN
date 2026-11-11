@@ -74,8 +74,12 @@ rather than silently reconnecting, which is precisely when leaks slip through.
 `attempt_reconnect()` exists in `webapp/monitor.py` but only runs when you press
 **Force Reconnect**. There is no `MAX_RECONNECT_ATTEMPTS`; `MAX_STARTUP_ATTEMPTS`
 governs retries during initial connection in both paths, and both offer a way
-out early (an interactive prompt in `startvpn.sh`, a Cancel Retry button and
-`/api/vpn/cancel-retry` in the web app).
+out early (an interactive prompt in `startvpn.sh`, a Cancel & Reset button and
+`/api/vpn/cancel-retry` in the web app). In the web app every failed attempt is
+followed by a full ordered reset — OpenVPN stopped, then firewall, IPv6 and DNS
+restored — before the next one, and Cancel & Reset works at any point in the
+start, abandoning the current attempt and leaving the box ready for a new
+`.ovpn`.
 
 The kill switch is re-verified on the IP-check cadence in the web monitor, so a
 UFW reset from another terminal stops everything. `checkip.sh` still checks it

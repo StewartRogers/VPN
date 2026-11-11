@@ -68,6 +68,18 @@ FAST_CHECK_TIMEOUT = 5
 # unanswered question gets retried.
 FAST_MAX_UNKNOWN = 3
 
+# VPN start-up retry tuning (web path).
+#
+# Each attempt polls for tun0 every TUN0_POLL_INTERVAL seconds, up to
+# TUN0_POLL_COUNT times (~30s). Every poll is also a cancellation point, so
+# Cancel & Reset takes effect within one interval rather than after the whole
+# attempt. VPN_RETRY_DELAY is the pause between a completed reset and the next
+# attempt; it is cancellable too.
+TUN0_POLL_INTERVAL = 2
+TUN0_POLL_COUNT = 15
+VPN_RETRY_DELAY = 5
+DEFAULT_STARTUP_ATTEMPTS = 3
+
 # Absolute path to the VPN project root (one level above this file's webapp/ dir)
 _VPN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -207,6 +219,8 @@ class VPNMonitor:
             "running": False,
             "vpn_starting": False,
             "vpn_retry_pending": False,
+            "vpn_cancelling": False,
+            "vpn_resetting": False,
             "vpn_process": False,
             "vpn_interface": False,
             "vpn_route": False,
@@ -853,27 +867,34 @@ class VPNMonitor:
         self._invalidate_killswitch_cache()
         self.status["kill_switch_active"] = False
 
-    def _revert_killswitch_after_failed_start(self):
-        """Open UFW back up after a failed VPN start — but only if nothing is
-        live behind it.
+    def _reset_after_failed_start(self):
+        """Undo a failed or cancelled VPN start completely, in order.
 
-        start_vpn() has no qBittorrent guard of its own, unlike
-        attempt_reconnect(). A fail-stop that halted at step 1 leaves the client
-        running with the kill switch up; pressing Start VPN then, and having it
-        fail, used to relax the firewall underneath that client — no tunnel, no
-        kill switch, torrents live on the ISP link.
+        This is stop_vpn(): qBittorrent confirmed gone → OpenVPN confirmed gone
+        → UFW, IPv6 and DNS restored. Any step that cannot be confirmed halts
+        the reset with the kill switch left up, and the caller must stop
+        retrying.
+
+        It replaces _revert_killswitch_after_failed_start(), which opened UFW
+        and nothing else. The `openvpn --daemon` it had just launched was never
+        stopped and kept dialling with no kill switch behind it — and, because
+        the process was still alive, the UI then showed the VPN as running and
+        refused Start VPN, so there was no clean way to start over.
+
+        Returns True only when everything is confirmed reset.
         """
-        if self.is_qbittorrent_running():
-            self.log(
-                "Kill switch left ACTIVE — the VPN did not come up and "
-                "qBittorrent is still running, so opening UFW would put it on "
-                "the ISP link. Stop qBittorrent, then try again.",
-                level="CRITICAL",
-            )
-            return False
-        self.log("Reverting kill switch so a new config can be downloaded", level="WARNING")
-        self.teardown_killswitch()
-        return True
+        self.status["vpn_resetting"] = True
+        try:
+            self.log("Resetting — stopping OpenVPN, then restoring the firewall, "
+                     "IPv6 and DNS...", level="WARNING")
+            ok = self.stop_vpn()
+            self.status["external_ip"] = None
+            self.status["secure"] = None
+            if ok:
+                self.log("Reset complete — OpenVPN stopped; firewall, IPv6 and DNS restored")
+            return ok
+        finally:
+            self.status["vpn_resetting"] = False
 
     def disable_ipv6(self):
         """Disable IPv6 system-wide to prevent bypass of the VPN tunnel."""
@@ -930,7 +951,16 @@ class VPNMonitor:
     # ------------------------------------------------------- VPN start/stop
 
     def _openvpn_start(self):
-        """Launch OpenVPN daemon and return True on success. Logs each step."""
+        """Launch OpenVPN daemon and return True on success. Logs each step.
+
+        On failure this does **not** clean up after itself: the kill switch may
+        be up and the daemon may still be dialling. The caller undoes it with
+        _reset_after_failed_start(), which stops OpenVPN *before* opening the
+        firewall. Opening it here, with the daemon alive, was the old bug.
+
+        Checks self._retry_cancel between steps and on every tun0 poll, so a
+        cancel abandons the attempt within TUN0_POLL_INTERVAL seconds.
+        """
 
         # 1. Locate config FIRST — needed by kill switch before we stop existing openvpn
         # Newest first, matching startvpn.sh. These used to disagree — this
@@ -965,7 +995,9 @@ class VPNMonitor:
         # 3. Stop existing OpenVPN — kill switch is now in place
         self.log("Stopping any existing OpenVPN process...")
         subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
-        time.sleep(2)
+        if self._retry_cancel.wait(2):
+            self.log("Start cancelled before OpenVPN was launched", level="WARNING")
+            return False
 
         # 4. Apply remaining security measures (idempotent — safe on reconnects)
         self.disable_ipv6()
@@ -999,14 +1031,15 @@ class VPNMonitor:
                 self._log_openvpn(line, level="WARNING")
         if result.returncode != 0:
             self.log(f"openvpn exited with code {result.returncode}", source="OPENVPN", level="ERROR")
-            self._revert_killswitch_after_failed_start()
             return False
 
         # 6. Wait for tun0 to come up, streaming the OpenVPN log
         self.log("Daemon launched, waiting for tun0 interface...", source="OPENVPN")
         last_log_lines = 0
-        for i in range(15):
-            time.sleep(2)
+        for i in range(TUN0_POLL_COUNT):
+            if self._retry_cancel.wait(TUN0_POLL_INTERVAL):
+                self.log("Start cancelled — abandoning this attempt", level="WARNING")
+                return False
             try:
                 result = subprocess.run(
                     ["sudo", "cat", "/var/log/openvpn.log"],
@@ -1045,7 +1078,6 @@ class VPNMonitor:
             self.log("tun0 never came up — check OpenVPN log lines above",
                      source="OPENVPN", level="ERROR")
 
-        self._revert_killswitch_after_failed_start()
         return False
 
     def _install_ovpn(self, tmp_path, filename):
@@ -1226,45 +1258,131 @@ class VPNMonitor:
         running over a verified tunnel.
 
         Runs in a background thread so logs stream to the UI immediately.
+        vpn_starting is set *before* the thread starts, so a second Start VPN
+        arriving before the thread is scheduled is refused by the ordering gate
+        instead of launching a second loop.
         """
         self._retry_cancel.clear()
+        self.status["vpn_cancelling"] = False
+        self.status["vpn_starting"] = True
 
         def _thread():
-            self.status["vpn_starting"] = True
             try:
-                max_attempts = int(read_config_value("MAX_STARTUP_ATTEMPTS", "3") or 3)
-                for attempt in range(1, max_attempts + 1):
-                    if attempt > 1:
-                        self.log(f"Retrying VPN connection (attempt {attempt} of {max_attempts})... "
-                                 "upload or download a different .ovpn now if you want to try one.")
-                    if self._openvpn_start():
-                        break
-                    if attempt < max_attempts:
-                        self.log(f"Connection attempt {attempt} failed", level="WARNING")
-                        self.status["vpn_retry_pending"] = True
-                        cancelled = self._retry_cancel.wait(5)
-                        self.status["vpn_retry_pending"] = False
-                        if cancelled:
-                            self.log("Retry cancelled by user", level="WARNING")
-                            return
-                else:
-                    self.log(f"VPN startup failed after {max_attempts} attempt(s) - giving up",
+                self._start_with_retries()
+            except Exception as e:
+                self.log(f"VPN start aborted by an unexpected error — {e}",
+                         level="CRITICAL")
+                try:
+                    self._reset_after_failed_start()
+                except Exception as e2:
+                    self.log(f"Reset after the error also failed — {e2}. The kill "
+                             "switch may still be up; press Stop VPN.",
                              level="CRITICAL")
-                    return
             finally:
                 self.status["vpn_starting"] = False
                 self.status["vpn_retry_pending"] = False
-            self.log("VPN is up. Start the monitor (step 3), then qBittorrent (step 4).")
+                self.status["vpn_cancelling"] = False
         threading.Thread(target=_thread, daemon=True).start()
 
-    def cancel_retry(self):
-        """Stop the startup retry loop before it burns through MAX_STARTUP_ATTEMPTS.
+    def _max_startup_attempts(self):
+        """MAX_STARTUP_ATTEMPTS, never below 1. A value of 0 used to give up
+        without trying once, and a non-number killed the start thread silently."""
+        raw = read_config_value("MAX_STARTUP_ATTEMPTS", str(DEFAULT_STARTUP_ATTEMPTS))
+        try:
+            n = int(str(raw).strip() or DEFAULT_STARTUP_ATTEMPTS)
+        except ValueError:
+            self.log(f"MAX_STARTUP_ATTEMPTS={raw!r} is not a number — using "
+                     f"{DEFAULT_STARTUP_ATTEMPTS}", level="WARNING")
+            return DEFAULT_STARTUP_ATTEMPTS
+        return max(1, n)
 
-        Only has an effect while start_vpn() is waiting between attempts
-        (status["vpn_retry_pending"] is True) - it does not interrupt an
-        attempt already in progress.
+    def _start_blocker(self):
+        """A reason no attempt should even begin, or None.
+
+        These are problems waiting cannot fix, so they end the loop instead of
+        burning attempts — and since nothing was started, nothing is reset.
         """
+        if not glob.glob("/etc/openvpn/client/*.ovpn"):
+            return ("no .ovpn config file in /etc/openvpn/client/ — download "
+                    "or upload one, then press Start VPN")
+        if self.is_qbittorrent_running():
+            return ("qBittorrent is running — applying the kill switch resets "
+                    "UFW, which briefly disables it. Stop qBittorrent first")
+        return None
+
+    def _start_with_retries(self):
+        """The Start VPN loop. Returns True once the tunnel is verified up.
+
+        Every failed attempt is followed by a full, confirmed reset
+        (_reset_after_failed_start) before the next one, so each attempt starts
+        from the same clean state as the first. Cancel abandons the current
+        attempt, resets, and stops; so does running out of attempts. If a reset
+        cannot be confirmed, retrying stops at once with the kill switch up.
+        """
+        max_attempts = self._max_startup_attempts()
+        for attempt in range(1, max_attempts + 1):
+            blocker = self._start_blocker()
+            if blocker:
+                self.log(f"VPN start stopped — {blocker}", level="ERROR")
+                return False
+
+            if attempt > 1:
+                self.log(f"Retrying VPN connection (attempt {attempt} of {max_attempts})...")
+            ok = self._openvpn_start()
+            cancelled = self._retry_cancel.is_set()
+            if ok and not cancelled:
+                self.log("VPN is up. Start the monitor (step 3), then qBittorrent (step 4).")
+                return True
+
+            if cancelled:
+                self.log("VPN start cancelled by user", level="WARNING")
+            elif attempt < max_attempts:
+                self.log(f"Connection attempt {attempt} of {max_attempts} failed",
+                         level="WARNING")
+            else:
+                self.log(f"VPN startup failed after {max_attempts} attempt(s) — giving up",
+                         level="CRITICAL")
+
+            if not self._reset_after_failed_start():
+                # stop_vpn() has already logged which step halted and why.
+                self.log("Retries stopped — the reset could not be confirmed, so "
+                         "the kill switch stays ACTIVE.", level="CRITICAL")
+                return False
+
+            if cancelled or attempt == max_attempts:
+                self.log("Ready to start over — download or upload a new .ovpn "
+                         "if needed, then press Start VPN.")
+                return False
+
+            self.status["vpn_retry_pending"] = True
+            cancelled = self._retry_cancel.wait(VPN_RETRY_DELAY)
+            self.status["vpn_retry_pending"] = False
+            if cancelled:
+                self.log("VPN start cancelled by user — already reset. Download or "
+                         "upload a new .ovpn if needed, then press Start VPN.",
+                         level="WARNING")
+                return False
+        return False
+
+    def cancel_retry(self):
+        """Cancel a VPN start in progress and reset everything.
+
+        Takes effect at any point in the start, not only between attempts: the
+        current attempt is abandoned at its next cancellation point (within
+        TUN0_POLL_INTERVAL seconds), then the start thread runs the full
+        ordered reset and stops. A reset already under way is never
+        interrupted — it is what makes starting over safe.
+
+        Returns False, and does nothing, when no start is in progress. A stray
+        set would otherwise sit in the event and abort the next attempt.
+        """
+        if not self.status.get("vpn_starting"):
+            return False
+        self.status["vpn_cancelling"] = True
+        self.log("Cancel requested — abandoning the VPN start and resetting...",
+                 level="WARNING")
         self._retry_cancel.set()
+        return True
 
     def stop_vpn(self):
         # qBittorrent must be *confirmed* stopped before the kill switch is
@@ -1388,6 +1506,9 @@ class VPNMonitor:
 
     def attempt_reconnect(self):
         self.log("Attempting VPN reconnection...")
+        # _openvpn_start() honours the start-cancel event; a stale one left
+        # over from an earlier Start VPN must not abort this attempt.
+        self._retry_cancel.clear()
         # Stop the client before touching the kill switch. _openvpn_start calls
         # setup_killswitch, which resets UFW and briefly restores the default
         # allow-outgoing policy — anything still running would egress
@@ -1409,6 +1530,10 @@ class VPNMonitor:
                 self.start_qbittorrent()
                 return True
         self.log("Reconnection failed", level="WARNING")
+        # Same clean-up as a failed Start VPN: OpenVPN confirmed stopped before
+        # the firewall opens. _openvpn_start() used to open UFW itself and
+        # leave its daemon dialling.
+        self._reset_after_failed_start()
         return False
 
     # ---------------------------------------------------------- monitor loop

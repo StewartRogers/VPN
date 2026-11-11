@@ -98,6 +98,8 @@ def status():
     live["vpn_route"] = monitor.check_default_route()
     live["qbittorrent"] = monitor.is_qbittorrent_running()
     live["vpn_starting"] = monitor.status.get("vpn_starting", False)
+    live["vpn_cancelling"] = monitor.status.get("vpn_cancelling", False)
+    live["vpn_resetting"] = monitor.status.get("vpn_resetting", False)
     live["kill_switch_active"] = monitor.check_killswitch_active()
     live["save_path"] = monitor.save_path
     return jsonify(live)
@@ -151,6 +153,9 @@ def vpn_download_config():
     url = (request.get_json(force=True) or {}).get("url", "").strip()
     if not url:
         return jsonify({"error": "url required"}), 400
+    bad = _ordering_violation("config_change")
+    if bad:
+        return jsonify({"error": bad}), 409
     monitor.download_ovpn(url)
     return jsonify({"started": True})
 
@@ -167,6 +172,9 @@ def vpn_upload_config():
     filename = os.path.basename(filename)  # strip any path components
     if not filename.endswith(".ovpn"):
         return jsonify({"error": "file must have a .ovpn extension"}), 400
+    bad = _ordering_violation("config_change")
+    if bad:
+        return jsonify({"error": bad}), 409
     monitor.upload_ovpn(f.read(), filename)
     return jsonify({"started": True})
 
@@ -199,8 +207,29 @@ def _ordering_violation(step):
         if monitor.is_qbittorrent_running():
             return "Stop qBittorrent before stopping the monitor"
     elif step == "reconnect":
+        if monitor.status.get("vpn_starting"):
+            return "VPN is still starting — use Cancel & Reset first"
         if monitor.is_qbittorrent_running():
             return "Stop qBittorrent before reconnecting the VPN"
+    elif step == "stop_all":
+        # A start in progress re-applies the kill switch and relaunches
+        # OpenVPN on its next attempt, undoing a Stop All that ran alongside
+        # it. Cancel & Reset is the stop for that state: it ends the loop and
+        # runs the same ordered teardown.
+        if monitor.status.get("vpn_starting"):
+            return "VPN is still starting — use Cancel & Reset instead"
+    elif step == "config_change":
+        # Installing a config deletes the old .ovpn files first, which races
+        # an attempt that is choosing one.
+        if monitor.status.get("vpn_starting"):
+            return "VPN is still starting — use Cancel & Reset before changing the .ovpn"
+    elif step == "configure":
+        # Configure replaces the monitor object; the start thread would keep
+        # running against the old one, out of reach of Cancel & Reset.
+        if monitor.status.get("vpn_starting"):
+            return "VPN is still starting — use Cancel & Reset first"
+        if monitor.is_qbittorrent_running():
+            return "Stop qBittorrent before stopping the monitor"
     return None
 
 
@@ -233,7 +262,8 @@ def vpn_cancel_retry():
     err = _auth() or _require_monitor()
     if err:
         return err
-    monitor.cancel_retry()
+    if not monitor.cancel_retry():
+        return jsonify({"error": "Nothing to cancel — the VPN is not starting"}), 409
     return jsonify({"cancelled": True})
 
 
@@ -292,6 +322,9 @@ def stop_all():
     err = _auth() or _require_monitor()
     if err:
         return err
+    bad = _ordering_violation("stop_all")
+    if bad:
+        return jsonify({"error": bad}), 409
     threading.Thread(target=monitor.stop_all, daemon=True).start()
     return jsonify({"stopped": True})
 
@@ -318,7 +351,7 @@ def configure():
     # stopped monitor under a live client leaves torrents on a tunnel nothing
     # is watching. Same rule as stopping the monitor directly.
     if monitor:
-        bad = _ordering_violation("monitor_stop")
+        bad = _ordering_violation("configure")
         if bad:
             return jsonify({"error": bad}), 409
     data = request.get_json(force=True)

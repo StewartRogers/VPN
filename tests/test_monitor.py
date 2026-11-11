@@ -1176,3 +1176,307 @@ class TestWriteConfigValue:
     def test_reader_drops_a_trailing_comment(self, conf):
         conf.write_text('QBT_SAVE_PATH="/mnt/hdd/"   # blank = default\n')
         assert mon.read_config_value("QBT_SAVE_PATH") == "/mnt/hdd/"
+
+
+# ------------------------------------------------------------------ VPN start retry / cancel / reset
+
+def _sync_thread(target, daemon=None, **_):
+    """Stand-in for threading.Thread that runs the target inline on start()."""
+    t = MagicMock()
+    t.start = target
+    return t
+
+
+def _retry_monitor(outcomes, reset_ok=True, attempts="3"):
+    """A monitor whose _openvpn_start() returns each of `outcomes` in turn."""
+    m = make_monitor()
+    m._openvpn_start = MagicMock(side_effect=list(outcomes))
+    m._reset_after_failed_start = MagicMock(return_value=reset_ok)
+    m._start_blocker = MagicMock(return_value=None)
+    m._max_startup_attempts = MagicMock(return_value=int(attempts))
+    return m
+
+
+@pytest.fixture
+def no_retry_delay(monkeypatch):
+    monkeypatch.setattr(mon, "VPN_RETRY_DELAY", 0)
+    monkeypatch.setattr(mon, "TUN0_POLL_INTERVAL", 0)
+    monkeypatch.setattr(mon, "TUN0_POLL_COUNT", 3)
+
+
+class TestStartRetryLoop:
+    """'If the VPN does not start, stop everything, reset, and start over —
+    for as many retries as are configured.'"""
+
+    def test_every_failed_attempt_is_followed_by_a_full_reset(self, no_retry_delay):
+        m = _retry_monitor([False, False, False])
+        assert m._start_with_retries() is False
+        assert m._openvpn_start.call_count == 3
+        # One reset after each attempt, including the last — giving up leaves
+        # the box in the same clean state as a cancel.
+        assert m._reset_after_failed_start.call_count == 3
+
+    def test_reset_runs_before_the_next_attempt(self, no_retry_delay):
+        order = []
+        m = _retry_monitor([])
+        m._openvpn_start = MagicMock(side_effect=lambda: order.append("start") or False)
+        m._reset_after_failed_start = MagicMock(side_effect=lambda: order.append("reset") or True)
+        m._start_with_retries()
+        assert order == ["start", "reset", "start", "reset", "start", "reset"]
+
+    def test_success_on_a_later_attempt_stops_retrying(self, no_retry_delay):
+        m = _retry_monitor([False, True])
+        assert m._start_with_retries() is True
+        assert m._openvpn_start.call_count == 2
+        assert m._reset_after_failed_start.call_count == 1
+
+    def test_success_first_time_never_resets(self, no_retry_delay):
+        m = _retry_monitor([True])
+        assert m._start_with_retries() is True
+        m._reset_after_failed_start.assert_not_called()
+
+    def test_unconfirmed_reset_stops_retrying(self, no_retry_delay):
+        """A reset that halted left the kill switch up for a reason — another
+        attempt would re-apply it over whatever survived."""
+        m = _retry_monitor([False, False, False], reset_ok=False)
+        assert m._start_with_retries() is False
+        assert m._openvpn_start.call_count == 1
+
+    def test_cancel_during_an_attempt_resets_and_stops(self, no_retry_delay):
+        m = _retry_monitor([])
+
+        def attempt():
+            m._retry_cancel.set()      # user pressed Cancel mid-attempt
+            return False
+        m._openvpn_start = MagicMock(side_effect=attempt)
+        assert m._start_with_retries() is False
+        assert m._openvpn_start.call_count == 1
+        m._reset_after_failed_start.assert_called_once()
+
+    def test_cancel_honoured_even_if_the_attempt_then_succeeded(self, no_retry_delay):
+        """The operator asked to start over with a new .ovpn; a tunnel that
+        came up a moment later is still the one they rejected."""
+        m = _retry_monitor([])
+
+        def attempt():
+            m._retry_cancel.set()
+            return True
+        m._openvpn_start = MagicMock(side_effect=attempt)
+        assert m._start_with_retries() is False
+        m._reset_after_failed_start.assert_called_once()
+
+    def test_cancel_in_the_pause_between_attempts_stops(self, no_retry_delay, monkeypatch):
+        m = _retry_monitor([False, False, False])
+        # Reset completes, then Cancel lands during the VPN_RETRY_DELAY pause.
+        m._reset_after_failed_start = MagicMock(
+            side_effect=lambda: m._retry_cancel.set() or True)
+        assert m._start_with_retries() is False
+        assert m._openvpn_start.call_count == 1
+        m._reset_after_failed_start.assert_called_once()
+
+    def test_missing_config_does_not_attempt_or_reset(self, no_retry_delay):
+        m = _retry_monitor([False])
+        m._start_blocker = MagicMock(return_value="no .ovpn config file")
+        assert m._start_with_retries() is False
+        m._openvpn_start.assert_not_called()
+        m._reset_after_failed_start.assert_not_called()
+
+    def test_start_blocker_finds_missing_config(self):
+        m = make_monitor()
+        with patch("glob.glob", return_value=[]):
+            assert ".ovpn" in m._start_blocker()
+
+    def test_start_blocker_refuses_a_live_client(self):
+        m = make_monitor()
+        m.is_qbittorrent_running = MagicMock(return_value=True)
+        with patch("glob.glob", return_value=["/etc/openvpn/client/a.ovpn"]):
+            assert "qBittorrent" in m._start_blocker()
+
+    def test_start_blocker_clear_when_ready(self):
+        m = make_monitor()
+        m.is_qbittorrent_running = MagicMock(return_value=False)
+        with patch("glob.glob", return_value=["/etc/openvpn/client/a.ovpn"]):
+            assert m._start_blocker() is None
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("5", 5), ("1", 1), ("0", 1), ("-2", 1), ("", 3), ("abc", 3), (" 4 ", 4),
+    ])
+    def test_max_startup_attempts_is_at_least_one(self, raw, expected):
+        """0 used to give up without trying; a non-number crashed the thread."""
+        m = make_monitor()
+        with patch.object(mon, "read_config_value", return_value=raw):
+            assert m._max_startup_attempts() == expected
+
+
+class TestStartVpnThread:
+    def test_vpn_starting_is_set_before_the_thread_runs(self):
+        """A second Start VPN must hit the ordering gate, not a race."""
+        m = make_monitor()
+        with patch.object(mon.threading, "Thread"):
+            m.start_vpn()
+        assert m.status["vpn_starting"] is True
+
+    def test_flags_are_cleared_when_the_start_ends(self):
+        m = make_monitor()
+        m._start_with_retries = MagicMock(return_value=False)
+        with patch.object(mon.threading, "Thread", side_effect=_sync_thread):
+            m.start_vpn()
+        assert m.status["vpn_starting"] is False
+        assert m.status["vpn_cancelling"] is False
+        assert m.status["vpn_retry_pending"] is False
+
+    def test_unexpected_error_still_resets(self):
+        m = make_monitor()
+        m._start_with_retries = MagicMock(side_effect=RuntimeError("boom"))
+        m._reset_after_failed_start = MagicMock(return_value=True)
+        with patch.object(mon.threading, "Thread", side_effect=_sync_thread):
+            m.start_vpn()
+        m._reset_after_failed_start.assert_called_once()
+        assert m.status["vpn_starting"] is False
+
+    def test_start_clears_a_stale_cancel(self):
+        m = make_monitor()
+        m._retry_cancel.set()
+        with patch.object(mon.threading, "Thread"):
+            m.start_vpn()
+        assert not m._retry_cancel.is_set()
+
+
+class TestCancelRetry:
+    def test_cancel_is_ignored_when_nothing_is_starting(self):
+        """A stray set would sit in the event and abort the next attempt."""
+        m = make_monitor()
+        assert m.cancel_retry() is False
+        assert not m._retry_cancel.is_set()
+        assert m.status["vpn_cancelling"] is False
+
+    def test_cancel_works_mid_start_not_only_between_attempts(self):
+        m = make_monitor()
+        m.status["vpn_starting"] = True
+        m.status["vpn_retry_pending"] = False      # an attempt is in progress
+        assert m.cancel_retry() is True
+        assert m._retry_cancel.is_set()
+        assert m.status["vpn_cancelling"] is True
+
+
+class TestResetAfterFailedStart:
+    def test_reset_is_the_ordered_stop_vpn_teardown(self):
+        m = make_monitor()
+        m.stop_vpn = MagicMock(return_value=True)
+        m.status["external_ip"] = "9.9.9.9"
+        m.status["secure"] = True
+        assert m._reset_after_failed_start() is True
+        m.stop_vpn.assert_called_once()
+        assert m.status["external_ip"] is None
+        assert m.status["secure"] is None
+        assert m.status["vpn_resetting"] is False
+
+    def test_reset_reports_a_halted_teardown(self):
+        m = make_monitor()
+        m.stop_vpn = MagicMock(return_value=False)
+        assert m._reset_after_failed_start() is False
+        assert m.status["vpn_resetting"] is False
+
+    def test_openvpn_is_confirmed_stopped_before_the_firewall_opens(self):
+        """The old revert opened UFW with the just-launched daemon still
+        dialling. The reset must stop it first."""
+        m = make_monitor()
+        order = []
+        alive = {"openvpn": True}
+        m.stop_qbittorrent = MagicMock(side_effect=lambda: order.append("qbt") or True)
+        m.is_qbittorrent_running = MagicMock(return_value=False)
+        m.check_openvpn_process = MagicMock(side_effect=lambda: alive["openvpn"])
+        m.teardown_killswitch = MagicMock(side_effect=lambda: order.append(
+            "ufw-open" if not alive["openvpn"] else "ufw-open-WITH-OPENVPN-ALIVE"))
+        m.restore_ipv6 = MagicMock()
+        m.restore_dns = MagicMock()
+
+        def run(cmd, **_):
+            if "pkill" in cmd and "openvpn" in cmd:
+                order.append("openvpn-kill")
+                alive["openvpn"] = False
+            return _proc(0)
+
+        with patch("subprocess.run", side_effect=run), patch("time.sleep"):
+            assert m._reset_after_failed_start() is True
+        assert order == ["qbt", "openvpn-kill", "ufw-open"]
+        m.restore_ipv6.assert_called_once()
+        m.restore_dns.assert_called_once()
+
+
+def _openvpn_start_monitor(tmp_path):
+    m = make_monitor()
+    ovpn = tmp_path / "a.ovpn"
+    ovpn.write_text("remote x 1194\n")
+    m.is_qbittorrent_running = MagicMock(return_value=False)
+    m.setup_killswitch = MagicMock()
+    m.teardown_killswitch = MagicMock()
+    m.disable_ipv6 = MagicMock()
+    m.setup_dns = MagicMock()
+    m.check_vpn_interface = MagicMock(return_value=False)
+    m.check_default_route = MagicMock(return_value=False)
+
+    def run(cmd, **kw):
+        p = _proc(0)
+        if kw.get("text"):
+            p.stdout = ""
+        return p
+    return m, str(ovpn), run
+
+
+class TestOpenvpnStartLeavesCleanupToCaller:
+    def test_tun0_timeout_does_not_open_the_firewall(self, tmp_path, no_retry_delay):
+        m, ovpn, run = _openvpn_start_monitor(tmp_path)
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=run):
+            assert m._openvpn_start() is False
+        m.teardown_killswitch.assert_not_called()
+        assert m.check_vpn_interface.call_count == mon.TUN0_POLL_COUNT
+
+    def test_openvpn_launch_failure_does_not_open_the_firewall(self, tmp_path, no_retry_delay):
+        m, ovpn, _ = _openvpn_start_monitor(tmp_path)
+
+        def run(cmd, **kw):
+            return _proc(1 if "--daemon" in cmd else 0)
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=run):
+            assert m._openvpn_start() is False
+        m.teardown_killswitch.assert_not_called()
+
+    def test_cancel_during_tun0_wait_abandons_the_attempt(self, tmp_path, no_retry_delay):
+        m, ovpn, run = _openvpn_start_monitor(tmp_path)
+        m.check_vpn_interface = MagicMock(side_effect=lambda: m._retry_cancel.set() or False)
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=run):
+            assert m._openvpn_start() is False
+        # Stopped at the next poll rather than running out the full wait.
+        assert m.check_vpn_interface.call_count == 1
+
+    def test_cancel_before_launch_never_starts_openvpn(self, tmp_path, no_retry_delay):
+        m, ovpn, run = _openvpn_start_monitor(tmp_path)
+        m._retry_cancel.set()
+        calls = []
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=lambda c, **k: calls.append(c) or run(c, **k)):
+            assert m._openvpn_start() is False
+        assert not any("--daemon" in c for c in calls)
+
+
+class TestReconnectCleanup:
+    def test_failed_reconnect_resets(self):
+        m = make_monitor()
+        m.stop_qbittorrent = MagicMock(return_value=True)
+        m._openvpn_start = MagicMock(return_value=False)
+        m._reset_after_failed_start = MagicMock(return_value=True)
+        assert m.attempt_reconnect() is False
+        m._reset_after_failed_start.assert_called_once()
+
+    def test_reconnect_clears_a_stale_cancel(self):
+        m = make_monitor()
+        m._retry_cancel.set()
+        m.stop_qbittorrent = MagicMock(return_value=True)
+        seen = []
+        m._openvpn_start = MagicMock(side_effect=lambda: seen.append(m._retry_cancel.is_set()) or False)
+        m._reset_after_failed_start = MagicMock(return_value=True)
+        m.attempt_reconnect()
+        assert seen == [False]
