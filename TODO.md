@@ -338,21 +338,11 @@ asked not to change `startvpn.sh`.
 
 ---
 
-## Built, awaiting hardware test — auto-remove finished torrents (web path)
+## Done — auto-remove finished torrents (web path)
 
-Built 2026-11-11 on branch `auto-remove-finished-torrents`; described in
-`ENHANCEMENTS.md` and `CLAUDE.md`. Open questions settled: **remove at once
-(no seeding)** and **no exemptions**.
-
-Hardware test before merging to master:
-
-1. Set `QBT_AUTO_REMOVE_INTERVAL=5` in `vpn_config.conf` (no restart needed).
-2. Full web session (VPN → monitor → qBittorrent), then add one small legal
-   torrent (e.g. a Debian netinst ISO).
-3. When it finishes, confirm within a few seconds: the dashboard log shows
-   `Removed torrent (files kept): <name>`, the torrent is gone from the
-   qBittorrent WebUI, and the file is still in `QBT_SAVE_PATH`.
-4. Put the interval back to 30.
+Built 2026-11-11, hardware-tested and merged 2026-11-16. Described in
+`ENHANCEMENTS.md` and `CLAUDE.md`. Settled: **remove at once (no seeding)**
+and **no exemptions**.
 
 ## Path drift (item 10, partly closed)
 
