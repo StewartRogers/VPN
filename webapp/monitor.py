@@ -172,6 +172,54 @@ def write_config_value(key, value):
         return False
 
 
+def qbt_webui_port():
+    """The qBittorrent WebUI port from qBittorrent.conf (default 8080)."""
+    try:
+        sections = qbt_config.read_ini(qbt_config.DEFAULT_CONFIG)
+        value = qbt_config.get_key(sections, "Preferences", r"WebUI\Port")
+        return int(value) if value else 8080
+    except Exception:
+        return 8080
+
+
+def qbt_api(port=None):
+    """Return (requests.Session, base_url) authenticated to the local WebUI.
+
+    The session is None when the WebUI cannot be reached or login fails.
+
+    Tries the unauthenticated localhost path first (WebUI\\LocalHostAuth=false)
+    and falls back to QBT_WEBUI_USER / QBT_WEBUI_PASS from vpn_config.conf,
+    so this works whichever way qBittorrent is configured.
+
+    Module level rather than a VPNMonitor method because the torrent cleaner
+    (torrent_cleanup.py) must work while no monitor exists yet.
+    """
+    if port is None:
+        port = qbt_webui_port()
+    base = f"http://127.0.0.1:{port}"
+    s = requests.Session()
+    try:
+        r = s.get(f"{base}/api/v2/app/preferences", timeout=5)
+        if r.status_code == 200:
+            return s, base
+    except Exception:
+        return None, base
+
+    user = read_config_value("QBT_WEBUI_USER", "")
+    password = read_config_value("QBT_WEBUI_PASS", "")
+    if not user:
+        return None, base
+    try:
+        r = s.post(f"{base}/api/v2/auth/login",
+                   data={"username": user, "password": password},
+                   headers={"Referer": base}, timeout=5)
+        if r.status_code == 200 and "Fails" not in r.text:
+            return s, base
+    except Exception:
+        pass
+    return None, base
+
+
 def detect_external_ip():
     """Return the external IPv4 address, or None on failure.
 
@@ -645,42 +693,11 @@ class VPNMonitor:
     # ------------------------------------------------- qBittorrent tunnel bind
 
     def _qbt_webui_port(self):
-        try:
-            sections = qbt_config.read_ini(qbt_config.DEFAULT_CONFIG)
-            value = qbt_config.get_key(sections, "Preferences", r"WebUI\Port")
-            return int(value) if value else 8080
-        except Exception:
-            return 8080
+        return qbt_webui_port()
 
     def _qbt_api(self):
-        """Return a requests.Session authenticated to the local WebUI, or None.
-
-        Tries the unauthenticated localhost path first (WebUI\\LocalHostAuth=false)
-        and falls back to QBT_WEBUI_USER / QBT_WEBUI_PASS from vpn_config.conf,
-        so this works whichever way qBittorrent is configured.
-        """
-        base = f"http://127.0.0.1:{self._qbt_webui_port()}"
-        s = requests.Session()
-        try:
-            r = s.get(f"{base}/api/v2/app/preferences", timeout=5)
-            if r.status_code == 200:
-                return s, base
-        except Exception:
-            return None, base
-
-        user = read_config_value("QBT_WEBUI_USER", "")
-        password = read_config_value("QBT_WEBUI_PASS", "")
-        if not user:
-            return None, base
-        try:
-            r = s.post(f"{base}/api/v2/auth/login",
-                       data={"username": user, "password": password},
-                       headers={"Referer": base}, timeout=5)
-            if r.status_code == 200 and "Fails" not in r.text:
-                return s, base
-        except Exception:
-            pass
-        return None, base
+        """Thin wrapper over the module-level qbt_api(); see there."""
+        return qbt_api(self._qbt_webui_port())
 
     def apply_tunnel_bind(self):
         """Bind qBittorrent to tun0 through its WebUI API. Returns True on success.
