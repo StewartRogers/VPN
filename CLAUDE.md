@@ -36,7 +36,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 337 tests
+.venv/bin/python -m pytest -q     # 339 tests
 .venv/bin/pip-audit               # known-CVE scan of the venv (CI audits requirements.txt)
 ```
 
@@ -277,6 +277,16 @@ The keys it owns, and nothing else:
   caps downloads *and* seeds together, so it is raised to downloads + the
   existing upload slots; it is never lowered. With no configured value,
   queueing is left untouched — no limit is hardcoded here.
+- `WebUI\LocalHostAuth=false` — lets `apply_tunnel_bind()` use the local API
+  without a stored password. Any local process gets the API too (see
+  `TODO.md`).
+- `WebUI\ReverseProxySupportEnabled=false` — the guard that keeps the line
+  above meaning "the TCP peer is 127.0.0.1". With proxy support on, 5.1.0
+  takes the client address from `X-Forwarded-For`, so a spoofed `127.0.0.1`
+  through a trusted proxy skips the login (Debian #1151739, fixed upstream in
+  5.3.0 only). Nothing here uses a proxy; keep it pinned off at least until
+  the client is ≥ 5.3.0, and even then only lift it together with
+  `LocalHostAuth`.
 
 The `[Preferences] Queueing\*` and `Downloads\SavePath` entries in older config
 files are pre-4.0 leftovers that qBittorrent migrated once and no longer reads.

@@ -11,6 +11,8 @@ The settings this file owns, and nothing else:
   Session\\InterfaceAddress   the live tun0 IP
   WebUI\\LocalHostAuth        false - lets the monitor apply the real bind over
                               the local API without storing a password
+  WebUI\\ReverseProxySupportEnabled  false - otherwise X-Forwarded-For
+                              can pose as 127.0.0.1 and skip the login
   Session\\DefaultSavePath    QBT_SAVE_PATH
   Session\\QueueingSystemEnabled / Session\\MaxActiveDownloads /
   Session\\MaxActiveTorrents  the concurrent-download limit
@@ -207,6 +209,16 @@ def apply_config(config=DEFAULT_CONFIG, template=DEFAULT_TEMPLATE,
     # falls back to logging in.
     set_key(sections, "Preferences", r"WebUI\LocalHostAuth", "false")
     status.append("local WebUI API access enabled (for the tunnel bind)")
+
+    # Trusting 127.0.0.1 is only safe while 127.0.0.1 means the TCP peer. With
+    # reverse-proxy support on, qBittorrent 5.1.0 takes the client address
+    # from X-Forwarded-For instead (first global entry, else the first entry),
+    # so "X-Forwarded-For: 127.0.0.1" sent through a trusted proxy reads as
+    # loopback and skips the login - Debian #1151739, upstream PR #24889,
+    # fixed only in 5.3.0. This project never puts a proxy in front of the
+    # WebUI, so the setting is pinned off rather than left to a WebUI toggle.
+    set_key(sections, "Preferences", r"WebUI\ReverseProxySupportEnabled", "false")
+    status.append("WebUI reverse-proxy support disabled (keeps localhost auth honest)")
 
     # --- download location -------------------------------------------------
     if save_path:

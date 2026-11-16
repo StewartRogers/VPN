@@ -162,6 +162,27 @@ def test_localhost_auth_is_flipped_when_already_true(tmp_path):
     assert keys(str(p), "Preferences")["WebUI\\LocalHostAuth"] == "false"
 
 
+def test_reverse_proxy_support_is_disabled(conf):
+    """LocalHostAuth=false trusts loopback; with reverse-proxy support on,
+    qBittorrent 5.1.0 reads the client address from X-Forwarded-For, so a
+    spoofed 127.0.0.1 skips the login (Debian #1151739)."""
+    apply(conf)
+    assert keys(conf, "Preferences")["WebUI\\ReverseProxySupportEnabled"] == "false"
+
+
+def test_reverse_proxy_support_is_flipped_when_enabled(tmp_path):
+    p = tmp_path / "qBittorrent.conf"
+    p.write_text(LIVE.replace(
+        "[Preferences]",
+        "[Preferences]\nWebUI\\ReverseProxySupportEnabled=true\n"
+        "WebUI\\TrustedReverseProxiesList=192.168.1.10"))
+    apply(str(p))
+    k = keys(str(p), "Preferences")
+    assert k["WebUI\\ReverseProxySupportEnabled"] == "false"
+    # The proxy list is the user's; only the switch is owned here.
+    assert k["WebUI\\TrustedReverseProxiesList"] == "192.168.1.10"
+
+
 def test_other_webui_keys_are_left_alone(tmp_path):
     """The config file is the only copy of the WebUI credentials — a merge that
     drops them loses the user's password."""
