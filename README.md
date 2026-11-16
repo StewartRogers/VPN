@@ -218,7 +218,7 @@ The shell scripts use `./.venv` when it exists and fall back to the system
 ./.venv/bin/python -m pytest -q
 ```
 
-337 tests covering the monitor loop, the kill-switch state machine, leak
+339 tests covering the monitor loop, the kill-switch state machine, leak
 detection, the SSRF guard on `.ovpn` downloads, and the torrent start gate. CI
 runs `flake8 --select=E9,F` and pytest on every push and PR to `master`.
 
