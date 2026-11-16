@@ -356,7 +356,9 @@ describes the opposite of current behaviour: the kill switch is mandatory.
 Live keys: `FAST_CHECK_INTERVAL`, `IP_CHECK_INTERVAL`, `MAX_STARTUP_ATTEMPTS`,
 `MAX_SESSIONS`, `VPN_CLIENT_HOME`, `VPN_LOG_FILE`, `PID_DIR`, `LOG_DIR`,
 `BACKUP_DIR`, `QBT_SAVE_PATH`, `QBT_MAX_ACTIVE_DOWNLOADS`, `QBT_AUTO_REMOVE`,
-`QBT_AUTO_REMOVE_INTERVAL`, `LAN_CIDRS`.
+`QBT_AUTO_REMOVE_INTERVAL`, `LAN_CIDRS`, and `QBT_WEBUI_USER` /
+`QBT_WEBUI_PASS` (web path; the fallback login when the localhost API path is
+refused).
 
 ## Logs
 
@@ -454,7 +456,10 @@ lists `filter=completed` torrents over the WebUI API and removes each with
 via `_qbt_peer_port()`). qBittorrent has two listeners and they have opposite
 requirements:
 
-- `Session\Port` (19806) — peer traffic, **must** be on the tun0 address.
+- `Session\Port` — peer traffic, **must** be on the tun0 address. 19806 in the
+  seed config and the UFW rules, but `qbt_config.py` does not own it, so read
+  the live file: on 2026-11-16 the client was on 19917, with UFW still opening
+  19806.
 - `WebUI\Port` (8080) with `WebUI\Address=*` — the dashboard, **correctly** on
   `0.0.0.0` so it is reachable over the LAN.
 

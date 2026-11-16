@@ -13,8 +13,10 @@ live in `TODO.md`, not here.
   `stop_web.sh`, or `remove_killswitch.sh`.
 - **Fail-closed ordering** — every teardown path stops qBittorrent and OpenVPN
   *before* relaxing the firewall, and every startup path raises the firewall
-  before starting OpenVPN. There is no window where traffic can egress on the
-  ISP link. Both stops are polled to confirmation with a SIGKILL escalation
+  before starting OpenVPN. Applying the kill switch does open a brief gap —
+  `ufw --force reset` disables UFW until `enable` — so `ufw_base.sh` refuses to
+  run while qBittorrent is alive, and nothing that torrents is running during
+  it. Both stops are polled to confirmation with a SIGKILL escalation
   rather than assumed: if qBittorrent outlives both signals the firewall is
   left locked down and the operator is told, since opening UFW under a live
   client is the leak the ordering exists to prevent.
@@ -67,7 +69,8 @@ shutting down.
 Neither monitor reconnects on its own. Both watch for VPN process death, `tun0`
 disappearing, the default route leaving the tunnel, a newly appeared global
 IPv6 address, an exit IP matching the home IP, and three consecutive failed IP
-lookups. On any of those they stop qBittorrent and exit **with the kill switch
+lookups; the web monitor also trips on a kill switch confirmed off or three
+unanswered kill-switch checks in a row. On any of those they stop qBittorrent and exit **with the kill switch
 still active** — the web monitor also stops OpenVPN. The machine goes offline
 rather than silently reconnecting, which is precisely when leaks slip through.
 

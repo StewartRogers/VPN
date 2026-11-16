@@ -65,13 +65,21 @@ qbittorrent-nox
 Then set a permanent password through the WebUI at `http://localhost:8080`.
 
 This project manages `~/.config/qBittorrent/qBittorrent.conf` at start time
-through `qbt_config.py`, which both start paths call. It owns exactly four
-things: the `tun0` bind (by name and live IP), `QBT_SAVE_PATH`, the
-`QBT_MAX_ACTIVE_DOWNLOADS` queue limit, and the listen port 19806 that matches
-the UFW rules. Everything else in that file is left alone — it is a merge, not
-an overwrite, so WebUI credentials, categories and speed limits survive. The
-tracked `qBittorrent.conf` in the repo is only a seed for a first run, when no
-config exists yet.
+through `qbt_config.py`, which both start paths call. It owns a short list of
+keys: the `tun0` bind (by name and live IP), `QBT_SAVE_PATH`, the
+`QBT_MAX_ACTIVE_DOWNLOADS` queue limit, `WebUI\LocalHostAuth=false` (so the web
+app can use the local API without a stored password) and
+`WebUI\ReverseProxySupportEnabled=false` (which keeps that safe). Everything
+else in that file is left alone — it is a merge, not an overwrite, so WebUI
+credentials, categories and speed limits survive. The tracked
+`qBittorrent.conf` in the repo is only a seed for a first run, when no config
+exists yet.
+
+**The peer listen port is not managed.** The UFW rules open 19806 and the seed
+config uses 19806, but if the port is later changed in the WebUI (Tools →
+Options → Connection) the two no longer match and incoming peers are blocked —
+not a leak, just slower torrents. Keep it at 19806, or change `ufw_base.sh` to
+match.
 
 qBittorrent reads this file **once at startup** and rewrites all of it on exit,
 so settings only take effect on the next start — and editing it underneath a
@@ -89,8 +97,10 @@ Get an `.ovpn` file from your provider. Any of these work:
 
 Both paths select the **newest** `.ovpn` in `/etc/openvpn/client/` by mtime.
 Downloads must be HTTPS and are validated: private, loopback and reserved
-addresses are rejected, the resolved IP is pinned for the fetch, and a payload
-with no `remote` line is refused.
+addresses are rejected, and a payload with no `remote` line is refused. The web
+app also pins the resolved IP for the fetch; `startvpn.sh --ovpn-url` checks
+the address but lets `curl` resolve it again, so it is a check rather than a
+pin.
 
 ## 5. Configuration file (optional)
 
@@ -119,7 +129,6 @@ pi ALL=(ALL) NOPASSWD: /bin/rm
 pi ALL=(ALL) NOPASSWD: /bin/chmod
 pi ALL=(ALL) NOPASSWD: /bin/chown
 pi ALL=(ALL) NOPASSWD: /bin/cat /var/log/openvpn.log
-pi ALL=(ALL) NOPASSWD: /bin/cat /etc/openvpn/client/*.ovpn
 
 # Kill switch. Both entries are required:
 #   ufw           - check_killswitch_active() runs 'sudo ufw status verbose'
@@ -146,9 +155,16 @@ Verify:
 
 ```bash
 sudo -n ufw status verbose >/dev/null && echo "ufw: ok" || echo "ufw: MISSING"
-sudo -n bash /home/pi/VPN/ufw_base.sh --help >/dev/null 2>&1 \
-  && echo "scripts: ok" || echo "scripts: check the bash paths above"
+for s in ufw_base.sh ufw_killswitch.sh; do
+  sudo -n -l /bin/bash "/home/pi/VPN/$s" >/dev/null 2>&1 \
+    && echo "$s: ok" || echo "$s: check the bash path above"
+done
 ```
+
+`sudo -l <command>` only asks whether the command is allowed; it does not run
+it. Never test the scripts by running them: `ufw_base.sh` takes no options, so
+even `ufw_base.sh --help` applies the base firewall and removes the kill
+switch.
 
 ## Running it
 
@@ -189,8 +205,11 @@ prompts at all.
 
 Configure it with environment variables or `webapp/.env` — see the Web app
 section of [README.md](README.md). Stop it with `bash stop_web.sh`, which runs
-the same ordered teardown as `stopvpn.sh`; do **not** just kill the Flask
-process, or qBittorrent is orphaned with the firewall left open.
+the same ordered teardown as `stopvpn.sh`. Do **not** just kill the Flask
+process: qBittorrent and OpenVPN keep running with nothing monitoring the
+tunnel, and the DNS and IPv6 restore is skipped, leaving `/etc/resolv.conf`
+locked. (The kill switch stays up, so traffic is still confined to the
+tunnel.)
 
 ## Verifying
 

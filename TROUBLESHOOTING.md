@@ -70,8 +70,11 @@ The web app streams its own log to the browser and keeps it in memory only.
    is not the problem, but a stale one you thought you replaced might be.
 3. **Verify credentials** with your provider. `--auth-nocache` means they are
    never cached, so a bad credential fails every attempt identically.
-4. **Try a different server** — download another `.ovpn`. During the startup
-   retry loop, both paths let you swap the config between attempts.
+4. **Try a different server** — download another `.ovpn` and start again.
+   Neither path swaps the config in the middle of a start: answer `n` at
+   `startvpn.sh`'s `Retry?` prompt and run it again, or press **Cancel &
+   Reset** in the web app (config downloads and uploads are refused while a
+   start is in progress).
 5. **Test the plain internet path** with the kill switch down:
    ```bash
    sudo bash ufw_base.sh
@@ -153,6 +156,9 @@ left active:
 - a global IPv6 address appeared
 - external IP matches the home IP
 - three consecutive failed external-IP lookups
+- the kill switch confirmed off, or three kill-switch checks in a row that UFW
+  did not answer (web monitor only — `checkip.sh` checks the kill switch only
+  at startup)
 
 Read `vpn_logs/latest.log` — the `CRITICAL` line names which one fired. There
 is no `MAX_RECONNECT_ATTEMPTS` setting to raise; it does not exist in this
@@ -202,9 +208,15 @@ Almost always missing sudoers entries. Verify:
 
 ```bash
 sudo -n ufw status verbose >/dev/null && echo "ufw: ok" || echo "ufw: MISSING"
-sudo -n bash /home/pi/VPN/ufw_base.sh --help >/dev/null 2>&1 \
-  && echo "scripts: ok" || echo "scripts: MISSING"
+for s in ufw_base.sh ufw_killswitch.sh; do
+  sudo -n -l /bin/bash "/home/pi/VPN/$s" >/dev/null 2>&1 \
+    && echo "$s: ok" || echo "$s: MISSING"
+done
 ```
+
+`sudo -l` only checks permission. Do not "test" `ufw_base.sh` by running it —
+it takes no options, and any run applies the base firewall, removing the kill
+switch.
 
 The `bash` paths in `/etc/sudoers.d/vpn-webapp` must be the **absolute paths to
 this checkout**. See [INSTALL.md](INSTALL.md).
@@ -245,8 +257,12 @@ sudo ss -tunp | grep qbittorrent    # source addresses should be the tun0 IP
 ip addr show tun0
 ```
 
-The listen port is 19806, matching the UFW rules. If you change one, change the
-other — `qBittorrent.conf` and `ufw_base.sh`.
+The peer listen port must match the UFW rules, which open 19806
+(`ufw_base.sh`). `qbt_config.py` does **not** manage the port, so changing it
+in the WebUI (Tools → Options → Connection) quietly breaks the match: incoming
+peers are then blocked — not a leak, but slower torrents. If `Session\Port`
+above is not 19806, set it back in the WebUI, or change `ufw_base.sh` to
+match.
 
 If the binding is stale after a reconnect (tun0 got a new IP), restart the
 client; the bind is applied at start time from the address live at that moment.

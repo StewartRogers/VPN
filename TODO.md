@@ -3,8 +3,9 @@
 Open items, known gaps, and things deliberately left alone. What is *already
 implemented* is described in `ENHANCEMENTS.md`, not here.
 
-> **Testing status of the `repo-maintenance-2026-09-23` branch:** the Python
-> suite passes on the Pi (248 tests) and every shell script is `bash -n` clean.
+> **Hardware testing status of the 2026-09-23 changes** (merged to master since;
+> at the time the Python suite passed on the Pi with 248 tests and every shell
+> script was `bash -n` clean).
 >
 > **Passed on hardware (RPI5, 2026-09-23):**
 >
@@ -100,9 +101,15 @@ These were left for a later pass.
 
 **qBittorrent config**
 
-- **`qbt_config.py` sets `WebUI\LocalHostAuth=false` on every start**, and it
-  is not in `CLAUDE.md`'s list of owned keys. Any local process gets the API
-  without a password. Only the web path needs it.
+- **`qbt_config.py` sets `WebUI\LocalHostAuth=false` on every start.** Any
+  local process gets the API without a password. Only the web path needs it.
+  (Listed in `CLAUDE.md`'s owned keys since 2026-11-16, and guarded by
+  `WebUI\ReverseProxySupportEnabled=false` against `X-Forwarded-For`
+  spoofing.)
+- **`qbt_config.py` does not own `Session\Port`.** On 2026-11-16 the live
+  client was listening on 19917 while `ufw_base.sh` opens 19806, so incoming
+  peers were blocked. Not a leak. Either own the port in `qbt_config.py` or
+  have `ufw_base.sh` read it from the config.
 - **`qbt_config.py` prints "bound to tun0" even when the write failed**, and
   both callers log it as applied.
 - **`--max-active` accepts 0 or negatives.**
@@ -126,11 +133,10 @@ These were left for a later pass.
 
 **Docs**
 
-- `README.md`, `ENHANCEMENTS.md` and `TROUBLESHOOTING.md` still describe the
-  config-file tunnel bind and port 19806 as working; `CLAUDE.md` says neither
-  is applied. `INSTALL.md`'s sudoers template is effectively full root
-  (unrestricted `chmod`/`chown`/`mv`/`rm`/`sysctl`). `QBT_WEBUI_USER`/
-  `QBT_WEBUI_PASS` are undocumented as live keys.
+- `INSTALL.md`'s sudoers template is effectively full root (unrestricted
+  `chmod`/`chown`/`mv`/`rm`/`sysctl`). (The rest of this item — the
+  config-file bind, port 19806 and the undocumented `QBT_WEBUI_USER`/
+  `QBT_WEBUI_PASS` — was corrected in the 2026-11-16 docs pass.)
 
 ---
 
@@ -220,10 +226,12 @@ branch stays testable. Nothing here is a leak on its own.
 
 **Path drift (add to the list below)**
 
-- **The CLI path never applies or verifies the tunnel bind.**
-  `checkip.sh:255-272` calls `qbt_config.py` only, and the config file provably
-  cannot bind the client — `apply_tunnel_bind()`/`verify_tunnel_bind()` are
-  web-path only. In the CLI flow the kill switch is the sole layer.
+- **The CLI path never verifies the tunnel bind.** `checkip.sh` calls
+  `qbt_config.py` only. qBittorrent 5.1.0 honours the file's bind keys, so the
+  client is bound, but nothing reads the bind back the way
+  `apply_tunnel_bind()`/`verify_tunnel_bind()` do on the web path — an older
+  client or a downgrade would go unnoticed (on 4.2.5 the kill switch was the
+  sole layer).
 
 **Infrastructure**
 
@@ -272,7 +280,7 @@ never decodes Brotli; `apt upgrade` once Debian ships the fix. The Python
 a rotating pool, gets one pinned IP. If the provider hands OpenVPN a different
 address the connection is denied until the kill switch is re-applied.
 
-### 2. DNS narrowing (`ufw_killswitch.sh:94-95`)
+### 2. DNS narrowing (`ufw_killswitch.sh:97-98`)
 
 Plaintext DNS to any server is still allowed out over the physical NIC, so the
 ISP still sees every tracker hostname. Commit `a6c29db` shows narrowing this
@@ -353,8 +361,9 @@ config step is now *shared* rather than mirrored - both paths call
 
 Still differing:
 
-- The web path disables IPv6 and rewrites `/etc/resolv.conf`; the shell path
-  only *checks* IPv6 and leaves DNS alone.
+- Both paths disable IPv6 at start, but only the web path re-enables it on
+  stop — `stopvpn.sh` never does (only `remove_killswitch.sh` does). The web
+  path also rewrites `/etc/resolv.conf`; the shell path leaves DNS alone.
 - The web path fail-stops OpenVPN too; `checkip.sh` leaves it running.
 - The web path auto-removes finished torrents (`QBT_AUTO_REMOVE`); the CLI
   path has no equivalent.
@@ -374,7 +383,7 @@ Still differing:
 
 ---
 
-## Resolved on this branch
+## Resolved
 
 ### From the 2026-11-11 web retry review
 

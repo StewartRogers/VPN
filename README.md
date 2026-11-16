@@ -31,7 +31,8 @@ Neither monitor reconnects on its own. On VPN process death, `tun0` going away,
 the default route leaving the tunnel, a new global IPv6 address, an exit IP
 matching your home IP, or three consecutive failed IP lookups, the monitor
 **stops qBittorrent and exits with the kill switch still active**. The web
-monitor also stops OpenVPN. You are offline until you intervene — deliberately,
+monitor also stops OpenVPN, and additionally trips on a kill switch confirmed
+off or three kill-switch checks in a row that UFW did not answer. You are offline until you intervene — deliberately,
 because a silent reconnect loop is exactly when leaks happen.
 
 The web UI has a **Force Reconnect** button for a manual retry. There is no
@@ -149,10 +150,13 @@ teardown as `stopvpn.sh` (torrents → OpenVPN → app → DNS/IPv6 → UFW last
 | `vpn_active.py` | One-shot leak check used by `checkip.sh` |
 | `qbt_config.py` | Applies the tun0 bind, save path and download limit to qBittorrent's config (both paths) |
 | `ufw_base.sh` | Base UFW state; `UFW_OUT_POLICY` selects the outgoing default |
-| `ufw_killswitch.sh` | Kill switch — calls `ufw_base.sh deny`, then allows the tunnel and LAN |
+| `ufw_killswitch.sh` | Kill switch — runs `ufw_base.sh` with `UFW_OUT_POLICY=deny`, then allows the VPN server, the tunnel, DNS and the LAN |
 | `remove_killswitch.sh` | Emergency recovery if the kill switch locks you out |
 | `start_web.sh` / `stop_web.sh` | Web app lifecycle |
-| `webapp/` | Flask dashboard (`app.py`, `monitor.py`, `organizer.py`) |
+| `webapp/` | Flask dashboard (`app.py`, `monitor.py`, `organizer.py`, `torrent_cleanup.py`) |
+| `organize.py` | CLI file organizer, offered by `stopvpn.sh` |
+| `setup_venv.sh` | Creates `./.venv` from `webapp/requirements.txt` |
+| `py_env.sh` | Sourced by the shell scripts to pick the Python interpreter |
 | `vpn_config.conf.example` | Template for optional settings — copy to `vpn_config.conf` (gitignored) or `~/.vpn_config.conf` to use |
 
 The firewall is **UFW exclusively** — `ufw_base.sh` and `ufw_killswitch.sh` are
@@ -184,6 +188,11 @@ QBT_MAX_ACTIVE_DOWNLOADS=5      # torrents downloading at once; unset = leave
 QBT_AUTO_REMOVE=false           # web app: remove finished torrents from
                                 # qBittorrent (files always kept, no seeding)
 QBT_AUTO_REMOVE_INTERVAL=30     # seconds between checks, minimum 5
+
+# Web app: qBittorrent WebUI login, used only if the passwordless localhost
+# path (WebUI\LocalHostAuth=false, set by qbt_config.py) is refused.
+# QBT_WEBUI_USER="admin"
+# QBT_WEBUI_PASS="..."
 
 # LAN ranges the kill switch allows out on the physical NIC.
 # Default is all of RFC1918; narrow it if you want.
