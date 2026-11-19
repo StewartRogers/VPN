@@ -1274,6 +1274,19 @@ class TestStartRetryLoop:
         assert m._openvpn_start.call_count == 1
         m._reset_after_failed_start.assert_called_once()
 
+    def test_server_refusal_resets_and_does_not_retry(self, no_retry_delay):
+        """Every attempt dials the same .ovpn; a server that said AUTH_FAILED
+        says it again, and the extra tries can get the home IP rate-limited."""
+        m = _retry_monitor([])
+
+        def attempt():
+            m._start_refused = True
+            return False
+        m._openvpn_start = MagicMock(side_effect=attempt)
+        assert m._start_with_retries() is False
+        assert m._openvpn_start.call_count == 1
+        m._reset_after_failed_start.assert_called_once()
+
     def test_missing_config_does_not_attempt_or_reset(self, no_retry_delay):
         m = _retry_monitor([False])
         m._start_blocker = MagicMock(return_value="no .ovpn config file")
@@ -1451,6 +1464,54 @@ class TestOpenvpnStartLeavesCleanupToCaller:
             assert m._openvpn_start() is False
         # Stopped at the next poll rather than running out the full wait.
         assert m.check_vpn_interface.call_count == 1
+
+    def test_openvpn_exit_ends_the_wait_at_once(self, tmp_path, no_retry_delay):
+        """2026-11-18: OpenVPN quit at 19:51:07, the wait ran on to 19:51:35."""
+        m, ovpn, run = _openvpn_start_monitor(tmp_path)
+        m.probe_openvpn_process = MagicMock(return_value=False)
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=run):
+            assert m._openvpn_start() is False
+        m.check_vpn_interface.assert_not_called()
+        m.teardown_killswitch.assert_not_called()
+        assert m._start_refused is False
+
+    def test_unanswered_process_probe_keeps_waiting(self, tmp_path, no_retry_delay):
+        """'Could not ask' is not 'exited' — same rule as the fast-tier probes."""
+        m, ovpn, run = _openvpn_start_monitor(tmp_path)
+        m.probe_openvpn_process = MagicMock(return_value=None)
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=run):
+            assert m._openvpn_start() is False
+        assert m.check_vpn_interface.call_count == mon.TUN0_POLL_COUNT
+
+    def test_auth_failed_ends_the_wait_and_flags_a_refusal(self, tmp_path, no_retry_delay):
+        m, ovpn, _ = _openvpn_start_monitor(tmp_path)
+        # Process still alive (auth-retry in the .ovpn): the log line alone
+        # must be enough.
+        m.probe_openvpn_process = MagicMock(return_value=True)
+
+        def run(cmd, **kw):
+            p = _proc(0)
+            if kw.get("text"):
+                p.stdout = ("PUSH_REQUEST\n"
+                            "AUTH: Received control message: AUTH_FAILED\n")
+            return p
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=run):
+            assert m._openvpn_start() is False
+        assert m._start_refused is True
+        m.check_vpn_interface.assert_not_called()
+        m.teardown_killswitch.assert_not_called()
+
+    def test_refusal_flag_does_not_leak_into_the_next_call(self, tmp_path, no_retry_delay):
+        m, ovpn, run = _openvpn_start_monitor(tmp_path)
+        m._start_refused = True          # left over from an earlier attempt
+        with patch("glob.glob", return_value=[ovpn]), \
+             patch("subprocess.run", side_effect=run):
+            assert m._openvpn_start() is False
+        assert m._start_refused is False
+        assert m.check_vpn_interface.call_count == mon.TUN0_POLL_COUNT
 
     def test_cancel_before_launch_never_starts_openvpn(self, tmp_path, no_retry_delay):
         m, ovpn, run = _openvpn_start_monitor(tmp_path)

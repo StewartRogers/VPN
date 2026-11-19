@@ -285,6 +285,9 @@ class VPNMonitor:
         self._thread = None
         self._stop_event = threading.Event()
         self._retry_cancel = threading.Event()
+        # Set by _openvpn_start() when the server answers AUTH_FAILED;
+        # _start_with_retries() reads it to stop retrying the same server.
+        self._start_refused = False
 
         # Shared kill-switch probe result: (monotonic_timestamp, state).
         # The lock is held across the subprocess call on purpose — a second
@@ -977,7 +980,11 @@ class VPNMonitor:
 
         Checks self._retry_cancel between steps and on every tun0 poll, so a
         cancel abandons the attempt within TUN0_POLL_INTERVAL seconds.
+
+        Ends the tun0 wait early when OpenVPN is confirmed to have exited, or
+        the server answered AUTH_FAILED (then self._start_refused is True).
         """
+        self._start_refused = False
 
         # 1. Locate config FIRST — needed by kill switch before we stop existing openvpn
         # Newest first, matching startvpn.sh. These used to disagree — this
@@ -1057,6 +1064,9 @@ class VPNMonitor:
             if self._retry_cancel.wait(TUN0_POLL_INTERVAL):
                 self.log("Start cancelled — abandoning this attempt", level="WARNING")
                 return False
+            # Probe *before* reading the log, so every line written before an
+            # exit is already on disk when we read it.
+            alive = self.probe_openvpn_process()
             try:
                 result = subprocess.run(
                     ["sudo", "cat", "/var/log/openvpn.log"],
@@ -1065,9 +1075,25 @@ class VPNMonitor:
                 lines = [l for l in result.stdout.splitlines() if l.strip()]
                 for line in lines[last_log_lines:]:
                     self._log_openvpn(line)
+                    if "AUTH_FAILED" in line:
+                        self._start_refused = True
                 last_log_lines = len(lines)
             except Exception:
                 pass
+            # The server answering AUTH_FAILED is a refusal, not a slow start:
+            # OpenVPN exits at once (or, with auth-retry in the .ovpn, asks
+            # again forever). Waiting out the rest of TUN0_POLL_COUNT used to
+            # burn ~28s per attempt, then retry the same server.
+            if self._start_refused:
+                self.log("The server refused the connection (AUTH_FAILED)",
+                         source="OPENVPN", level="ERROR")
+                return False
+            # Only a *confirmed* exit ends the attempt early. An unanswered
+            # probe (None) says nothing — keep polling, as before.
+            if alive is False:
+                self.log("OpenVPN exited before tun0 came up — check OpenVPN "
+                         "log lines above", source="OPENVPN", level="ERROR")
+                return False
             # tun0 appearing is not the same as the tunnel working. Require the
             # default route to have moved onto it, and require the exit IP to
             # differ from the home IP, before reporting success — otherwise
@@ -1347,12 +1373,19 @@ class VPNMonitor:
                 self.log(f"Retrying VPN connection (attempt {attempt} of {max_attempts})...")
             ok = self._openvpn_start()
             cancelled = self._retry_cancel.is_set()
+            refused = self._start_refused
             if ok and not cancelled:
                 self.log("VPN is up. Start the monitor (step 3), then qBittorrent (step 4).")
                 return True
 
             if cancelled:
                 self.log("VPN start cancelled by user", level="WARNING")
+            elif refused:
+                # Every attempt dials the same .ovpn, so the same server would
+                # refuse again — and repeated tries can get the home IP
+                # rate-limited by VPN Gate.
+                self.log("Not retrying — the server refused the connection, and "
+                         "every retry dials the same server.", level="ERROR")
             elif attempt < max_attempts:
                 self.log(f"Connection attempt {attempt} of {max_attempts} failed",
                          level="WARNING")
@@ -1366,7 +1399,7 @@ class VPNMonitor:
                          "the kill switch stays ACTIVE.", level="CRITICAL")
                 return False
 
-            if cancelled or attempt == max_attempts:
+            if cancelled or refused or attempt == max_attempts:
                 self.log("Ready to start over — download or upload a new .ovpn "
                          "if needed, then press Start VPN.")
                 return False

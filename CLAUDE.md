@@ -36,7 +36,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 339 tests
+.venv/bin/python -m pytest -q     # 344 tests
 .venv/bin/pip-audit               # known-CVE scan of the venv (CI audits requirements.txt)
 ```
 
@@ -149,6 +149,15 @@ stray cancel cannot abort a later start.
 
 Problems waiting cannot fix — no `.ovpn`, qBittorrent running — end the loop
 via `_start_blocker()` before an attempt, with nothing to reset.
+
+The tun0 wait ends early on two things, both checked every poll. A
+**confirmed** OpenVPN exit (`probe_openvpn_process()` is False) fails the
+attempt at once; an unanswered probe keeps waiting, same rule as the fast tier.
+An **`AUTH_FAILED`** line in the OpenVPN log sets `_start_refused`, fails the
+attempt, and `_start_with_retries()` resets and stops instead of retrying:
+every attempt dials the same `.ovpn`, so the same server refuses again, and
+the extra tries risk VPN Gate rate-limiting the home IP. Before 2026-11-18 a
+refused or crashed OpenVPN sat out the full ~28s wait, then retried.
 
 ### Ordering invariants
 
