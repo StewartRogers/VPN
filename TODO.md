@@ -92,21 +92,6 @@ These were left for a later pass.
   IPv4 check `/api/configure` does; a hostname never equals the exit IP, so
   every leak check passes.
 
-- **OpenVPN does not verify the server certificate.** Seen on hardware
-  2026-09-23: `WARNING: No server certificate verification method has been
-  enabled` with a VPN Gate `.ovpn`. Worse than first written: the `.ovpn`
-  trusts ISRG Root X1 alone, so *any* Let's Encrypt certificate passes, and
-  `--remote-cert-tls server` alone would not change that. **Fix on branch
-  `openvpn-hardening` (2026-11-18), awaiting hardware test:**
-  `--remote-cert-tls server --verify-x509-name opengw.net name` on both
-  paths. Limit: every VPN Gate operator presumably holds the same
-  `opengw.net` certificate, so it keeps out strangers, not VPN Gate peers.
-- **OpenVPN runs as root for the whole session.** Same branch adds
-  `--user nobody --group nogroup`. Expected side effect: on exit OpenVPN
-  cannot delete its routes and logs `route delete` errors; tun0 and its routes
-  vanish with the process, and only a harmless host route to the server stays
-  until reboot. Test: connect, confirm `ps -o user= -C openvpn` says `nobody`,
-  Stop VPN, confirm `ip route` has no tun0 entries and the next start works.
 
 **qBittorrent config**
 
@@ -393,6 +378,24 @@ Still differing:
 ---
 
 ## Resolved
+
+### OpenVPN launch hardening (2026-11-18, passed on hardware the same night)
+
+- **OpenVPN did not verify the server certificate.** The VPN Gate `.ovpn`
+  trusts ISRG Root X1 alone, so *any* Let's Encrypt certificate passed —
+  worse than the 2026-09-23 note said, and `--remote-cert-tls server` alone
+  would not have changed that. Both paths now add
+  `--remote-cert-tls server --verify-x509-name opengw.net name`; the log shows
+  `VERIFY X509NAME OK: CN=opengw.net`. Limit: every VPN Gate operator
+  presumably holds that certificate, so it keeps out strangers, not VPN Gate
+  peers.
+- **OpenVPN ran as root for the whole session.** Both paths add
+  `--user nobody --group nogroup`: `ps` shows `nobody` once the tunnel is up.
+  Stop VPN removed every route cleanly (OpenVPN 2.6 keeps `CAP_NET_ADMIN`),
+  so the route-delete errors predicted beforehand never appeared.
+- **A pushed `ping-restart` replaced `--ping-exit`** (on master first, same
+  night). Log shows `Pushed option removed by filter: 'ping-restart 10'` and
+  `Timers: ping 3, ping-exit 60`.
 
 ### From the 2026-11-11 web retry review
 

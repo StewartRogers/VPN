@@ -692,10 +692,12 @@ app user can read — the user chose that over an allowlist. It is still behind
   It stops strangers, not other VPN Gate operators, who presumably hold the
   same certificate.
 - `--user nobody --group nogroup` drops root after setup, on **both** paths:
-  these are volunteer servers. On exit OpenVPN can no longer delete its routes
-  and logs `route delete` errors; that is expected. tun0 and every route on it
-  vanish with the process; a host route to the server via the LAN gateway
-  stays until reboot, which is harmless.
+  these are volunteer servers. OpenVPN 2.6 keeps `CAP_NET_ADMIN` across the
+  drop, so it still removes its routes, tun0 address and host route on exit —
+  confirmed on hardware 2026-11-18: no errors, and `ip route` back to the LAN
+  default only. The drop is delayed until after `PUSH_REPLY` (`UID set to
+  nobody` follows the push in the log); that is OpenVPN's normal behaviour for
+  a pulling client.
 - Leak detection in both paths rests on `external_ip != home_ip`. If the ISP
   rotates the home address mid-session, neither monitor notices a later drop.
   Fixing that properly means asserting the exit IP *matches the VPN server*, a
