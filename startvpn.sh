@@ -713,9 +713,13 @@ for ATTEMPT in $(seq 1 "$MAX_STARTUP_ATTEMPTS"); do
     # .ovpn sets: an `up`/`route-up` line in a downloaded config would
     # otherwise run as root. The web path has always passed it; this one lost
     # it in cf7ca2d. See CLAUDE.md - it does not break the tunnel.
+    # --pull-filter ignore ping-restart keeps --ping-exit 60 in charge: VPN
+    # Gate servers push "ping-restart 10", which otherwise replaces it and
+    # makes OpenVPN reconnect silently instead of exiting. See CLAUDE.md.
     sudo openvpn \
         --config "$XCONFIGFILE" \
         --script-security 0 \
+        --pull-filter ignore ping-restart \
         --log "$XVPNLOGFILE" \
         --daemon \
         --ping 10 \

@@ -1553,3 +1553,34 @@ class TestQbittorrentProbeMatchesExactName:
                    side_effect=lambda c, **k: seen.append(c) or _proc(1)):
             assert m.probe_qbittorrent() is False
         assert seen == [["pgrep", "-x", "qbittorrent-nox"]]
+
+
+def _launch_calls(tmp_path):
+    """Every subprocess call one failed _openvpn_start() makes."""
+    m, ovpn, run = _openvpn_start_monitor(tmp_path)
+    m.probe_openvpn_process = MagicMock(return_value=False)   # end the wait
+    calls = []
+    with patch("glob.glob", return_value=[ovpn]), \
+         patch("subprocess.run", side_effect=lambda c, **k: calls.append(c) or run(c, **k)):
+        m._openvpn_start()
+    return calls
+
+
+class TestOpenvpnCommand:
+    def _daemon_cmd(self, tmp_path):
+        return next(c for c in _launch_calls(tmp_path) if "--daemon" in c)
+
+    def test_pushed_ping_restart_is_filtered_after_config(self, tmp_path, no_retry_delay):
+        """VPN Gate pushes 'ping-restart 10', which replaced --ping-exit 60 and
+        made OpenVPN reconnect silently instead of exiting (2026-11-18)."""
+        cmd = self._daemon_cmd(tmp_path)
+        i = cmd.index("--pull-filter")
+        assert cmd[i:i + 3] == ["--pull-filter", "ignore", "ping-restart"]
+        assert i > cmd.index("--config")
+        assert cmd[cmd.index("--ping-exit") + 1] == "60"
+
+    def test_existing_openvpn_is_stopped_by_exact_name(self, tmp_path, no_retry_delay):
+        """`pkill -f openvpn` also hit e.g. `tail -f /var/log/openvpn.log`."""
+        calls = _launch_calls(tmp_path)
+        assert ["sudo", "pkill", "-x", "openvpn"] in calls
+        assert not any("pkill" in c and "-f" in c and "openvpn" in c for c in calls)

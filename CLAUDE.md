@@ -36,7 +36,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 345 tests
+.venv/bin/python -m pytest -q     # 347 tests
 .venv/bin/pip-audit               # known-CVE scan of the venv (CI audits requirements.txt)
 ```
 
@@ -673,6 +673,16 @@ app user can read — the user chose that over an allowlist. It is still behind
   tunnel; the confirmed-working tree still contains it, so the theory does not
   hold. On OpenVPN 2.6 interface setup goes through netlink, not external `ip`
   calls. Keep it.
+- `--pull-filter ignore ping-restart` is what makes `--ping-exit 60` real, on
+  **both** paths. VPN Gate servers push `ping 3, ping-restart 10`; OpenVPN
+  keeps only one of `ping-exit`/`ping-restart`, and the pushed one arrives
+  last. Without the filter OpenVPN reconnects silently after 10s of silence,
+  and the `.ovpn`'s `persist-tun` holds tun0 and its route up throughout, so
+  no fast-tier check sees it — the reconnect loop the fail-stop design rules
+  out, happening underneath it. Found in a `PUSH_REPLY` on 2026-11-18.
+- The web path stops OpenVPN with `pkill -x openvpn`, as the CLI always did.
+  `pkill -f openvpn` also signalled anything mentioning it, e.g.
+  `tail -f /var/log/openvpn.log` or an editor on a `.ovpn`.
 - Leak detection in both paths rests on `external_ip != home_ip`. If the ISP
   rotates the home address mid-session, neither monitor notices a later drop.
   Fixing that properly means asserting the exit IP *matches the VPN server*, a

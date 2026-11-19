@@ -1025,7 +1025,7 @@ class VPNMonitor:
 
         # 3. Stop existing OpenVPN — kill switch is now in place
         self.log("Stopping any existing OpenVPN process...")
-        subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
+        subprocess.run(["sudo", "pkill", "-x", "openvpn"], capture_output=True)
         if self._retry_cancel.wait(2):
             self.log("Start cancelled before OpenVPN was launched", level="WARNING")
             return False
@@ -1035,6 +1035,12 @@ class VPNMonitor:
         self.setup_dns()
 
         # 5. Start OpenVPN daemon
+        # --pull-filter ignore ping-restart: VPN Gate servers push
+        # "ping-restart 10", and OpenVPN keeps only one of ping-restart /
+        # ping-exit — the pushed one arrives last and wins. That turned
+        # --ping-exit 60 into a silent reconnect (with persist-tun holding
+        # tun0 and its route up throughout, so no fast-tier check noticed).
+        # Seen in the PUSH_REPLY on 2026-11-18. Keep it; see CLAUDE.md.
         self.log("Starting OpenVPN daemon...", source="OPENVPN")
         result = subprocess.run(
             [
@@ -1043,6 +1049,7 @@ class VPNMonitor:
                 "--log", "/var/log/openvpn.log",
                 "--daemon",
                 "--script-security", "0",
+                "--pull-filter", "ignore", "ping-restart",
                 "--ping", "10",
                 "--ping-exit", "60",
                 "--auth-nocache",
@@ -1456,14 +1463,14 @@ class VPNMonitor:
             return False
 
         self.log("Stopping OpenVPN...", source="OPENVPN")
-        subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
+        subprocess.run(["sudo", "pkill", "-x", "openvpn"], capture_output=True)
         for _ in range(10):
             if not self.check_openvpn_process():
                 break
             time.sleep(0.5)
         else:
             self.log("OpenVPN still running - sending SIGKILL", source="OPENVPN", level="WARNING")
-            subprocess.run(["sudo", "pkill", "-9", "-f", "openvpn"], capture_output=True)
+            subprocess.run(["sudo", "pkill", "-9", "-x", "openvpn"], capture_output=True)
             time.sleep(0.5)
         if self.check_openvpn_process():
             # Step 2 did not complete, so step 3 does not start.
@@ -1761,7 +1768,7 @@ class VPNMonitor:
                 return
 
             # Step 2: OpenVPN, now that no client can be holding the tunnel.
-            subprocess.run(["sudo", "pkill", "-f", "openvpn"], capture_output=True)
+            subprocess.run(["sudo", "pkill", "-x", "openvpn"], capture_output=True)
             self.log("OpenVPN stopped — use Stop VPN to restore network access", source="OPENVPN")
         else:
             # External exit (Stop Monitor or Stop All) — caller handles teardown
