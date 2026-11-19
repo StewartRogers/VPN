@@ -1584,3 +1584,17 @@ class TestOpenvpnCommand:
         calls = _launch_calls(tmp_path)
         assert ["sudo", "pkill", "-x", "openvpn"] in calls
         assert not any("pkill" in c and "-f" in c and "openvpn" in c for c in calls)
+
+    def test_server_certificate_name_is_checked_after_config(self, tmp_path, no_retry_delay):
+        """The .ovpn trusts ISRG Root X1 alone: without a name check any Let's
+        Encrypt certificate would pass as the server."""
+        cmd = self._daemon_cmd(tmp_path)
+        i = cmd.index("--verify-x509-name")
+        assert cmd[i:i + 3] == ["--verify-x509-name", "opengw.net", "name"]
+        assert cmd[cmd.index("--remote-cert-tls") + 1] == "server"
+        assert i > cmd.index("--config")
+
+    def test_openvpn_drops_root(self, tmp_path, no_retry_delay):
+        cmd = self._daemon_cmd(tmp_path)
+        assert cmd[cmd.index("--user") + 1] == "nobody"
+        assert cmd[cmd.index("--group") + 1] == "nogroup"

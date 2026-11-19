@@ -1041,6 +1041,16 @@ class VPNMonitor:
         # --ping-exit 60 into a silent reconnect (with persist-tun holding
         # tun0 and its route up throughout, so no fast-tier check noticed).
         # Seen in the PUSH_REPLY on 2026-11-18. Keep it; see CLAUDE.md.
+        #
+        # --verify-x509-name: the .ovpn trusts ISRG Root X1 alone, so without
+        # a name check any Let's Encrypt certificate for any domain passes as
+        # the server. Every VPN Gate server presents CN=opengw.net.
+        # --remote-cert-tls server on its own would not close that — every
+        # Let's Encrypt certificate is a server certificate.
+        #
+        # --user/--group: drop root once the tunnel is set up. These are
+        # volunteer servers; a bug one of them exploits should not get root.
+        # The .ovpn's persist-key/persist-tun are what make this workable.
         self.log("Starting OpenVPN daemon...", source="OPENVPN")
         result = subprocess.run(
             [
@@ -1050,6 +1060,10 @@ class VPNMonitor:
                 "--daemon",
                 "--script-security", "0",
                 "--pull-filter", "ignore", "ping-restart",
+                "--remote-cert-tls", "server",
+                "--verify-x509-name", "opengw.net", "name",
+                "--user", "nobody",
+                "--group", "nogroup",
                 "--ping", "10",
                 "--ping-exit", "60",
                 "--auth-nocache",

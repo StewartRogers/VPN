@@ -36,7 +36,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 347 tests
+.venv/bin/python -m pytest -q     # 349 tests
 .venv/bin/pip-audit               # known-CVE scan of the venv (CI audits requirements.txt)
 ```
 
@@ -683,6 +683,19 @@ app user can read — the user chose that over an allowlist. It is still behind
 - The web path stops OpenVPN with `pkill -x openvpn`, as the CLI always did.
   `pkill -f openvpn` also signalled anything mentioning it, e.g.
   `tail -f /var/log/openvpn.log` or an editor on a `.ovpn`.
+- `--remote-cert-tls server --verify-x509-name opengw.net name`, on **both**
+  paths. A VPN Gate `.ovpn` trusts ISRG Root X1 alone, so without the name
+  check any Let's Encrypt certificate for any domain passes as the server;
+  `--remote-cert-tls` by itself does not help, since every Let's Encrypt
+  certificate is a server certificate. Use the exact `name` form, never
+  `name-prefix` — `opengw.net.attacker.example` is one free certificate away.
+  It stops strangers, not other VPN Gate operators, who presumably hold the
+  same certificate.
+- `--user nobody --group nogroup` drops root after setup, on **both** paths:
+  these are volunteer servers. On exit OpenVPN can no longer delete its routes
+  and logs `route delete` errors; that is expected. tun0 and every route on it
+  vanish with the process; a host route to the server via the LAN gateway
+  stays until reboot, which is harmless.
 - Leak detection in both paths rests on `external_ip != home_ip`. If the ISP
   rotates the home address mid-session, neither monitor notices a later drop.
   Fixing that properly means asserting the exit IP *matches the VPN server*, a

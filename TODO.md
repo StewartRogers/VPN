@@ -94,10 +94,19 @@ These were left for a later pass.
 
 - **OpenVPN does not verify the server certificate.** Seen on hardware
   2026-09-23: `WARNING: No server certificate verification method has been
-  enabled` with a VPN Gate `.ovpn`. Nothing checks that the server's
-  certificate belongs to a server, which leaves room for a man-in-the-middle.
-  Add `--remote-cert-tls server` after `--config` in both `startvpn.sh` and
-  `_openvpn_start()`, then test that VPN Gate servers still connect.
+  enabled` with a VPN Gate `.ovpn`. Worse than first written: the `.ovpn`
+  trusts ISRG Root X1 alone, so *any* Let's Encrypt certificate passes, and
+  `--remote-cert-tls server` alone would not change that. **Fix on branch
+  `openvpn-hardening` (2026-11-18), awaiting hardware test:**
+  `--remote-cert-tls server --verify-x509-name opengw.net name` on both
+  paths. Limit: every VPN Gate operator presumably holds the same
+  `opengw.net` certificate, so it keeps out strangers, not VPN Gate peers.
+- **OpenVPN runs as root for the whole session.** Same branch adds
+  `--user nobody --group nogroup`. Expected side effect: on exit OpenVPN
+  cannot delete its routes and logs `route delete` errors; tun0 and its routes
+  vanish with the process, and only a harmless host route to the server stays
+  until reboot. Test: connect, confirm `ps -o user= -C openvpn` says `nobody`,
+  Stop VPN, confirm `ip route` has no tun0 entries and the next start works.
 
 **qBittorrent config**
 

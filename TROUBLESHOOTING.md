@@ -70,6 +70,15 @@ The web app streams its own log to the browser and keeps it in memory only.
    is not the problem, but a stale one you thought you replaced might be.
 3. **Verify credentials** with your provider. `--auth-nocache` means they are
    never cached, so a bad credential fails every attempt identically.
+   Two lines that mean "this server, not your setup":
+   - `AUTH: Received control message: AUTH_FAILED` — the server refused you.
+     The web app stops retrying at once (every retry dials the same server).
+     Several VPN Gate servers in a row doing it can mean you are being
+     rate-limited; wait a few minutes before the next one.
+   - `VERIFY X509NAME ERROR` — the server's certificate is not the
+     `opengw.net` one VPN Gate servers present. Both paths refuse it on
+     purpose (`--verify-x509-name`); do not remove the check, pick another
+     server.
 4. **Try a different server** — download another `.ovpn` and start again.
    Neither path swaps the config in the middle of a start: answer `n` at
    `startvpn.sh`'s `Retry?` prompt and run it again, or press **Cancel &

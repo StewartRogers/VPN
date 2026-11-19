@@ -716,10 +716,17 @@ for ATTEMPT in $(seq 1 "$MAX_STARTUP_ATTEMPTS"); do
     # --pull-filter ignore ping-restart keeps --ping-exit 60 in charge: VPN
     # Gate servers push "ping-restart 10", which otherwise replaces it and
     # makes OpenVPN reconnect silently instead of exiting. See CLAUDE.md.
+    # --verify-x509-name: the .ovpn trusts ISRG Root X1 alone, so without it
+    # any Let's Encrypt certificate passes as the server; VPN Gate servers
+    # present CN=opengw.net. --user/--group drop root after setup.
     sudo openvpn \
         --config "$XCONFIGFILE" \
         --script-security 0 \
         --pull-filter ignore ping-restart \
+        --remote-cert-tls server \
+        --verify-x509-name opengw.net name \
+        --user nobody \
+        --group nogroup \
         --log "$XVPNLOGFILE" \
         --daemon \
         --ping 10 \
