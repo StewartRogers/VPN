@@ -305,7 +305,7 @@ def configured_max_active():
 def qbittorrent_running():
     import subprocess
     try:
-        return subprocess.run(["pgrep", "-f", "qbittorrent-nox"],
+        return subprocess.run(["pgrep", "-x", "qbittorrent-nox"],
                               capture_output=True, timeout=5).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False

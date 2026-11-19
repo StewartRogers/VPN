@@ -507,7 +507,7 @@ class TestStopQbittorrent:
         with patch("subprocess.run") as run:
             assert m.stop_qbittorrent() is True
         signals = [c.args[0] for c in run.call_args_list]
-        assert signals == [["sudo", "pkill", "-f", "qbittorrent-nox"]]
+        assert signals == [["sudo", "pkill", "-x", "qbittorrent-nox"]]
         assert m.status["qbittorrent"] is False
 
     def test_urgent_path_sends_sigkill_immediately(self):
@@ -518,7 +518,7 @@ class TestStopQbittorrent:
         with patch("subprocess.run") as run:
             assert m.stop_qbittorrent(urgent=True) is True
         signals = [c.args[0] for c in run.call_args_list]
-        assert signals == [["sudo", "pkill", "-9", "-f", "qbittorrent-nox"]]
+        assert signals == [["sudo", "pkill", "-9", "-x", "qbittorrent-nox"]]
 
     def test_graceful_path_escalates_to_sigkill(self):
         m = make_monitor()
@@ -528,8 +528,8 @@ class TestStopQbittorrent:
             assert m.stop_qbittorrent() is False
         signals = [c.args[0] for c in run.call_args_list]
         assert signals == [
-            ["sudo", "pkill", "-f", "qbittorrent-nox"],
-            ["sudo", "pkill", "-9", "-f", "qbittorrent-nox"],
+            ["sudo", "pkill", "-x", "qbittorrent-nox"],
+            ["sudo", "pkill", "-9", "-x", "qbittorrent-nox"],
         ]
 
     def test_reports_failure_and_does_not_claim_stopped(self):
@@ -553,7 +553,7 @@ class TestStopQbittorrent:
         with patch("subprocess.run") as run, patch("time.sleep"):
             assert m.stop_qbittorrent() is True
         signals = [c.args[0] for c in run.call_args_list]
-        assert ["sudo", "pkill", "-9", "-f", "qbittorrent-nox"] not in signals
+        assert ["sudo", "pkill", "-9", "-x", "qbittorrent-nox"] not in signals
 
 
 class TestTeardownGating:
@@ -1541,3 +1541,15 @@ class TestReconnectCleanup:
         m._reset_after_failed_start = MagicMock(return_value=True)
         m.attempt_reconnect()
         assert seen == [False]
+
+
+class TestQbittorrentProbeMatchesExactName:
+    def test_probe_uses_exact_process_name(self):
+        """2026-11-18: `pgrep -f` matched a command line that merely mentioned
+        qbittorrent-nox and blocked a VPN start with no client running."""
+        m = make_monitor()
+        seen = []
+        with patch("subprocess.run",
+                   side_effect=lambda c, **k: seen.append(c) or _proc(1)):
+            assert m.probe_qbittorrent() is False
+        assert seen == [["pgrep", "-x", "qbittorrent-nox"]]

@@ -57,7 +57,7 @@ def auto_remove_interval():
 def probe_qbittorrent():
     """Tri-state: True running, False confirmed not running, None could not ask."""
     try:
-        r = subprocess.run(["pgrep", "-f", "qbittorrent-nox"],
+        r = subprocess.run(["pgrep", "-x", "qbittorrent-nox"],
                            capture_output=True, timeout=5)
     except Exception:
         return None

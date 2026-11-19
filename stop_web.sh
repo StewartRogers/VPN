@@ -36,21 +36,21 @@ echo ""
 
 # --- 1. Torrent client, before anything relaxes the firewall ---
 echo "  [ qbittorrent-nox ]"
-if pgrep -f "qbittorrent-nox" > /dev/null; then
+if pgrep -x "qbittorrent-nox" > /dev/null; then
     echo "  Stopping qbittorrent-nox"
-    sudo pkill -f "qbittorrent-nox"
+    sudo pkill -x "qbittorrent-nox"
     # QBT_STOP_GRACE (30s), not 5s: qBittorrent rewrites qBittorrent.conf on
     # exit and a 5s SIGKILL truncated it on 2026-08-14. The kill switch is
     # still up here, so the wait costs nothing.
     for _ in $(seq 1 "${QBT_STOP_GRACE:-30}"); do
-        pgrep -f "qbittorrent-nox" > /dev/null || break
+        pgrep -x "qbittorrent-nox" > /dev/null || break
         sleep 1
     done
-    if pgrep -f "qbittorrent-nox" > /dev/null; then
+    if pgrep -x "qbittorrent-nox" > /dev/null; then
         echo "  Still running - sending SIGKILL"
-        sudo pkill -9 -f "qbittorrent-nox"
+        sudo pkill -9 -x "qbittorrent-nox"
         for _ in $(seq 1 10); do
-            pgrep -f "qbittorrent-nox" > /dev/null || break
+            pgrep -x "qbittorrent-nox" > /dev/null || break
             sleep 0.5
         done
     fi
@@ -58,7 +58,7 @@ if pgrep -f "qbittorrent-nox" > /dev/null; then
     # firewall, and "Stopped." used to be printed unconditionally — a client
     # that survived SIGKILL (D-state on a stalled disk, say) was announced as
     # stopped and then handed the ISP link.
-    if pgrep -f "qbittorrent-nox" > /dev/null; then
+    if pgrep -x "qbittorrent-nox" > /dev/null; then
         echo ""
         echo "  CRITICAL: qbittorrent-nox is STILL RUNNING after SIGKILL."
         echo "  Teardown HALTED - the kill switch is being left ACTIVE."

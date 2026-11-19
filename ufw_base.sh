@@ -21,7 +21,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # window *after* enable; it does not close this one. Every caller is meant to
 # have stopped qBittorrent already; this is the one choke point that makes
 # that true, including for a client relaunched mid-teardown.
-if pgrep -f qbittorrent-nox > /dev/null 2>&1; then
+if pgrep -x qbittorrent-nox > /dev/null 2>&1; then
     echo "ERROR: qbittorrent-nox is running - refusing to reset UFW." >&2
     echo "       A reset briefly disables the firewall; stop the client first." >&2
     exit 1

@@ -182,7 +182,7 @@ is_qbittorrent_running() {
             return 0
         fi
     fi
-    pgrep -f "qbittorrent-nox" >/dev/null
+    pgrep -x "qbittorrent-nox" >/dev/null
 }
 
 # Grace period for a clean qBittorrent exit. Mirrors QBT_STOP_GRACE in
@@ -211,7 +211,7 @@ stop_qbittorrent() {
         kill "$pid" 2>/dev/null || true
     else
         log "INFO" "Stopping qBittorrent (pkill fallback)"
-        sudo pkill -f "qbittorrent-nox" 2>/dev/null || true
+        sudo pkill -x "qbittorrent-nox" 2>/dev/null || true
     fi
 
     while [ "$waited" -lt "$QBT_STOP_GRACE" ]; do
@@ -228,7 +228,7 @@ stop_qbittorrent() {
     done
 
     log "WARN" "qBittorrent has not exited after ${QBT_STOP_GRACE}s - sending SIGKILL"
-    sudo pkill -9 -f "qbittorrent-nox" 2>/dev/null || true
+    sudo pkill -9 -x "qbittorrent-nox" 2>/dev/null || true
     sleep 1
     if is_qbittorrent_running; then
         log "CRITICAL" "qBittorrent is STILL RUNNING after SIGKILL - kill switch stays active"

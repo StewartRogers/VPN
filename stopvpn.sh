@@ -132,7 +132,7 @@ QBT_STOP_GRACE="${QBT_STOP_GRACE:-30}"
 confirm_qbittorrent_stopped() {
     local waited=0
     while [ "$waited" -lt "$QBT_STOP_GRACE" ]; do
-        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+        pgrep -x qbittorrent-nox >/dev/null 2>&1 || return 0
         sleep 1
         waited=$((waited + 1))
         if [ $((waited % 5)) -eq 0 ]; then
@@ -141,10 +141,10 @@ confirm_qbittorrent_stopped() {
     done
     echo "  qBittorrent has not exited after ${QBT_STOP_GRACE}s - sending SIGKILL"
     log_message "WARN" "qBittorrent still running after ${QBT_STOP_GRACE}s - sending SIGKILL"
-    sudo pkill -9 -f qbittorrent-nox 2>/dev/null
+    sudo pkill -9 -x qbittorrent-nox 2>/dev/null
     for _ in 1 2 3 4 5; do
         sleep 1
-        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+        pgrep -x qbittorrent-nox >/dev/null 2>&1 || return 0
     done
     return 1
 }

@@ -36,7 +36,7 @@ difference is a bug you just found.
 
 .venv/bin/python vpn_active.py <home_ip>   # one-shot; exit 0 = secure, 1 = leak, 2 = error
 .venv/bin/python qbt_config.py    # apply the qBittorrent settings by hand
-.venv/bin/python -m pytest -q     # 344 tests
+.venv/bin/python -m pytest -q     # 345 tests
 .venv/bin/pip-audit               # known-CVE scan of the venv (CI audits requirements.txt)
 ```
 
@@ -191,8 +191,14 @@ is a leak:
    torrent load let `stop_qbittorrent()` report success without sending a
    signal, and both gates in `stop_vpn()` then passed.
 
+   Every check and kill matches the client by exact process name
+   (`pgrep -x` / `pkill -x qbittorrent-nox`), never `-f`. `-f` matched any
+   command line containing the text, so a terminal or editor that merely
+   mentioned it read as a live client and stopped a VPN start on 2026-11-18.
+   Safe in direction, but wrong, and `pkill -f` could signal those bystanders.
+
    The same rule applies in bash. `stopvpn.sh`, `stop_web.sh` and
-   `remove_killswitch.sh` each re-check `pgrep -f qbittorrent-nox` after their
+   `remove_killswitch.sh` each re-check `pgrep -x qbittorrent-nox` after their
    SIGKILL and **halt rather than touch the firewall** if it is still there;
    `startvpn.sh`'s `cleanup_on_error` waits for the client to exit before
    running `ufw_base.sh`, because Ctrl+C reaches the whole process group and

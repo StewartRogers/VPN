@@ -216,7 +216,7 @@ tunnel.)
 ```bash
 sudo ufw status verbose        # kill switch: look for "deny (outgoing)"
 ip route get 8.8.8.8           # should say "dev tun0"
-pgrep -x openvpn && pgrep -f qbittorrent-nox
+pgrep -x openvpn && pgrep -x qbittorrent-nox
 curl -s https://api.ipify.org  # should NOT be your home IP
 
 tail -f vpn_logs/latest.log    # monitor session log

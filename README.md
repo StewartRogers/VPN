@@ -75,7 +75,7 @@ to run without an active kill switch.
 sudo ufw status verbose        # kill switch: look for "deny (outgoing)"
 ip route get 8.8.8.8           # should say "dev tun0"
 curl -s https://api.ipify.org  # should NOT be your home IP
-pgrep -x openvpn && pgrep -f qbittorrent-nox
+pgrep -x openvpn && pgrep -x qbittorrent-nox
 ```
 
 ## Web app
@@ -227,7 +227,7 @@ The shell scripts use `./.venv` when it exists and fall back to the system
 ./.venv/bin/python -m pytest -q
 ```
 
-344 tests covering the monitor loop, the kill-switch state machine, leak
+345 tests covering the monitor loop, the kill-switch state machine, leak
 detection, the SSRF guard on `.ovpn` downloads, and the torrent start gate. CI
 runs `flake8 --select=E9,F` and pytest on every push and PR to `master`.
 

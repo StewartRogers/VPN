@@ -41,27 +41,27 @@ echo ""
 # --- 1. Stop the torrent client first ---
 # This script exists to reopen unrestricted outbound traffic. Anything still
 # torrenting when that happens would egress on the ISP link.
-if pgrep -f "qbittorrent-nox" > /dev/null; then
+if pgrep -x "qbittorrent-nox" > /dev/null; then
     echo "Stopping qbittorrent-nox before reopening outbound traffic..."
-    sudo pkill -f "qbittorrent-nox"
+    sudo pkill -x "qbittorrent-nox"
     # QBT_STOP_GRACE (30s), not 5s: qBittorrent rewrites qBittorrent.conf on
     # exit and a 5s SIGKILL truncated it on 2026-08-14. The kill switch is
     # still up here, so the wait costs nothing.
     for _ in $(seq 1 "${QBT_STOP_GRACE:-30}"); do
-        pgrep -f "qbittorrent-nox" > /dev/null || break
+        pgrep -x "qbittorrent-nox" > /dev/null || break
         sleep 1
     done
-    if pgrep -f "qbittorrent-nox" > /dev/null; then
-        sudo pkill -9 -f "qbittorrent-nox"
+    if pgrep -x "qbittorrent-nox" > /dev/null; then
+        sudo pkill -9 -x "qbittorrent-nox"
         for _ in $(seq 1 10); do
-            pgrep -f "qbittorrent-nox" > /dev/null || break
+            pgrep -x "qbittorrent-nox" > /dev/null || break
             sleep 0.5
         done
     fi
     # Confirm before reopening outbound traffic. "Stopped." was printed
     # unconditionally, so a client that survived SIGKILL was reported as gone
     # and then given the ISP link by the very next step.
-    if pgrep -f "qbittorrent-nox" > /dev/null; then
+    if pgrep -x "qbittorrent-nox" > /dev/null; then
         echo ""
         echo "CRITICAL: qbittorrent-nox is STILL RUNNING after SIGKILL."
         echo "Refusing to reopen outbound traffic - the kill switch stays ACTIVE."
@@ -78,7 +78,7 @@ echo ""
 # --- 2. Firewall ---
 # Re-check at the last moment: a client relaunched since step 1 would make
 # ufw_base.sh refuse, and the fallback below would then disable UFW outright.
-if pgrep -f "qbittorrent-nox" > /dev/null; then
+if pgrep -x "qbittorrent-nox" > /dev/null; then
     echo "CRITICAL: qbittorrent-nox is running again - the kill switch stays ACTIVE."
     echo "Stop it, then run this script again."
     exit 1

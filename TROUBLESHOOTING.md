@@ -18,7 +18,7 @@ It stops the torrent client first, restores the base firewall state, then
 restores DNS and IPv6. If even that fails:
 
 ```bash
-sudo pkill -f qbittorrent-nox
+sudo pkill -x qbittorrent-nox
 sudo pkill -f openvpn
 sudo pkill -f checkip.sh
 sudo ufw --force disable
@@ -37,7 +37,7 @@ sudo ufw status verbose        # "deny (outgoing)" = kill switch on
 ip route get 8.8.8.8           # should say "dev tun0"
 ip addr show tun0              # tunnel interface and its IP
 curl -s https://api.ipify.org  # should NOT be your home IP
-pgrep -x openvpn && pgrep -f qbittorrent-nox && pgrep -f checkip.sh
+pgrep -x openvpn && pgrep -x qbittorrent-nox && pgrep -f checkip.sh
 cat /etc/resolv.conf && lsattr /etc/resolv.conf   # 'i' flag = locked
 ```
 
@@ -229,7 +229,7 @@ this checkout**. See [INSTALL.md](INSTALL.md).
 
 1. **Already running?**
    ```bash
-   pgrep -f qbittorrent-nox
+   pgrep -x qbittorrent-nox
    ```
    Both paths treat an already-running client as success and will not start a
    second one.
@@ -284,7 +284,7 @@ through the web app's qBittorrent step (or `checkip.sh`), which applies the
 config *before* launching the process:
 
 ```bash
-sudo pkill -f qbittorrent-nox
+sudo pkill -x qbittorrent-nox
 .venv/bin/python qbt_config.py   # apply now; prints what it set
 ```
 
@@ -370,7 +370,7 @@ Also check for duplicates — a stale monitor from a previous session:
 
 ```bash
 pgrep -af checkip.sh
-pgrep -af qbittorrent-nox
+pgrep -ax qbittorrent-nox
 ```
 
 ### Slow throughput

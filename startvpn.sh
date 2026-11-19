@@ -243,7 +243,7 @@ ERROR_HANDLED=false
 QBT_STOP_GRACE="${QBT_STOP_GRACE:-30}"
 
 wait_for_qbittorrent_exit() {
-    pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+    pgrep -x qbittorrent-nox >/dev/null 2>&1 || return 0
     echo ""
     echo "  Waiting for qBittorrent to stop before restoring the firewall..."
     log_message "INFO" "Waiting for qBittorrent to exit before relaxing the firewall"
@@ -251,13 +251,13 @@ wait_for_qbittorrent_exit() {
     while [ "$waited" -lt "$QBT_STOP_GRACE" ]; do
         sleep 1
         waited=$((waited + 1))
-        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+        pgrep -x qbittorrent-nox >/dev/null 2>&1 || return 0
     done
     log_message "WARN" "qBittorrent still running after ${QBT_STOP_GRACE}s - sending SIGKILL"
-    sudo pkill -9 -f qbittorrent-nox 2>/dev/null
+    sudo pkill -9 -x qbittorrent-nox 2>/dev/null
     for _ in 1 2 3 4 5; do
         sleep 1
-        pgrep -f qbittorrent-nox >/dev/null 2>&1 || return 0
+        pgrep -x qbittorrent-nox >/dev/null 2>&1 || return 0
     done
     return 1
 }

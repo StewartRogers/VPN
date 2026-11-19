@@ -475,8 +475,15 @@ class VPNMonitor:
         return detect_external_ip()
 
     def probe_qbittorrent(self):
-        """Tri-state: True running, False confirmed gone, None could not ask."""
-        return self._probe(["pgrep", "-f", "qbittorrent-nox"],
+        """Tri-state: True running, False confirmed gone, None could not ask.
+
+        `-x` matches the process name exactly. `-f` matched any command line
+        containing the text — a terminal or editor mentioning it was enough —
+        and on 2026-11-18 a phantom match stopped a VPN start with "qBittorrent
+        is running" while no client existed. The name is 15 characters, which
+        exactly fits the kernel's comm limit, so `-x` sees it untruncated.
+        """
+        return self._probe(["pgrep", "-x", "qbittorrent-nox"],
                            lambda r: r.returncode == 0)
 
     def is_qbittorrent_running(self):
@@ -521,17 +528,17 @@ class VPNMonitor:
         if urgent:
             self.log("Stopping qBittorrent NOW (SIGKILL) — the kill switch is down "
                      "and traffic is unprotected", source="QBIT", level="WARNING")
-            subprocess.run(["sudo", "pkill", "-9", "-f", "qbittorrent-nox"],
+            subprocess.run(["sudo", "pkill", "-9", "-x", "qbittorrent-nox"],
                            capture_output=True)
             stopped = self._await_qbittorrent_exit(QBT_KILL_CONFIRM)
         else:
             self.log("Stopping qBittorrent...", source="QBIT")
-            subprocess.run(["sudo", "pkill", "-f", "qbittorrent-nox"], capture_output=True)
+            subprocess.run(["sudo", "pkill", "-x", "qbittorrent-nox"], capture_output=True)
             stopped = self._await_qbittorrent_exit(QBT_STOP_GRACE, announce=True)
             if not stopped:
                 self.log(f"qBittorrent has not exited after {QBT_STOP_GRACE}s — "
                          f"sending SIGKILL", source="QBIT", level="WARNING")
-                subprocess.run(["sudo", "pkill", "-9", "-f", "qbittorrent-nox"],
+                subprocess.run(["sudo", "pkill", "-9", "-x", "qbittorrent-nox"],
                                capture_output=True)
                 stopped = self._await_qbittorrent_exit(QBT_KILL_CONFIRM)
 
