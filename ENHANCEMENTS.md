@@ -84,6 +84,18 @@ restored — before the next one, and Cancel & Reset works at any point in the
 start, abandoning the current attempt and leaving the box ready for a new
 `.ovpn`.
 
+A web start attempt ends as soon as OpenVPN is confirmed to have exited,
+rather than sitting out the ~30s wait for `tun0`, and a server that answers
+`AUTH_FAILED` is not retried: every retry dials the same `.ovpn`, and repeated
+tries risk VPN Gate rate-limiting the home IP.
+
+OpenVPN itself is kept from reconnecting underneath the monitor too. VPN Gate
+servers push `ping-restart 10`, which would replace `--ping-exit 60` and turn a
+silent server into a quiet reconnect — with the `.ovpn`'s `persist-tun` holding
+`tun0` and its route up, so no fast-tier check would notice. Both paths pass
+`--pull-filter ignore ping-restart`, so OpenVPN exits instead and the monitor
+fail-stops.
+
 The kill switch is re-verified on the IP-check cadence in the web monitor, so a
 UFW reset from another terminal stops everything. `checkip.sh` still checks it
 only at startup — see `TODO.md`.
@@ -120,11 +132,11 @@ the same search order. See README.md for the live keys.
 
 ## Code quality
 
-- **Test suite** — 339 pytest unit tests covering the monitor loop, kill-switch
+- **Test suite** — pytest unit tests covering the monitor loop, kill-switch
   state machine, IP leak detection, the SSRF guard, logging, the torrent start
   gate, the qBittorrent config merge, and finished-torrent removal.
-- **CI** — GitHub Actions runs `flake8 --select=E9,F` and pytest on every push
-  and PR to `master`. No `shellcheck` yet, on a mostly-bash project — see
+- **CI** — GitHub Actions runs `flake8 --select=E9,F`, pytest and `pip-audit`
+  (known CVEs in `webapp/requirements.txt`) on every push and PR to `master`. No `shellcheck` yet, on a mostly-bash project — see
   `TODO.md`.
 
 ## Documentation map

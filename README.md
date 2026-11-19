@@ -171,8 +171,8 @@ local edits never show up as diffs. `~/.vpn_config.conf` takes precedence over
 the file is inert.
 
 ```bash
-FAST_CHECK_INTERVAL=2        # seconds between process/interface/route checks
-IP_CHECK_INTERVAL=10         # seconds between external-IP leak checks
+FAST_CHECK_INTERVAL=2        # CLI monitor: seconds between process/interface/route checks
+IP_CHECK_INTERVAL=10         # CLI monitor: seconds between external-IP leak checks
 MAX_STARTUP_ATTEMPTS=3       # connection attempts before giving up (both paths)
 MAX_SESSIONS=20              # session logs kept in LOG_DIR
 
@@ -198,6 +198,10 @@ QBT_AUTO_REMOVE_INTERVAL=30     # seconds between checks, minimum 5
 # Default is all of RFC1918; narrow it if you want.
 # LAN_CIDRS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16"
 ```
+
+The two interval keys are read only by the CLI monitor (`checkip.sh`). The web
+monitor ignores them and takes its intervals from the **Fast Interval (s)** and
+**IP Check (s)** boxes in the dashboard's Configure step (defaults 2 and 10).
 
 ## Logs
 
@@ -229,7 +233,8 @@ The shell scripts use `./.venv` when it exists and fall back to the system
 
 347 tests covering the monitor loop, the kill-switch state machine, leak
 detection, the SSRF guard on `.ovpn` downloads, and the torrent start gate. CI
-runs `flake8 --select=E9,F` and pytest on every push and PR to `master`.
+runs `flake8 --select=E9,F`, pytest and `pip-audit` (a known-CVE check of
+`webapp/requirements.txt`) on every push and PR to `master`.
 
 ## Documentation
 

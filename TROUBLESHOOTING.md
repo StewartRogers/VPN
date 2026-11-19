@@ -19,7 +19,7 @@ restores DNS and IPv6. If even that fails:
 
 ```bash
 sudo pkill -x qbittorrent-nox
-sudo pkill -f openvpn
+sudo pkill -x openvpn
 sudo pkill -f checkip.sh
 sudo ufw --force disable
 sudo chattr -i /etc/resolv.conf
@@ -160,12 +160,15 @@ left active:
   did not answer (web monitor only — `checkip.sh` checks the kill switch only
   at startup)
 
-Read `vpn_logs/latest.log` — the `CRITICAL` line names which one fired. There
+The `CRITICAL` line names which one fired — in `vpn_logs/latest.log` for the
+CLI monitor, in the dashboard log for the web one. There
 is no `MAX_RECONNECT_ATTEMPTS` setting to raise; it does not exist in this
 codebase. `MAX_STARTUP_ATTEMPTS` only governs retries during initial connection.
 
 If the trigger is repeated IP-lookup failures on an otherwise healthy tunnel,
-the lookup services are being blocked or are slow. Widen the check interval:
+the lookup services are being blocked or are slow. Widen the check interval.
+In the web app, raise **IP Check (s)** in the dashboard's Configure step — the
+web monitor never reads it from the config file. For the CLI monitor:
 
 ```bash
 # vpn_config.conf
@@ -359,7 +362,9 @@ sudo -v
 
 ### High CPU from monitoring
 
-Widen the intervals in `vpn_config.conf`:
+Widen the intervals. In the web app that is the **Fast Interval (s)** and **IP
+Check (s)** boxes in the dashboard's Configure step; the config file keys below
+are read only by the CLI monitor:
 
 ```bash
 FAST_CHECK_INTERVAL=5

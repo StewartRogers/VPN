@@ -38,14 +38,14 @@ implemented* is described in `ENHANCEMENTS.md`, not here.
 > - **qBittorrent WebUI login** still works after a stop (the saved config
 >   looked intact; a login confirms it). Also open the WebUI from another LAN
 >   machine to finish the "LAN access unchanged" check.
-> - **Web start retry / Cancel & Reset** (2026-11-11 change; a normal start
->   was confirmed, the failure paths were not). With a `.ovpn` whose server
->   will not answer: each failed attempt shows "Resetting…" before the next;
->   after the last one `sudo ufw status verbose` is back to the base state,
->   `pgrep openvpn` finds nothing, and Start VPN is clickable. Cancel & Reset
->   ~10s into an attempt stops within ~2s, resets, and a new `.ovpn` then
->   downloads and starts. With no `.ovpn` present, Start VPN stops at once
->   without retrying.
+> - **Web start retry — the remaining failure paths.** 2026-11-18 covered
+>   most of the 2026-11-11 change by accident (a dead VPN Gate server, then
+>   several answering `AUTH_FAILED`): every failed attempt logged
+>   "Resetting…" and "Reset complete" before the next, the last ended
+>   "Ready to start over", and a newly downloaded `.ovpn` then connected.
+>   Still unchecked: Cancel & Reset ~10s into an attempt stops within ~2s
+>   and resets; with no `.ovpn` present, Start VPN stops at once without
+>   retrying.
 >
 > The Start VPN "Stop qBittorrent first" refusal only appears with the VPN down
 > and qBittorrent up, which can't safely be set up by hand; the automated tests
@@ -149,7 +149,7 @@ branch stays testable. Nothing here is a leak on its own.
 
 **Web app**
 
-- **`/` serves the home IP and save path unauthenticated** (`webapp/app.py:65`).
+- **`/` serves the home IP and save path unauthenticated** (`webapp/app.py:66`).
   `index()` is the one route with no `_auth()`, and it interpolates both into
   the HTML. The home IP is the value the entire leak check is built on. Fix:
   render placeholders and let the already-authenticated `/api/status` fill them.
@@ -216,7 +216,7 @@ branch stays testable. Nothing here is a leak on its own.
 - **`stopvpn.sh` PID handling is unquoted and unvalidated** — a truncated PID
   file word-splits into several `kill` targets, and a literal `0` signals the
   whole process group.
-- **`startvpn.sh` assumes `VPN_CLIENT_HOME` ends in `/`** (`:528`), so the
+- **`startvpn.sh` assumes `VPN_CLIENT_HOME` ends in `/`** (`:617`, `:631`), so the
   `chmod 600`/`chown` on the downloaded `.ovpn` silently miss and it is left
   world-readable at curl's default 0644.
 - **`checkip.sh:86` pipes `ls -t` into `xargs rm -f`** — word-splits on a
@@ -282,10 +282,18 @@ address the connection is denied until the kill switch is re-applied.
 
 ### 2. DNS narrowing (`ufw_killswitch.sh:97-98`)
 
-Plaintext DNS to any server is still allowed out over the physical NIC, so the
-ISP still sees every tracker hostname. Commit `a6c29db` shows narrowing this
-broke systemd-resolved once already. Needs testing against the pre-tunnel
-window, not a blind edit.
+`allow out on eth0/wlan0 to any port 53` lets plaintext DNS to *any* server
+out over the physical NIC, not only LAN resolvers. While the tunnel is up it
+rarely matters: `redirect-gateway def1` routes an off-LAN resolver through
+tun0, and the web path pins `/etc/resolv.conf` to 1.1.1.1. The ISP does see
+lookups (a) before the tunnel is up — only OpenVPN's own lookup of the
+server, since nothing else is running yet; (b) between a tunnel drop and the
+fail-stop, once the def1 routes have gone — tracker lookups included, because
+qBittorrent's address bind does not cover the system resolver; and (c) on the
+CLI path, which leaves `/etc/resolv.conf` alone, whenever it points at a LAN
+resolver (allowed by the LAN rule regardless). Commit `a6c29db` shows
+narrowing this broke systemd-resolved once already. Needs testing against the
+pre-tunnel window, not a blind edit.
 
 ### 3. Leak detection rests on a dynamic IP
 
@@ -308,7 +316,7 @@ These all live in the shell monitor. The web monitor has the equivalent fixes;
 `checkip.sh` was left alone because it is the flow `startvpn.sh` drives and you
 asked not to change `startvpn.sh`.
 
-- **`checkip.sh:59-73` checks the kill switch only at startup.** A UFW reset
+- **`checkip.sh:62-77` checks the kill switch only at startup.** A UFW reset
   from another terminal goes unnoticed while it carries on reporting healthy.
   The web monitor re-checks on the IP-check cadence.
 - **`checkip.sh` cannot trap SIGINT.** (Corrected 2026-09-23: the earlier
@@ -331,8 +339,8 @@ asked not to change `startvpn.sh`.
   are worse than dead — they describe the opposite of current behaviour. Delete
   them from the file.
 - **`BACKUP_DIR` is honoured inconsistently.** `vpn_config.conf` sets
-  `$HOME/.vpn_backups`; `stopvpn.sh:23` defaults to `/tmp/vpn_backups` if unset;
-  `webapp/monitor.py:28` and `stop_web.sh:29` hardcode `~/.vpn_backups` and
+  `$HOME/.vpn_backups`; `stopvpn.sh:27` defaults to `/tmp/vpn_backups` if unset;
+  `webapp/monitor.py:95` and `stop_web.sh:29` hardcode `~/.vpn_backups` and
   ignore the config entirely. Pick one source of truth.
 - **`qBittorrent.conf` tracked in the repo root** is a seed config, which reads
   as confusing. Move it to `examples/` or document it in place. It is now only

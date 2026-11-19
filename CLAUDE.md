@@ -375,6 +375,11 @@ Live keys: `FAST_CHECK_INTERVAL`, `IP_CHECK_INTERVAL`, `MAX_STARTUP_ATTEMPTS`,
 `QBT_WEBUI_PASS` (web path; the fallback login when the localhost API path is
 refused).
 
+`FAST_CHECK_INTERVAL` and `IP_CHECK_INTERVAL` are live for `checkip.sh` only.
+The web monitor takes `fast_interval` / `ip_interval` from `/api/configure`,
+i.e. the dashboard's Configure form (defaults 2 and 10 in `index.html`), and
+never reads the config file for them.
+
 ## Logs
 
 - `vpn_logs/session_<timestamp>.log` — one `checkip.sh` run; `latest.log`
